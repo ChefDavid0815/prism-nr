@@ -4,7 +4,7 @@ import { analyzeGame } from './analyzer';
 import { importComponent, listComponents } from './components';
 import { buildPlan, learnAddonSettings, rollback, runInstall } from './installer';
 import { locateNvidiaDlls } from './nvidia';
-import { manualEntry, scanAllGames } from './scanner';
+import { leftoverDirs, manualEntry, scanAllGames } from './scanner';
 import { store } from './store';
 import { detectSystem } from './system';
 import { getLog } from './util';
@@ -64,7 +64,7 @@ export class PrismService {
   }
 
   async nvidiaDlls(force = false): Promise<NvidiaDll[]> {
-    if (!this.dlls || force) this.dlls = locateNvidiaDlls(this.games);
+    if (!this.dlls || force) this.dlls = locateNvidiaDlls(this.games, leftoverDirs);
     return this.dlls;
   }
 

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { GameEntry } from '../shared/types';
-import { exists, isDir, log, readText, regSubkeys, regValue, stableId } from './util';
+import { exists, isDir, log, readText, regSubkeys, regValue, stableId, walk } from './util';
 
 /** Minimal Valve KeyValues parser, enough for libraryfolders.vdf and appmanifest_*.acf. */
 export function parseVdf(text: string): Record<string, unknown> {
@@ -62,9 +62,45 @@ async function scanSteam(): Promise<GameEntry[]> {
       if (!isDir(installDir)) continue;
       games.push({ id: stableId('steam', state.appid), name: state.name || state.installdir, store: 'steam', installDir, steamAppId: state.appid });
     }
+    // Folders in steamapps\common without a manifest (games added outside the Steam client,
+    // or manifests that were removed) are still real installs; list them by folder name.
+    const commonDir = path.join(appsDir, 'common');
+    let folders: string[] = [];
+    try {
+      folders = fs.readdirSync(commonDir);
+    } catch {
+      continue;
+    }
+    for (const folder of folders) {
+      const installDir = path.join(commonDir, folder);
+      if (STEAM_TOOL_FOLDER.test(folder) || !isDir(installDir)) continue;
+      if (games.some((g) => path.resolve(g.installDir).toLowerCase() === path.resolve(installDir).toLowerCase())) continue;
+      // Uninstalled games often leave mod files behind; without an executable it is not a game,
+      // but it can still hold NVIDIA runtimes worth finding.
+      leftoverDirs.push(installDir);
+      if (!hasExecutable(installDir)) continue;
+      games.push({ id: stableId('steam-dir', installDir), name: folder, store: 'steam', installDir });
+    }
   }
   return games;
 }
+
+/** Steam library folders seen during the last scan, including ones that are not installed games. */
+export const leftoverDirs: string[] = [];
+
+function hasExecutable(dir: string): boolean {
+  let found = false;
+  walk(
+    dir,
+    (file, _d, isDirectory) => {
+      if (!isDirectory && !found && /\.exe$/i.test(file) && !/unins|redist|crash/i.test(path.basename(file))) found = true;
+    },
+    { maxDepth: 4, maxEntries: 6000 },
+  );
+  return found;
+}
+
+const STEAM_TOOL_FOLDER =/^(Steamworks Shared|Steam Controller Configs|SteamVR|Proton.*|Steam Linux Runtime.*|wallpaper_engine|Wallpaper Engine)$/i;
 
 async function scanEpic(): Promise<GameEntry[]> {
   const dir = path.join(process.env.ProgramData ?? 'C:\\ProgramData', 'Epic', 'EpicGamesLauncher', 'Data', 'Manifests');
@@ -125,6 +161,7 @@ async function scanXbox(): Promise<GameEntry[]> {
 }
 
 export async function scanAllGames(manual: GameEntry[]): Promise<GameEntry[]> {
+  leftoverDirs.length = 0;
   const results = await Promise.allSettled([scanSteam(), scanEpic(), scanGog(), scanXbox()]);
   const all: GameEntry[] = [];
   results.forEach((r, i) => {

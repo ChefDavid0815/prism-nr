@@ -12,7 +12,8 @@
     "build": "tsc -p tsconfig.electron.json && tsc -p tsconfig.json --noEmit && vite build",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.json --noEmit",
-    "test:core": "tsc -p tsconfig.electron.json && node dist-electron/cli/selftest.js"
+    "test:core": "tsc -p tsconfig.electron.json && node dist-electron/cli/selftest.js",
+    "dist": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "7zip-bin": "^5.2.0",
@@ -28,6 +29,7 @@
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
     "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
     "typescript": "^5.6.3",
     "vite": "^5.4.11",
     "wait-on": "^8.0.1"
@@ -37,5 +39,55 @@
     "type": "git",
     "url": "https://github.com/ChefDavid0815/prism-nr.git"
   },
-  "homepage": "https://github.com/ChefDavid0815/prism-nr"
+  "homepage": "https://github.com/ChefDavid0815/prism-nr",
+  "build": {
+    "appId": "dev.chefzc.prismnr",
+    "productName": "Prism NR",
+    "copyright": "Copyright (c) 2026 ChefZC",
+    "directories": {
+      "output": "C:/Users/zzich/AppData/Local/Temp/prism-release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json",
+      "!dist-electron/cli/**",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "plugins/prism-shaders",
+        "to": "prism-shaders",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/7zip-bin/win/x64/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "PrismNR-${version}-x64-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Prism NR",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": false
+    }
+  }
 }

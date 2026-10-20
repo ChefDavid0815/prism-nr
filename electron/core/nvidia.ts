@@ -9,7 +9,7 @@ const NAMES = ['nvngx_dlssnr.dll', 'nvngx_dlss.dll', 'nvngx_dlssg.dll'] as const
  * Prism never downloads or redistributes these files; it only reuses copies the
  * user legally has (a game that ships them, the NGX model cache, the driver store).
  */
-export async function locateNvidiaDlls(games: GameEntry[]): Promise<NvidiaDll[]> {
+export async function locateNvidiaDlls(games: GameEntry[], extraDirs: string[] = []): Promise<NvidiaDll[]> {
   const found = new Map<string, string>();
   const roots: { dir: string; depth: number }[] = [
     { dir: path.join(process.env.ProgramData ?? 'C:\\ProgramData', 'NVIDIA', 'NGX'), depth: 6 },
@@ -18,6 +18,7 @@ export async function locateNvidiaDlls(games: GameEntry[]): Promise<NvidiaDll[]>
   // Games come first for the neural model: today it ships inside games, not the driver.
   const priority = [...games].sort((a, b) => Number(/nba\s*2k27/i.test(b.name)) - Number(/nba\s*2k27/i.test(a.name)));
   for (const g of priority) roots.push({ dir: g.installDir, depth: 4 });
+  for (const d of extraDirs) if (!games.some((g) => g.installDir === d)) roots.push({ dir: d, depth: 4 });
 
   for (const r of roots) {
     if (!isDir(r.dir)) continue;
