@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;background:#16181D;color:#E6E8EB;font:14px/1.5 "Noto Sans SC",sans-serif;display:grid;grid-template-columns:220px 1fr 380px}
+nav{background:#111317;padding:28px 0}
+.brand{padding:0 22px 26px;font-weight:700;font-size:20px}
+nav a{display:block;padding:11px 22px;color:#9AA0A8;text-decoration:none}
+nav a.on{color:#fff;background:#22262E;box-shadow:inset 3px 0 #76B900}
+main{padding:28px 30px}
+h1{font-size:26px;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.card{background:#22262E;border-radius:8px;overflow:hidden}
+.cover{height:150px;background:linear-gradient(135deg,#2E3440,#1C2027)}
+.card div.t{padding:10px 12px}
+.card b{display:block;font-weight:500}
+.card span{font-size:12px;color:#9AA0A8}
+.card.on{outline:2px solid #76B900}
+aside{background:#1C1F25;padding:28px 24px}
+aside h2{font-size:22px;margin-bottom:6px}
+.row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #2A2E36}
+.btn{display:block;margin-top:20px;text-align:center;padding:12px;background:#76B900;color:#111;border-radius:6px;font-weight:700}
+</style></head><body>
+<nav><div class="brand">Prism NR</div><a class="on" href="#">游戏库</a><a href="#">插件中心</a><a href="#">方案</a><a href="#">还原记录</a><a href="#">设置</a></nav>
+<main><h1>游戏库</h1><div class="grid">
+ <div class="card on"><div class="cover"></div><div class="t"><b>赛博朋克 2077</b><span>已启用</span></div></div>
+ <div class="card"><div class="cover"></div><div class="t"><b>心灵杀手 2</b><span>可启用</span></div></div>
+ <div class="card"><div class="cover"></div><div class="t"><b>黑神话：悟空</b><span>可启用</span></div></div>
+ <div class="card"><div class="cover"></div><div class="t"><b>巫师 3</b><span>可启用</span></div></div>
+ <div class="card"><div class="cover"></div><div class="t"><b>上古卷轴 5</b><span>Feeder</span></div></div>
+ <div class="card"><div class="cover"></div><div class="t"><b>空洞骑士</b><span>Feeder</span></div></div>
+ <div class="card"><div class="cover"></div><div class="t"><b>Apex 英雄</b><span>已阻止</span></div></div>
+ <div class="card"><div class="cover"></div><div class="t"><b>原神</b><span>已阻止</span></div></div>
+</div></main>
+<aside><h2>赛博朋克 2077</h2><p style="color:#9AA0A8;margin-bottom:16px">DX12，原生 DLSS</p>
+ <div class="row"><span>方案</span><span>旗舰画质</span></div><div class="row"><span>神经渲染强度</span><span>30%</span></div><div class="row"><span>保真守护</span><span>开</span></div><div class="row"><span>帧生成</span><span>关</span></div>
+ <span class="btn">应用</span></aside>
+</body></html>

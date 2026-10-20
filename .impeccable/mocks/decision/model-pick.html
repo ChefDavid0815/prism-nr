@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;background:#F4F1E8;color:#141414;font:14px/1.5 "Noto Sans SC",sans-serif;display:grid;grid-template-columns:220px 1fr}
+nav{background:#141414;color:#F4F1E8;padding:28px 0}
+.brand{padding:0 22px 26px;font-family:"Archivo Black";font-size:22px;color:#FFC20E}
+nav a{display:block;padding:11px 22px;color:#BDB8AC;text-decoration:none;font-size:15px}
+nav a.on{color:#141414;background:#FFC20E;font-weight:700}
+main{padding:30px 36px}
+h1{font-size:28px;font-weight:700}
+.sub{color:#5E5A52;margin:4px 0 24px}
+.boxes{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-bottom:28px}
+.box{border-radius:4px;overflow:hidden;box-shadow:0 2px 0 #141414;border:2px solid #141414}
+.box .face{padding:20px;height:200px;display:flex;flex-direction:column;justify-content:space-between}
+.box .iso{font-family:"Archivo Black";font-size:56px;line-height:1}
+.box h3{font-size:20px;font-weight:700}
+.box .dx{height:26px;background:repeating-linear-gradient(90deg,#141414 0 6px,transparent 6px 10px,#141414 10px 12px,transparent 12px 20px);margin:0 20px 14px;opacity:.85}
+.box .info{background:#fff;padding:14px 20px;font-size:13px;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.y .face{background:#FFC20E}.r .face{background:#D7191C;color:#fff}.g .face{background:#0E7C3A;color:#fff}
+.y .dx{background:repeating-linear-gradient(90deg,#141414 0 6px,transparent 6px 10px)}
+table{width:100%;border-collapse:collapse;background:#fff;border:2px solid #141414}
+th,td{text-align:left;padding:11px 16px;border-bottom:1px solid #E2DED2}
+th{font-size:13px;color:#5E5A52;font-weight:500}
+.tag{display:inline-block;padding:2px 8px;border-radius:3px;font-size:12px;font-weight:700;background:#FFC20E}
+.tag.x{background:#D7191C;color:#fff}
+</style></head><body>
+<nav><div class="brand">PRISM NR</div><a href="#">游戏库</a><a href="#">插件中心</a><a class="on" href="#">方案</a><a href="#">还原记录</a><a href="#">诊断</a></nav>
+<main>
+ <h1>选择方案</h1><p class="sub">按显卡推荐。你的 RTX 5090 Laptop 适合“旗舰画质”。</p>
+ <div class="boxes">
+  <div class="box y"><div class="face"><div class="iso">100</div><h3>旗舰画质</h3></div><div class="dx"></div><div class="info"><span>适用 5080 / 5090</span><span>模型分辨率 100%</span><span>预计开销 18–25%</span><span>保真守护 开</span></div></div>
+  <div class="box r"><div class="face"><div class="iso">67</div><h3>均衡</h3></div><div class="dx"></div><div class="info"><span>适用 5070 Ti</span><span>模型分辨率 67%</span><span>预计开销 10–15%</span><span>帧生成 2×</span></div></div>
+  <div class="box g"><div class="face"><div class="iso">50</div><h3>流畅优先</h3></div><div class="dx"></div><div class="info"><span>适用 5060 / 5070</span><span>模型分辨率 50%</span><span>预计开销 5–8%</span><span>帧生成 3×</span></div></div>
+ </div>
+ <table><tr><th>游戏</th><th>路线</th><th>当前方案</th><th>状态</th></tr>
+  <tr><td>赛博朋克 2077</td><td>原生 DLSS</td><td>旗舰画质</td><td><span class="tag">已启用</span></td></tr>
+  <tr><td>心灵杀手 2</td><td>原生 DLSS</td><td>—</td><td>未启用</td></tr>
+  <tr><td>上古卷轴 5</td><td>Feeder</td><td>均衡</td><td><span class="tag">已启用</span></td></tr>
+  <tr><td>Apex 英雄</td><td>—</td><td>—</td><td><span class="tag x">反作弊，已阻止</span></td></tr>
+ </table>
+</main></body></html>

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;background:#0F1B3D;color:#F3F0E6;font:14px/1.5 "Noto Sans SC",sans-serif;display:grid;grid-template-columns:220px 1fr}
+nav{background:#0A1430;padding:28px 0}
+.brand{padding:0 22px 26px;font-weight:700;font-size:20px}
+nav a{display:block;padding:11px 22px;color:#A9B3CC;text-decoration:none}
+nav a.on{color:#fff;box-shadow:inset 4px 0 #E23B3B;background:#13224A}
+main{padding:30px 36px}
+h1{font-size:28px}
+.sub{color:#A9B3CC;margin:4px 0 20px}
+.map{background:#13224A;border-radius:10px;height:330px;position:relative;margin-bottom:24px}
+svg{position:absolute;inset:0}
+.cols{display:grid;grid-template-columns:1.3fr 1fr;gap:20px}
+.panel{background:#13224A;border-radius:10px;padding:18px 20px}
+.panel h2{font-size:17px;margin-bottom:12px}
+.row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #22356A}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}
+.btn{display:inline-block;margin-top:16px;padding:11px 22px;background:#F3F0E6;color:#0F1B3D;border-radius:6px;font-weight:700}
+</style></head><body>
+<nav><div class="brand">Prism NR</div><a href="#">游戏库</a><a class="on" href="#">管线</a><a href="#">插件中心</a><a href="#">还原记录</a><a href="#">诊断</a></nav>
+<main>
+ <h1>赛博朋克 2077 的渲染管线</h1><p class="sub">点击站点调整插件，红线是当前生效的路线</p>
+ <div class="map"><svg viewBox="0 0 1150 330">
+  <path d="M60 165 H330 L400 95 H760 L830 165 H1090" stroke="#E23B3B" stroke-width="10" fill="none" stroke-linecap="round"/>
+  <path d="M330 165 H830" stroke="#2F6FE4" stroke-width="8" fill="none" stroke-dasharray="1 0" opacity=".55"/>
+  <path d="M580 95 L650 25 H900" stroke="#F2B233" stroke-width="8" fill="none"/>
+  <path d="M580 95 L650 255 H900" stroke="#2FA36B" stroke-width="8" fill="none"/>
+  <g fill="#0F1B3D" stroke="#F3F0E6" stroke-width="4">
+   <circle cx="60" cy="165" r="12"/><circle cx="400" cy="95" r="12"/><circle cx="580" cy="95" r="16"/><circle cx="760" cy="95" r="12"/><circle cx="1090" cy="165" r="12"/><circle cx="900" cy="25" r="10"/><circle cx="900" cy="255" r="10"/>
+  </g>
+  <g fill="#F3F0E6" font-size="15" font-family="Noto Sans SC">
+   <text x="30" y="205">游戏渲染</text><text x="350" y="70">神经渲染 Pre-SR</text><text x="545" y="140">DLSS 超分</text><text x="715" y="70">保真守护</text><text x="1060" y="205">输出</text><text x="920" y="30">时域稳定</text><text x="920" y="260">帧生成 2×</text>
+  </g></svg></div>
+ <div class="cols">
+  <div class="panel"><h2>站点：神经渲染 Pre-SR</h2>
+   <div class="row"><span>模型分辨率</span><span>100%</span></div><div class="row"><span>强度</span><span>30%</span></div><div class="row"><span>开销</span><span>3.8 ms</span></div><span class="btn">应用</span></div>
+  <div class="panel"><h2>线路</h2>
+   <div class="row"><span><i class="dot" style="background:#E23B3B"></i>主线：原生 DLSS</span><span>生效中</span></div>
+   <div class="row"><span><i class="dot" style="background:#2F6FE4"></i>备线：超分后执行</span><span>备用</span></div>
+   <div class="row"><span><i class="dot" style="background:#F2B233"></i>支线：时域稳定</span><span>开</span></div>
+   <div class="row"><span><i class="dot" style="background:#2FA36B"></i>支线：帧生成</span><span>开</span></div></div>
+ </div>
+</main></body></html>

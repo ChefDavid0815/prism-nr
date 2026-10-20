@@ -1,0 +1,129 @@
+{
+  "title": "选择 Prism NR 的视觉世界",
+  "question": "随机分配的方向是「暗房印样」。可以保留它、改选其他方案，或者重新抽一轮。",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "暗房印样",
+      "kicker": "THE ROLL",
+      "lineage": "暗房接触印样（contact sheet）与胶片边码",
+      "thesis": "每个游戏是一格底片，Prism 是挑选和冲印它的暗房。",
+      "palette": ["#1C1915", "#0B0A09", "#E9E4D8", "#F2A93B", "#F5E04A", "#E8412E"],
+      "materials": ["胶片条与边码", "油性记号笔圈选"],
+      "viewport": "左侧导航；主区把游戏库排成底片条，边码写着 API、路线和开销；选中项被黄色记号笔圈出。",
+      "risk": "暖黑底色处理不好会显得闷，琥珀边码字号过小会难读。",
+      "raised": [
+        {"from": "challenger-transit", "raise": "渲染管线画成一条线路：游戏渲染、Pre-SR 神经渲染、超分、Prism 守护、输出，每个插件是线路上的一站。"},
+        {"from": "challenger-orienteering", "raise": "插件永远叠在原始画面这一层之上，界面里始终保留一条未处理的原片作为基准。"},
+        {"from": "challenger-ticket", "raise": "安装和回滚记录不删除，已还原的条目盖上“已还原”印记。"},
+        {"from": "challenger-consumer", "raise": "记号笔黄只用在能点击或已选中的地方。"}
+      ],
+      "html": ".impeccable/mocks/decision/assigned.html"
+    },
+    {
+      "id": "model-pick",
+      "label": "胶卷包装盒",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "柯达、富士胶卷包装与 DX 编码",
+      "thesis": "每套优化方案像一种胶卷，有自己的 ISO、颗粒和色彩性格。",
+      "palette": ["#141414", "#FFC20E", "#D7191C", "#0E7C3A", "#F4F1E8"],
+      "materials": ["印刷纸盒", "DX 条码"],
+      "viewport": "方案页是一排胶卷盒，标注适用显卡和性能开销；游戏库是常规列表。",
+      "risk": "高饱和黄红容易被认成柯达致敬，这也是这类方向最常见的落点。",
+      "html": ".impeccable/mocks/decision/model-pick.html"
+    },
+    {
+      "id": "challenger-transit",
+      "label": "夜色地铁线路图",
+      "verdict": "competitive",
+      "lineage": "深蓝珐琅地铁线路图",
+      "thesis": "渲染管线就是一张线路图，插件是站点，换乘点是阶段交汇处。",
+      "palette": ["#0F1B3D", "#F3F0E6", "#E23B3B", "#2F6FE4", "#F2B233", "#2FA36B"],
+      "materials": ["珐琅面板", "45° 线路"],
+      "viewport": "顶部是当前游戏的管线线路图，下方是插件列表和参数。",
+      "case": "管线位置讲得最清楚；但玩家对“地铁”没有归属感。",
+      "risk": "游戏库和设置页没有线路可画时，世界感会断掉。",
+      "html": ".impeccable/mocks/decision/challenger-transit.html",
+      "hero": "https://impeccable.style/worlds/cards/wayfinding-cartography-signage-midnight-transit-diagram-hero.webp"
+    },
+    {
+      "id": "challenger-ikeda",
+      "label": "数据条码场",
+      "verdict": "declined",
+      "lineage": "池田亮司 datamatics",
+      "palette": ["#000000", "#FFFFFF"],
+      "materials": ["发丝条码", "正弦格栅"],
+      "thesis": "纯黑白的数据密度场。",
+      "viewport": "帧时间画成满屏条码。",
+      "risk": "纯黑白无法表达状态颜色。",
+      "case": "玩家认不出这个世界，也说不清产品用途。",
+      "kept": "帧时间监视器用逐帧发丝竖条，敢于高密度。",
+      "hero": "https://impeccable.style/worlds/cards/ikeda-datamatics-hero.webp"
+    },
+    {
+      "id": "challenger-saville",
+      "label": "唱片厂编号目录",
+      "verdict": "declined",
+      "lineage": "Factory Records 编号体系",
+      "palette": ["#0D0D0D", "#FFFFFF", "#E0332B", "#2B6CE0"],
+      "materials": ["哑光黑封套", "色块编码"],
+      "thesis": "所有东西都有编号，颜色代替文字。",
+      "viewport": "编号索引页。",
+      "risk": "用颜色代替文字会让新手看不懂。",
+      "case": "玩家需要直白的说明，编码化和这个需求冲突。",
+      "kept": "每个插件有固定编号，在所有页面里一致出现。",
+      "hero": "https://impeccable.style/worlds/cards/brand-identity-canon-saville-catalog-sleeve-hero.webp"
+    },
+    {
+      "id": "challenger-ticket",
+      "label": "喷气时代机票夹",
+      "verdict": "declined",
+      "lineage": "60 年代航空复写机票",
+      "palette": ["#1B2A52", "#D2232A", "#FFFFFF", "#5B3A8C"],
+      "materials": ["复写联", "作废印章"],
+      "thesis": "每一段行程撕下一联。",
+      "viewport": "安装流程是一本机票联。",
+      "risk": "航空意象和游戏画质无关。",
+      "case": "和受众、产品都不贴。",
+      "kept": "状态会盖章，记录不消失。"
+    },
+    {
+      "id": "challenger-orienteering",
+      "label": "定向越野地图",
+      "verdict": "declined",
+      "lineage": "ISOM 定向越野地图",
+      "palette": ["#FFFFFF", "#9CBF5A", "#F2C94C", "#8B5A2B", "#A3307A"],
+      "materials": ["等高线", "紫色赛道"],
+      "thesis": "赛道层永远不修改地形层。",
+      "viewport": "地图加赛道。",
+      "risk": "户外地图和桌面玩家距离太远。",
+      "case": "玩家认不出，产品也说不清。",
+      "kept": "增强层叠在原片之上，原片永远保留。"
+    },
+    {
+      "id": "challenger-consumer",
+      "label": "暖色消费级卡片",
+      "verdict": "declined",
+      "lineage": "消费级 App 卡片界面",
+      "palette": ["#F6EFE6", "#FFFFFF", "#FF5A36"],
+      "materials": ["大圆角卡片", "单一行动色"],
+      "thesis": "唯一的亮色永远是可以点的东西。",
+      "viewport": "单列卡片。",
+      "risk": "对重度玩家显得幼稚。",
+      "case": "受众不认同，信息密度也不够。",
+      "kept": "行动色只给可点击的元素。"
+    }
+  ],
+  "reroll": {"registers": ["safer", "bolder"]},
+  "canon": true,
+  "canonCard": {
+    "label": "行业标准做法",
+    "thesis": "像 GeForce App、Steam 那样的深色游戏工具界面，做到最好。",
+    "palette": ["#16181D", "#22262E", "#E6E8EB", "#76B900"],
+    "materials": ["深色面板", "游戏封面图"],
+    "viewport": "左侧导航，封面网格游戏库，右侧详情面板。",
+    "risk": "和所有游戏工具长得一样。",
+    "html": ".impeccable/mocks/decision/canon.html"
+  },
+  "steer": true
+}

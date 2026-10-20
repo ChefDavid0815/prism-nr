@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-20T16:40:00Z",
+  "title": "Design System: Prism NR",
+  "extensions": {
+    "colorMeta": {
+      "field-black": { "role": "neutral", "displayName": "Field Black", "canonical": "#000000" },
+      "signal-white": { "role": "primary", "displayName": "Signal White", "canonical": "#ffffff" },
+      "readout-grey": { "role": "neutral", "displayName": "Readout Grey", "canonical": "#8c8c8c" },
+      "quiet-grey": { "role": "neutral", "displayName": "Quiet Grey", "canonical": "#5c5c5c" },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "#262626" },
+      "hairline-faint": { "role": "neutral", "displayName": "Faint Hairline", "canonical": "#1a1a1a" },
+      "spectral-ready": { "role": "secondary", "displayName": "Spectral Ready", "canonical": "#3ddc97" },
+      "spectral-caution": { "role": "secondary", "displayName": "Spectral Caution", "canonical": "#ffc400" },
+      "spectral-blocked": { "role": "secondary", "displayName": "Spectral Blocked", "canonical": "#ff3b30" },
+      "spectral-info": { "role": "secondary", "displayName": "Spectral Info", "canonical": "#4da3ff" }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Headline", "purpose": "Page titles." },
+      "title": { "displayName": "Title", "purpose": "Selected game name in the detail panel." },
+      "body": { "displayName": "Body", "purpose": "Descriptions and table cells." },
+      "label": { "displayName": "Label", "purpose": "Readout keys, column heads, field data columns." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "ease-out-expo", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Every wipe, roll and entrance." },
+      { "name": "wipe-select", "value": "clip-path 360ms", "purpose": "Row and preset inversion." },
+      { "name": "stage-in", "value": "clip-path + blur 420ms", "purpose": "View change." },
+      { "name": "apply-sweep", "value": "620ms barcode sweep + 110ms negative frame", "purpose": "Apply transition; one flash per apply." }
+    ],
+    "breakpoints": [{ "name": "compact", "value": "1280px" }]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one primary action, pinned to the detail footer.",
+      "html": "<button class=\"ds-btn-primary\">一键启用</button>",
+      "css": ".ds-btn-primary{position:relative;height:48px;padding:0 48px;background:#fff;color:#000;border:0;border-radius:0;font:700 16px/1 'JetBrains Mono','Microsoft YaHei UI',monospace;letter-spacing:.04em;overflow:hidden;cursor:pointer}.ds-btn-primary::after{content:'';position:absolute;inset:0;background:repeating-linear-gradient(90deg,rgba(0,0,0,.18) 0 1px,transparent 1px 4px,rgba(0,0,0,.18) 4px 6px,transparent 6px 11px);transform:translateX(-101%);transition:transform 520ms cubic-bezier(.16,1,.3,1)}.ds-btn-primary:hover::after{transform:translateX(101%)}.ds-btn-primary:focus-visible{outline:1px solid #fff;outline-offset:2px}"
+    },
+    {
+      "name": "Line Button",
+      "kind": "button",
+      "refersTo": "button-line",
+      "description": "Secondary actions such as rescan and restore.",
+      "html": "<button class=\"ds-btn-line\">还原</button>",
+      "css": ".ds-btn-line{height:36px;padding:0 16px;background:#000;color:#fff;border:1px solid #262626;border-radius:0;font:14px 'JetBrains Mono','Microsoft YaHei UI',monospace;cursor:pointer;transition:border-color 200ms}.ds-btn-line:hover{border-color:#fff}.ds-btn-line:focus-visible{outline:1px solid #fff;outline-offset:2px}"
+    },
+    {
+      "name": "Rail Item",
+      "kind": "nav",
+      "refersTo": "row-selected",
+      "description": "Navigation entry; the active item inverts with a wipe.",
+      "html": "<div style=\"background:#000;width:184px\"><button class=\"ds-rail is-active\"><span>游戏库</span><span>08</span></button><button class=\"ds-rail\"><span>插件</span><span>13</span></button></div>",
+      "css": ".ds-rail{position:relative;display:flex;justify-content:space-between;width:100%;padding:10px 20px;background:none;border:0;color:#c8c8c8;font:15px 'JetBrains Mono','Microsoft YaHei UI',monospace;isolation:isolate;cursor:pointer}.ds-rail::before{content:'';position:absolute;inset:0;background:#fff;clip-path:inset(0 100% 0 0);transition:clip-path 320ms cubic-bezier(.16,1,.3,1);z-index:-1}.ds-rail:hover{color:#fff}.ds-rail.is-active{color:#000}.ds-rail.is-active::before{clip-path:inset(0 0 0 0)}"
+    },
+    {
+      "name": "Route Tag",
+      "kind": "chip",
+      "description": "Install route with a 2px spectral state bar.",
+      "html": "<span class=\"ds-route\"><i style=\"background:#3ddc97\"></i>原生挂钩</span> <span class=\"ds-route\"><i style=\"background:#ff3b30\"></i>已阻止</span>",
+      "css": ".ds-route{display:inline-flex;align-items:center;gap:8px;color:#fff;font:13px 'JetBrains Mono','Microsoft YaHei UI',monospace}.ds-route i{width:2px;height:14px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Data Field",
+    "overview": "Prism NR is drawn the way Ryoji Ikeda draws data: pure black, pure white, hairline bars and dense tabular numerals. Every barcode on screen is real information. Colour exists only as spectral dispersion, as 2px strokes. Selection is inversion. Motion is maximal by the user's decision, with large-area flashes held at or below three per second.",
+    "keyCharacteristics": ["Black ground, white ink, two greys for hierarchy, no other neutrals.", "One monospace face for all Latin text and numerals; Chinese falls back to Microsoft YaHei UI.", "Square corners everywhere; hairline rules carry all structure.", "Barcodes and bar lattices are data encodings, each legible as a measurement.", "Selection by inversion with a clip-path wipe."],
+    "rules": [
+      { "name": "The Dispersion Rule", "body": "Spectral colours appear only as 2px bars, strokes or barcode segments that carry a state. A spectral fill behind text is never used.", "section": "colors" },
+      { "name": "The Inversion Rule", "body": "The only filled highlight is white. Anything selected, current or primary becomes white with black ink.", "section": "colors" },
+      { "name": "The Tabular Rule", "body": "Every number uses tabular figures so values align across rows and roll in place without jitter.", "section": "typography" }
+    ],
+    "dos": ["Do encode real data in every barcode or bar run; label estimates as 估算.", "Do use inversion (#ffffff field, #000000 ink) for every selected or primary state.", "Do keep spectral colours to 2px state marks.", "Do keep large-area flashes at or below three per second at every motion level."],
+    "donts": ["Don't add rounded corners, shadows, gradients or glass.", "Don't introduce greys beyond #8c8c8c and #5c5c5c, or tint the black.", "Don't draw barcodes or bars that encode nothing.", "Don't use NVIDIA green or RGB gamer styling."]
+  }
+}

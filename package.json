@@ -1,0 +1,41 @@
+{
+  "name": "prism-nr",
+  "productName": "Prism NR",
+  "version": "0.1.0",
+  "description": "Prism NR - a manager for DLSS 5 neural rendering: game detection, plugin hub, presets, guarded install and rollback.",
+  "license": "MIT",
+  "private": true,
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron \"vite\" \"npm:dev:electron\"",
+    "dev:electron": "tsc -p tsconfig.electron.json && wait-on tcp:5173 && cross-env PRISM_DEV=1 electron .",
+    "build": "tsc -p tsconfig.electron.json && tsc -p tsconfig.json --noEmit && vite build",
+    "start": "electron .",
+    "typecheck": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "test:core": "tsc -p tsconfig.electron.json && node dist-electron/cli/selftest.js"
+  },
+  "dependencies": {
+    "7zip-bin": "^5.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@fontsource/jetbrains-mono": "^5.1.1",
+    "@types/node": "^22.10.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "wait-on": "^8.0.1"
+  },
+  "author": "ChefZC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ChefDavid0815/prism-nr.git"
+  },
+  "homepage": "https://github.com/ChefDavid0815/prism-nr"
+}

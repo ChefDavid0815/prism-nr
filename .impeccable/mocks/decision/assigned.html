@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;background:#1C1915;color:#E9E4D8;font:14px/1.5 "Noto Sans SC",sans-serif;display:grid;grid-template-columns:232px 1fr 400px}
+.edge{font-family:"Barlow Condensed";font-weight:600;color:#F2A93B;letter-spacing:.04em}
+nav{background:#141210;padding:28px 0;border-right:1px solid #2C2822}
+.brand{padding:0 24px 28px;font-weight:700;font-size:20px}
+.brand small{display:block;font-size:12px;font-weight:400;color:#8C877C}
+nav a{display:flex;justify-content:space-between;padding:11px 24px;color:#B9B3A6;text-decoration:none;font-size:15px}
+nav a.on{color:#E9E4D8;background:#24201B;box-shadow:inset 3px 0 #F5E04A}
+nav a .edge{font-size:13px}
+.gpu{position:absolute;bottom:24px;left:24px;width:184px;font-size:12px;color:#8C877C}
+.gpu b{display:block;color:#E9E4D8;font-size:14px;font-weight:500}
+main{padding:28px 32px;overflow:hidden}
+.top{display:flex;justify-content:space-between;align-items:end;margin-bottom:22px}
+h1{font-size:28px;font-weight:700}
+.top p{color:#8C877C;margin-top:4px}
+.search{width:280px;height:38px;border:1px solid #3A352D;border-radius:6px;background:#141210;color:#8C877C;padding:8px 12px}
+.strip{background:#0B0A09;padding:16px 14px;margin-bottom:18px;position:relative;border-radius:2px}
+.strip:before,.strip:after{content:"";position:absolute;left:10px;right:10px;height:6px;background:repeating-linear-gradient(90deg,#2A2621 0 10px,transparent 10px 22px)}
+.strip:before{top:4px}.strip:after{bottom:4px}
+.frames{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.f{background:#1A1714;border:1px solid #2A2621;height:132px;padding:12px;position:relative;display:flex;flex-direction:column;justify-content:space-between}
+.f h3{font-size:16px;font-weight:500}
+.f .meta{display:flex;gap:12px;font-size:13px}
+.f .st{font-size:12px;color:#B9B3A6}
+.f.block .st{color:#E8412E}
+.f.sel{outline:none}
+.loop{position:absolute;inset:-14px -12px;pointer-events:none}
+.label{display:flex;justify-content:space-between;font-size:13px;margin:0 2px 8px;color:#8C877C}
+aside{background:#211D18;border-left:1px solid #2C2822;padding:28px 26px}
+aside h2{font-size:22px;font-weight:700}
+aside .sub{color:#8C877C;margin:4px 0 20px}
+.line{position:relative;margin:8px 0 24px;padding-left:22px}
+.line:before{content:"";position:absolute;left:6px;top:8px;bottom:8px;width:4px;background:#F2A93B;border-radius:2px}
+.stn{position:relative;padding:7px 0;display:flex;justify-content:space-between}
+.stn:before{content:"";position:absolute;left:-21px;top:12px;width:10px;height:10px;border-radius:50%;background:#1C1915;border:2px solid #F2A93B}
+.stn.prism:before{background:#F5E04A;border-color:#F5E04A}
+.stn span:last-child{font-family:"Barlow Condensed";color:#F2A93B;font-size:15px}
+.preset{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:20px}
+.preset div{border:1px solid #3A352D;border-radius:6px;padding:10px;font-size:13px}
+.preset div b{display:block;font-size:15px;font-weight:500}
+.preset .on{border-color:#F5E04A;box-shadow:inset 0 0 0 1px #F5E04A}
+.btn{display:block;width:100%;height:46px;background:#F5E04A;color:#1C1915;font-weight:700;font-size:16px;border:0;border-radius:6px}
+.ghost{margin-top:10px;background:transparent;color:#E9E4D8;border:1px solid #3A352D}
+</style></head><body>
+<nav>
+ <div class="brand">Prism NR<small>神经渲染管理器</small></div>
+ <a class="on" href="#">游戏库 <span class="edge">24</span></a>
+ <a href="#">插件中心 <span class="edge">PR 11</span></a>
+ <a href="#">方案</a>
+ <a href="#">还原记录 <span class="edge">3</span></a>
+ <a href="#">诊断</a>
+ <a href="#">设置</a>
+ <div class="gpu"><b>RTX 5090 Laptop</b>24 GB · 驱动 617.42 · 神经渲染可用</div>
+</nav>
+<main>
+ <div class="top"><div><h1>游戏库</h1><p>已扫描 Steam、Epic、GOG，共 24 个游戏，其中 9 个可直接启用</p></div><div class="search">搜索游戏</div></div>
+ <div class="label"><span>可直接启用</span><span class="edge">ROLL 01</span></div>
+ <div class="strip"><div class="frames">
+  <div class="f sel"><h3>赛博朋克 2077</h3><div class="meta edge"><span>DX12</span><span>原生 DLSS</span><span>64 位</span></div><div class="st">已启用 · 旗舰画质</div>
+   <svg class="loop" viewBox="0 0 300 160" preserveAspectRatio="none"><path d="M18 40 C 30 6, 250 2, 284 30 C 304 60, 296 128, 262 146 C 200 162, 60 160, 22 136 C 0 112, 4 64, 30 34" fill="none" stroke="#F5E04A" stroke-width="3.5" stroke-linecap="round"/></svg></div>
+  <div class="f"><h3>心灵杀手 2</h3><div class="meta edge"><span>DX12</span><span>原生 DLSS</span></div><div class="st">未启用</div></div>
+  <div class="f"><h3>黑神话：悟空</h3><div class="meta edge"><span>DX12</span><span>原生 DLSS</span></div><div class="st">未启用</div></div>
+  <div class="f"><h3>巫师 3 次世代版</h3><div class="meta edge"><span>DX12</span><span>原生 DLSS</span></div><div class="st">建议降低强度，原作风格易被改变</div></div>
+ </div></div>
+ <div class="label"><span>需要补全输入（Feeder 路线）</span><span class="edge">ROLL 02</span></div>
+ <div class="strip"><div class="frames">
+  <div class="f"><h3>上古卷轴 5</h3><div class="meta edge"><span>DX11</span><span>无 DLSS</span></div><div class="st">可用，运动矢量为估算</div></div>
+  <div class="f"><h3>空洞骑士</h3><div class="meta edge"><span>DX11</span><span>无 DLSS</span></div><div class="st">2D 游戏，效果有限</div></div>
+  <div class="f block"><h3>Apex 英雄</h3><div class="meta edge"><span>DX12</span><span>EAC</span></div><div class="st">检测到反作弊，已阻止</div></div>
+  <div class="f block"><h3>原神</h3><div class="meta edge"><span>DX11</span><span>反作弊</span></div><div class="st">网络游戏，已阻止</div></div>
+ </div></div>
+</main>
+<aside>
+ <h2>赛博朋克 2077</h2>
+ <p class="sub">路线：原生 DLSS 挂钩，神经渲染在超分之前执行</p>
+ <div class="line">
+  <div class="stn"><span>游戏渲染 1440p</span><span>11.2 ms</span></div>
+  <div class="stn"><span>神经渲染 Pre-SR</span><span>3.8 ms</span></div>
+  <div class="stn"><span>DLSS 超分 → 4K</span><span>1.1 ms</span></div>
+  <div class="stn prism"><span>Prism 保真守护</span><span>0.3 ms</span></div>
+  <div class="stn"><span>输出</span><span>61 fps</span></div>
+ </div>
+ <div class="preset"><div class="on"><b>旗舰画质</b>5080 / 5090</div><div><b>均衡</b>5070 Ti</div><div><b>流畅优先</b>5060 / 5070</div></div>
+ <button class="btn">应用方案</button>
+ <button class="btn ghost">还原到原版</button>
+</aside>
+</body></html>
