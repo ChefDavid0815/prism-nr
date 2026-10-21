@@ -6,3 +6,7 @@ release/
 *.log
 .claude/
 .impeccable/tmp/
+
+# Prism Core build output and third-party SDK headers kept out of the repository
+native/prism-core/build/
+native/prism-core/external/nvsdk_ngx_defs.h

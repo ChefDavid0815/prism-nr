@@ -7,7 +7,7 @@
 **Light in, spectrum out.**
 A DLSS 5 neural rendering manager. One click, guarded, reversible.
 
-![Version](https://img.shields.io/badge/version-0.1.0-000000)
+![Version](https://img.shields.io/badge/version-1.1.0-000000)
 ![Platform](https://img.shields.io/badge/platform-Windows%2011-000000)
 ![GPU](https://img.shields.io/badge/GPU-RTX%2050-000000)
 ![License](https://img.shields.io/badge/license-MIT-000000)
@@ -30,6 +30,32 @@ executable, picks the route that fits, downloads the open-source parts from
 their official release pages, verifies them, installs everything in one
 transaction and can put the game folder back exactly as it was. Its own shader
 plugins keep neural rendering an enhancement instead of a replacement.
+
+## Prism Core (new in 1.1)
+
+Prism NR 1.1 adds **Prism Core**, its own neural rendering runtime: no ReShade, no OptiScaler,
+no RenoDX. A `version.dll` loader brings it into the game; it intercepts the game's DLSS call,
+runs NVIDIA's signed network itself and composes the result back onto the frame.
+
+It saves cost the way our experiments with the real network said it should: **reuse the
+network's full-resolution answer over time** instead of running it at a lower resolution, and
+move the network onto **its own compute queue** so it runs beside the game's next frame.
+
+| CONTROL Resonant, 2560×1600, RTX 5090 Laptop | Rendered FPS | NR cost per frame |
+|---|---:|---:|
+| Neural rendering off | 52.2 | — |
+| Network every frame (RenoDX, one pass) | 32.0 | +12.1 ms |
+| Prism Core, every 2nd frame | 37.5 | +7.4 ms |
+| **Prism Core, every 4th frame, asynchronous** | **43.0** | **+4.0 ms** |
+
+**−67% neural rendering cost, +34% frame rate**, with 0.06–0.09 stop mean error against the
+network's own every-frame answer (running the network at half resolution: 0.16). A character
+guard keeps the network from recolouring skin and hair (skin colour shift −82%).
+
+Prism Core is an experimental preview, installed by hand and tested on one game so far:
+[native/prism-core](native/prism-core/README.md). How it was found, including the ideas the
+real network disproved: [research](docs/research/dlss5-neural-rendering.md) ·
+[architecture](docs/architecture/prism-1.1.md).
 
 ## What it does
 
@@ -85,7 +111,9 @@ Bridge.
 
 ## Download
 
-[**PrismNR-0.1.0-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · per-user install, no admin rights needed.
+[**PrismNR-1.1.0-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · per-user install, no admin rights needed.
+
+[**PrismCore-1.1.0-win64.zip**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · the Prism Core runtime (experimental): `version.dll` and `prism_nvngx.dll`, installed by hand as described in [native/prism-core](native/prism-core/README.md).
 
 The installer is not code-signed yet, so Windows SmartScreen may warn on first run: choose *More info → Run anyway*. The SHA-256 of the installer is listed on the release page.
 

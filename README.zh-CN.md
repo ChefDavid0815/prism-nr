@@ -7,7 +7,7 @@
 **一束光进去，一道光谱出来。**
 DLSS 5 神经渲染管理器。一键安装，有守护，可还原。
 
-![Version](https://img.shields.io/badge/version-0.1.0-000000)
+![Version](https://img.shields.io/badge/version-1.1.0-000000)
 ![Platform](https://img.shields.io/badge/platform-Windows%2011-000000)
 ![GPU](https://img.shields.io/badge/GPU-RTX%2050-000000)
 ![License](https://img.shields.io/badge/license-MIT-000000)
@@ -22,6 +22,23 @@ DLSS 5 神经渲染管理器。一键安装，有守护，可还原。
 ![Prism NR 海报：黑底上的发丝条码场、正弦格栅和 Prism NR 字标](docs/brand/poster.svg)
 
 社区的 DLSS 5 插件能用，但要跑起来，得自己在 ReShade 插件、OptiScaler 分支、Feeder 之间做选择，复制对的 DLL，对上驱动版本，改预处理宏；跑起来之后，还要忍受被"重新生成"的人脸、被提亮的暗部，以及一起被神经渲染处理的 UI。**Prism NR 替你做完这些事。** 它找到你的游戏，读每个游戏的主程序，选合适的路线，从开源组件的官方发布页下载并校验，在一次事务里装好全部文件，也能把游戏目录原样还原。它自带的着色器插件让神经渲染只做增强，不做替换。
+
+## Prism Core（1.1 新增）
+
+Prism NR 1.1 带来了 **Prism Core**——我们自己的神经渲染运行时，不需要 ReShade、OptiScaler，也不需要 RenoDX。它通过一个 `version.dll` 加载器进入游戏，拦截游戏自己的 DLSS 调用，直接运行 NVIDIA 签名版神经网络，再把结果合成回画面。
+
+它省成本的方式来自真实网络的实验结论：**在时间上复用网络的全分辨率答案**，而不是降低网络分辨率；再把网络挪到**独立的计算队列**上，和游戏的下一帧并行。
+
+| CONTROL Resonant，2560×1600，RTX 5090 Laptop | 渲染帧率 | 神经渲染每帧成本 |
+|---|---:|---:|
+| 关闭神经渲染 | 52.2 | — |
+| 每帧跑网络（RenoDX，单遍） | 32.0 | +12.1 ms |
+| Prism Core，隔一帧 | 37.5 | +7.4 ms |
+| **Prism Core，隔三帧 + 异步** | **43.0** | **+4.0 ms** |
+
+**神经渲染成本降低 67%，帧率提升 34%**；与网络每帧全分辨率的答案相比，平均误差 0.06–0.09 档（把网络降到一半分辨率时是 0.16）。角色守护让网络不再改肤色和发色（肤色偏移降低 82%）。
+
+Prism Core 目前是实验性预览版，需要手动安装，暂时只在一个游戏上验证过：[native/prism-core](native/prism-core/README.md)。研究过程，包括被真实网络否定的想法：[研究报告](docs/research/dlss5-neural-rendering.md) · [架构文档](docs/architecture/prism-1.1.md)。
 
 ## 它能做什么
 
@@ -74,7 +91,9 @@ DLSS 5 神经渲染管理器。一键安装，有守护，可还原。
 
 ## 下载
 
-[**PrismNR-0.1.0-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · 安装到当前用户，不需要管理员权限。
+[**PrismNR-1.1.0-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · 安装到当前用户，不需要管理员权限。
+
+[**PrismCore-1.1.0-win64.zip**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Prism Core 运行时（实验性）：`version.dll` 和 `prism_nvngx.dll`，按 [native/prism-core](native/prism-core/README.md) 的说明手动安装。
 
 安装包暂未做代码签名，首次运行时 Windows SmartScreen 可能会拦截：点“更多信息 → 仍要运行”。安装包的 SHA-256 写在发布页上。
 
