@@ -14,7 +14,7 @@ Prism Core, Prism NR's own DLSS 5 neural rendering runtime (experimental preview
   `ExecuteCommandLists` and two fences. CONTROL Resonant, RTX 5090 Laptop: 32.0 → 43.0 rendered
   FPS against the network on every frame, NR cost 12.1 → 4.0 ms.
 - Character guard on the edit's chroma: skin colour shift −82%, red hair −44%, lighting unchanged.
-- Hotkeys: F8 on/off, F5 cadence, F6 asynchronous, F4 split view, F11 frame capture.
+- Hotkeys: F8 on/off, F2 cadence, F3 asynchronous, F4 split view, F11 frame capture (F2/F3 rather than F5/F6, which RenoDX also polls).
 - Research and tools: `docs/research`, `docs/architecture`, the NR bench that drives the signed
   network outside any game, the NETS GPU harness and CPU reference.
 - App: a fixed-plus-linear network cost model per GPU (`electron/shared/nrplan.ts`), from Prism's

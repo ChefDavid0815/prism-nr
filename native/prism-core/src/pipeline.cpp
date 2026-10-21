@@ -28,8 +28,17 @@ bool paint = false;
 struct Capture { ID3D12Resource* src; const char* name; ID3D12Resource* rb = nullptr; D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp = {}; };
 Capture captures[4];
 uint64_t captureAt = 0;
-// Pressed since the last poll (low bit), so a tap between two frames is not lost.
-bool Pressed(int vk) { return (GetAsyncKeyState(vk) & 1) != 0; }
+// A press: the key went down since the last poll (held now and not before), or the "pressed
+// since the last call" bit is set. That bit is shared by the whole process (another add-on
+// polling the same key clears it), so the held state with edge detection is the reliable part.
+bool Pressed(int vk) {
+  static bool wasDown[256] = {};
+  const SHORT st = GetAsyncKeyState(vk);
+  const bool down = (st & 0x8000) != 0;
+  const bool edge = down && !wasDown[vk & 0xff];
+  wasDown[vk & 0xff] = down;
+  return edge || ((st & 1) != 0 && !down);
+}
 
 // ------------------------------------------------------------------ the NR runtime
 using InitFn = ngx::Result (*)(unsigned long long, const wchar_t*, ID3D12Device*, uint32_t, const void*);
@@ -555,8 +564,8 @@ bool PipelineRecord(const UpscaleCall& c) {
   if (failed || !Log) return false;
   MeasureFrameRate(enabled ? cadence : 0);
   if (Pressed(VK_F8)) { enabled = !enabled; historyValid = false; Log("Prism NR %s (F8)", enabled ? "on" : "off"); }
-  if (Pressed(VK_F5)) { cadence = cadence % 4 + 1; historyValid = false; Log("network every %d frame(s) (F5)", cadence); }
-  if (Pressed(VK_F6)) { asyncMode = !asyncMode; historyValid = false; Log("asynchronous network %s (F6)", asyncMode ? "on" : "off"); }
+  if (Pressed(VK_F2)) { cadence = cadence % 4 + 1; historyValid = false; Log("network every %d frame(s) (F2)", cadence); }
+  if (Pressed(VK_F3)) { asyncMode = !asyncMode; historyValid = false; Log("asynchronous network %s (F3)", asyncMode ? "on" : "off"); }
   if (Pressed(VK_F4)) { split = !split; Log("split view %s (F4)", split ? "on" : "off"); }
   if (Pressed(VK_F11) && !captureAt) { captureAt = frame + 1; Log("capture requested (F11)"); }
 

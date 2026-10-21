@@ -30,6 +30,10 @@ Same static shot, output 2560×1600, render 1280×800, ray reconstruction, RTX 5
 | Every 2nd frame, edit carried | 37.5 | +7.4 ms |
 | **Every 4th frame, asynchronous (default)** | **43.0** | **+4.0 ms** |
 
+A second session with frame generation ×2 and Performance ray reconstruction (the numbers in the
+1.1 video): off 62.3 FPS, network every frame 34.0 (+13.4 ms), Prism 1.1 default 47.6 (+5.0 ms).
+Prism 1.0's balanced preset measured 39.7 against 64.3 off (+9.65 ms) in a session of its own.
+
 Quality of the default, measured offline against the network's own full-resolution answer on
 every frame: 0.06–0.09 stop mean error, against 0.16 for running the network at half resolution.
 Fast-moving faces lose the most detail; motion-adaptive cadence is next.
@@ -48,8 +52,8 @@ To remove it, delete the two DLLs.
 | Key | Action |
 |---|---|
 | F8 | Prism Core on / off |
-| F5 | network every 1 / 2 / 3 / 4 frames |
-| F6 | asynchronous network on / off |
+| F2 | network every 1 / 2 / 3 / 4 frames |
+| F3 | asynchronous network on / off |
 | F4 | split view: original left, Prism right |
 | F11 | capture one frame's original, input, network output and result to `prism-capture/` |
 

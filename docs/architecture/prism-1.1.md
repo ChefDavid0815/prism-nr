@@ -25,7 +25,7 @@
 - **加载**：一个代理 DLL（`version.dll` / `winmm.dll` / `dxgi.dll` 中游戏没占用的那个，由 Prism 安装时自动挑），转发系统函数，并加载 `prism_nvngx.dll`。名字里带 `nvngx.dll`，是因为 NGX 只允许路径含这个字样的模块创建 feature（neural-upstream 的发现）。
 - **拦截**：MinHook 挂住所有导出 NGX 求值/创建/释放函数的模块（驱动的 `_nvngx.dll` 和任何代理），用线程本地的调用链去重（RenoDX 的 `EvaluateChain` 思路），一次真实求值只注入一次。
 - **计算**：自己的 D3D12 计算管线，HLSL 由系统自带的 `d3dcompiler_47.dll` 在运行时编译（SM 5.1），录制进游戏的命令列表或我们自己的计算队列。
-- **控制**：不做游戏内菜单。Prism 应用通过命名管道实时调参、实时看遥测（每阶段毫秒、档位、焦点窗口位置），游戏里只保留 F6 / F7 热键。
+- **控制**：不做游戏内菜单。Prism 应用通过命名管道实时调参、实时看遥测（每阶段毫秒、档位、焦点窗口位置），游戏里只保留 F8、F2、F3、F4、F11 几个热键。
 - **Prism FX**：现有 6 个 ReShade 着色器改写成 Core 内部的计算着色器，在编辑域里和 NR 一起合成，不再需要 ReShade。
 - **没有 DLSS 的游戏**：保留 0.1 的 ReShade + Feeder 路线作为后备。
 
