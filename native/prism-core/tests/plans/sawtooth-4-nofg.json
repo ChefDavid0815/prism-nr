@@ -1,0 +1,125 @@
+{
+  "seconds": 12,
+  "runs": [
+    {
+      "Label": "off-free",
+      "Enabled": 0
+    },
+    {
+      "Label": "wait4-free",
+      "Cadence": 4,
+      "Land": "wait"
+    },
+    {
+      "Label": "poll4-free",
+      "Cadence": 4,
+      "Land": "poll"
+    },
+    {
+      "Label": "off-cap60",
+      "Enabled": 0,
+      "FpsCap": 60
+    },
+    {
+      "Label": "wait4-cap60",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 60
+    },
+    {
+      "Label": "poll4-cap60",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 60
+    },
+    {
+      "Label": "adapt-cap60",
+      "Cadence": 0,
+      "Land": "poll",
+      "FpsCap": 60
+    },
+    {
+      "Label": "off-cap70",
+      "Enabled": 0,
+      "FpsCap": 70
+    },
+    {
+      "Label": "wait4-cap70",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 70
+    },
+    {
+      "Label": "poll4-cap70",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 70
+    },
+    {
+      "Label": "adapt-cap70",
+      "Cadence": 0,
+      "Land": "poll",
+      "FpsCap": 70
+    },
+    {
+      "Label": "adapt-cap70-r",
+      "Cadence": 0,
+      "Land": "poll",
+      "FpsCap": 70
+    },
+    {
+      "Label": "poll4-cap70-r",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 70
+    },
+    {
+      "Label": "wait4-cap70-r",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 70
+    },
+    {
+      "Label": "off-cap70-r",
+      "Enabled": 0,
+      "FpsCap": 70
+    },
+    {
+      "Label": "adapt-cap60-r",
+      "Cadence": 0,
+      "Land": "poll",
+      "FpsCap": 60
+    },
+    {
+      "Label": "poll4-cap60-r",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 60
+    },
+    {
+      "Label": "wait4-cap60-r",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 60
+    },
+    {
+      "Label": "off-cap60-r",
+      "Enabled": 0,
+      "FpsCap": 60
+    },
+    {
+      "Label": "poll4-free-r",
+      "Cadence": 4,
+      "Land": "poll"
+    },
+    {
+      "Label": "wait4-free-r",
+      "Cadence": 4,
+      "Land": "wait"
+    },
+    {
+      "Label": "off-free-r",
+      "Enabled": 0
+    }
+  ]
+}

@@ -1,0 +1,264 @@
+[
+  {
+    "label": "off",
+    "presentFps": 61.3,
+    "presentP99": 33.68,
+    "presentSd": 4.3,
+    "presents": 736,
+    "renderFps": 61.3,
+    "renderP99": 33.78,
+    "renderSd": 4.28,
+    "renders": 736,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "off",
+      "Enabled": 0
+    }
+  },
+  {
+    "label": "every",
+    "presentFps": 34.3,
+    "presentP99": 34.15,
+    "presentSd": 2.09,
+    "presents": 412,
+    "renderFps": 34.3,
+    "renderP99": 34.08,
+    "renderSd": 2.01,
+    "renders": 412,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "every",
+      "Cadence": 1,
+      "Async": 0
+    }
+  },
+  {
+    "label": "v11-wait",
+    "presentFps": 50.3,
+    "presentP99": 29.03,
+    "presentSd": 4.72,
+    "presents": 604,
+    "renderFps": 50.3,
+    "renderP99": 28.74,
+    "renderSd": 4.58,
+    "renders": 604,
+    "launches": 151,
+    "lands": 151,
+    "ageAvg": 1,
+    "ageMax": 1,
+    "config": {
+      "Label": "v11-wait",
+      "Cadence": 4,
+      "Land": "wait"
+    }
+  },
+  {
+    "label": "poll4",
+    "presentFps": 49.7,
+    "presentP99": 29.09,
+    "presentSd": 4.61,
+    "presents": 597,
+    "renderFps": 49.7,
+    "renderP99": 28.88,
+    "renderSd": 4.45,
+    "renders": 597,
+    "launches": 149,
+    "lands": 150,
+    "ageAvg": 2,
+    "ageMax": 2,
+    "config": {
+      "Label": "poll4",
+      "Cadence": 4,
+      "Land": "poll"
+    }
+  },
+  {
+    "label": "poll4-high",
+    "presentFps": 49.6,
+    "presentP99": 29.09,
+    "presentSd": 4.65,
+    "presents": 596,
+    "renderFps": 49.6,
+    "renderP99": 28.97,
+    "renderSd": 4.57,
+    "renders": 596,
+    "launches": 149,
+    "lands": 149,
+    "ageAvg": 2,
+    "ageMax": 2,
+    "config": {
+      "Label": "poll4-high",
+      "Cadence": 4,
+      "Land": "poll",
+      "NetPriority": "high"
+    }
+  },
+  {
+    "label": "poll-auto",
+    "presentFps": 46.1,
+    "presentP99": 29.51,
+    "presentSd": 3.78,
+    "presents": 554,
+    "renderFps": 46.1,
+    "renderP99": 29.2,
+    "renderSd": 3.73,
+    "renders": 554,
+    "launches": 185,
+    "lands": 185,
+    "ageAvg": 2,
+    "ageMax": 2,
+    "config": {
+      "Label": "poll-auto",
+      "Cadence": 0,
+      "Land": "poll"
+    }
+  },
+  {
+    "label": "off-cap40",
+    "presentFps": 40,
+    "presentP99": 25.92,
+    "presentSd": 0.35,
+    "presents": 480,
+    "renderFps": 40,
+    "renderP99": 25,
+    "renderSd": 0.01,
+    "renders": 480,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "off-cap40",
+      "Enabled": 0,
+      "FpsCap": 40
+    }
+  },
+  {
+    "label": "v11-cap40",
+    "presentFps": 35.9,
+    "presentP99": 35.3,
+    "presentSd": 4.01,
+    "presents": 432,
+    "renderFps": 35.9,
+    "renderP99": 34.72,
+    "renderSd": 3.96,
+    "renders": 432,
+    "launches": 108,
+    "lands": 108,
+    "ageAvg": 1,
+    "ageMax": 1,
+    "config": {
+      "Label": "v11-cap40",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 40
+    }
+  },
+  {
+    "label": "poll4-cap40",
+    "presentFps": 40,
+    "presentP99": 26.25,
+    "presentSd": 0.61,
+    "presents": 480,
+    "renderFps": 40,
+    "renderP99": 25,
+    "renderSd": 0,
+    "renders": 480,
+    "launches": 120,
+    "lands": 120,
+    "ageAvg": 1,
+    "ageMax": 1,
+    "config": {
+      "Label": "poll4-cap40",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 40
+    }
+  },
+  {
+    "label": "auto-cap40",
+    "presentFps": 40,
+    "presentP99": 26.28,
+    "presentSd": 0.67,
+    "presents": 480,
+    "renderFps": 40,
+    "renderP99": 25,
+    "renderSd": 0,
+    "renders": 480,
+    "launches": 240,
+    "lands": 240,
+    "ageAvg": 1,
+    "ageMax": 1,
+    "config": {
+      "Label": "auto-cap40",
+      "Cadence": 0,
+      "Land": "poll",
+      "FpsCap": 40
+    }
+  },
+  {
+    "label": "off-b",
+    "presentFps": 58.6,
+    "presentP99": 33.94,
+    "presentSd": 5.39,
+    "presents": 704,
+    "renderFps": 58.6,
+    "renderP99": 33.88,
+    "renderSd": 5.33,
+    "renders": 704,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "off-b",
+      "Enabled": 0
+    }
+  },
+  {
+    "label": "v11-wait-b",
+    "presentFps": 48,
+    "presentP99": 29.71,
+    "presentSd": 4.45,
+    "presents": 577,
+    "renderFps": 48,
+    "renderP99": 29.51,
+    "renderSd": 4.3,
+    "renders": 577,
+    "launches": 145,
+    "lands": 144,
+    "ageAvg": 1,
+    "ageMax": 1,
+    "config": {
+      "Label": "v11-wait-b",
+      "Cadence": 4,
+      "Land": "wait"
+    }
+  },
+  {
+    "label": "poll4-b",
+    "presentFps": 43.9,
+    "presentP99": 34.95,
+    "presentSd": 6.1,
+    "presents": 528,
+    "renderFps": 44,
+    "renderP99": 34.59,
+    "renderSd": 6,
+    "renders": 528,
+    "launches": 132,
+    "lands": 132,
+    "ageAvg": 1.83,
+    "ageMax": 2,
+    "config": {
+      "Label": "poll4-b",
+      "Cadence": 4,
+      "Land": "poll"
+    }
+  }
+]

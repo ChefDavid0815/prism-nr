@@ -1,0 +1,83 @@
+{
+  "seconds": 15,
+  "runs": [
+    {
+      "Label": "v11-free-r",
+      "Cadence": 4,
+      "Land": "wait"
+    },
+    {
+      "Label": "off-free-r",
+      "Enabled": 0
+    },
+    {
+      "Label": "wait4-cap50-r",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 50
+    },
+    {
+      "Label": "poll4-cap50-r",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 50
+    },
+    {
+      "Label": "adapt-cap50-r",
+      "Cadence": 0,
+      "Land": "poll",
+      "FpsCap": 50
+    },
+    {
+      "Label": "off-cap50-r",
+      "Enabled": 0,
+      "FpsCap": 50
+    },
+    {
+      "Label": "wait4-cap45-r",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 45
+    },
+    {
+      "Label": "poll4-cap45-r",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 45
+    },
+    {
+      "Label": "adapt-cap45-r",
+      "Cadence": 0,
+      "Land": "poll",
+      "FpsCap": 45
+    },
+    {
+      "Label": "off-cap45-r",
+      "Enabled": 0,
+      "FpsCap": 45
+    },
+    {
+      "Label": "wait4-cap40-r",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 40
+    },
+    {
+      "Label": "poll4-cap40-r",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 40
+    },
+    {
+      "Label": "adapt-cap40-r",
+      "Cadence": 0,
+      "Land": "poll",
+      "FpsCap": 40
+    },
+    {
+      "Label": "off-cap40-r",
+      "Enabled": 0,
+      "FpsCap": 40
+    }
+  ]
+}

@@ -1,0 +1,145 @@
+{
+  "seconds": 12,
+  "runs": [
+    {
+      "Label": "off-cap75",
+      "Enabled": 0,
+      "FpsCap": 75
+    },
+    {
+      "Label": "wait4-cap75",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 75
+    },
+    {
+      "Label": "poll4-cap75",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 75
+    },
+    {
+      "Label": "off-cap80",
+      "Enabled": 0,
+      "FpsCap": 80
+    },
+    {
+      "Label": "wait4-cap80",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 80
+    },
+    {
+      "Label": "poll4-cap80",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 80
+    },
+    {
+      "Label": "poll2-cap60",
+      "Cadence": 2,
+      "Land": "poll",
+      "FpsCap": 60
+    },
+    {
+      "Label": "wait2-cap60",
+      "Cadence": 2,
+      "Land": "wait",
+      "FpsCap": 60
+    },
+    {
+      "Label": "poll3-cap60",
+      "Cadence": 3,
+      "Land": "poll",
+      "FpsCap": 60
+    },
+    {
+      "Label": "poll2-cap70",
+      "Cadence": 2,
+      "Land": "poll",
+      "FpsCap": 70
+    },
+    {
+      "Label": "wait2-cap70",
+      "Cadence": 2,
+      "Land": "wait",
+      "FpsCap": 70
+    },
+    {
+      "Label": "poll3-cap70",
+      "Cadence": 3,
+      "Land": "poll",
+      "FpsCap": 70
+    },
+    {
+      "Label": "poll3-cap70-r",
+      "Cadence": 3,
+      "Land": "poll",
+      "FpsCap": 70
+    },
+    {
+      "Label": "wait2-cap70-r",
+      "Cadence": 2,
+      "Land": "wait",
+      "FpsCap": 70
+    },
+    {
+      "Label": "poll2-cap70-r",
+      "Cadence": 2,
+      "Land": "poll",
+      "FpsCap": 70
+    },
+    {
+      "Label": "poll3-cap60-r",
+      "Cadence": 3,
+      "Land": "poll",
+      "FpsCap": 60
+    },
+    {
+      "Label": "wait2-cap60-r",
+      "Cadence": 2,
+      "Land": "wait",
+      "FpsCap": 60
+    },
+    {
+      "Label": "poll2-cap60-r",
+      "Cadence": 2,
+      "Land": "poll",
+      "FpsCap": 60
+    },
+    {
+      "Label": "poll4-cap80-r",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 80
+    },
+    {
+      "Label": "wait4-cap80-r",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 80
+    },
+    {
+      "Label": "off-cap80-r",
+      "Enabled": 0,
+      "FpsCap": 80
+    },
+    {
+      "Label": "poll4-cap75-r",
+      "Cadence": 4,
+      "Land": "poll",
+      "FpsCap": 75
+    },
+    {
+      "Label": "wait4-cap75-r",
+      "Cadence": 4,
+      "Land": "wait",
+      "FpsCap": 75
+    },
+    {
+      "Label": "off-cap75-r",
+      "Enabled": 0,
+      "FpsCap": 75
+    }
+  ]
+}

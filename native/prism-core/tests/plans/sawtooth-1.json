@@ -1,0 +1,18 @@
+{
+  "seconds": 12,
+  "runs": [
+    { "Label": "off", "Enabled": 0 },
+    { "Label": "every", "Cadence": 1, "Async": 0 },
+    { "Label": "v11-wait", "Cadence": 4, "Land": "wait" },
+    { "Label": "poll4", "Cadence": 4, "Land": "poll" },
+    { "Label": "poll4-high", "Cadence": 4, "Land": "poll", "NetPriority": "high" },
+    { "Label": "poll-auto", "Cadence": 0, "Land": "poll" },
+    { "Label": "off-cap40", "Enabled": 0, "FpsCap": 40 },
+    { "Label": "v11-cap40", "Cadence": 4, "Land": "wait", "FpsCap": 40 },
+    { "Label": "poll4-cap40", "Cadence": 4, "Land": "poll", "FpsCap": 40 },
+    { "Label": "auto-cap40", "Cadence": 0, "Land": "poll", "FpsCap": 40 },
+    { "Label": "off-b", "Enabled": 0 },
+    { "Label": "v11-wait-b", "Cadence": 4, "Land": "wait" },
+    { "Label": "poll4-b", "Cadence": 4, "Land": "poll" }
+  ]
+}
