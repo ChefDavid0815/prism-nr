@@ -152,9 +152,10 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
 
   if (route !== 'feeder' && analysis.nativeDlss.present) manualSteps.push('在游戏设置里开启 DLSS 超分或 DLAA。');
   if (plugins.includes('framegen') && values['framegen.mode'] !== 'off') manualSteps.push(`在游戏设置或 NVIDIA App 里开启 ${values['framegen.mode']} 帧生成。`);
-  const learned = Object.keys(store.settings().learnedAddonSections).length > 0;
-  if (route !== 'optiscaler' && !learned)
-    manualSteps.push('第一次进游戏按 Home 打开面板，在“插件”页勾选 Neural Rendering。Prism 会记住这个设置，之后的游戏不用再勾。');
+  if (plugins.includes('nr-renodx')) steps.push('写入神经渲染强度、遍数和工作分辨率，进游戏即生效');
+  if (route === 'native-hook' && (preset === 'balanced' || preset === 'fluid'))
+    manualSteps.push(`在游戏设置里把 DLSS 设为${Number(values['nr-optiscaler.modelResolution']) <= 50 ? '性能' : '质量'}档，神经渲染会跟随渲染分辨率，帧率明显提升。`);
+  if (route !== 'optiscaler') manualSteps.push('游戏里按 F6 开关神经渲染、F7 开关 Prism 插件，可以随时对比。');
   if (route === 'optiscaler') manualSteps.push('第一次进游戏如果画面没有变化，按 Insert 打开 OptiScaler 菜单确认 Neural Rendering 已开启。');
 
   return {
@@ -194,7 +195,33 @@ function techniquesIn(file: string): string[] {
   return [...src.matchAll(/^\s*technique\s+([A-Za-z_][A-Za-z0-9_]*)/gm)].map((m) => m[1]);
 }
 
-function reshadeIni(learned: Record<string, string>): string {
+/**
+ * RenoDX DLSS 5 add-on settings, written as the [RenoDX.DLSS5] section the add-on reads from
+ * ReShade.ini (keys observed from RenoDX DLSS5 Generic 6.5.3). Values are 0..1 except passes.
+ */
+function renodxSection(values: Values, route: Route, preset: PresetId): string {
+  const pct = (k: string, d: number) => Math.max(0, Math.min(1, Number(values[k] ?? d) / 100));
+  const passes = Math.max(1, Math.min(4, Number(values['nr-renodx.passes'] ?? 1)));
+  const modelRes = Number(values['nr-optiscaler.modelResolution'] ?? 100);
+  // Pre-upscale NR is not supported by every game (it needs a single-mip colour buffer), so Prism
+  // lowers the NR working resolution instead: it follows the game's DLSS render resolution.
+  const followRender = route === 'native-hook' && (preset === 'balanced' || preset === 'fluid') && modelRes < 100;
+  const lines = [
+    'ConfigVersion=6',
+    `NRIntensity=${pct('nr-renodx.intensity', 30).toFixed(2)}`,
+    `NRLocalStructure=${pct('nr-renodx.structure', 100).toFixed(2)}`,
+    `NRColorStrength=${pct('nr-renodx.color', 100).toFixed(2)}`,
+    `NRPasses=${passes}`,
+    'NRPreUpscale=0',
+    `NRFollowInputRes=${followRender ? 1 : 0}`,
+    'NRResolutionScale=1',
+    'NRToggleKey=117',
+    'NRScreenshotKey=116',
+  ];
+  return lines.join('\r\n');
+}
+
+function reshadeIni(learned: Record<string, string>, renodx: string | null): string {
   const lines = [
     '; Written by Prism NR. Rolling back in Prism restores the previous file.',
     '[GENERAL]',
@@ -205,14 +232,27 @@ function reshadeIni(learned: Record<string, string>): string {
     'NoReloadOnInit=0',
     '',
     '[INPUT]',
+    // Home opens the panel, F7 toggles every Prism plugin at once (quick A/B), PrtSc saves a lossless still.
     'KeyOverlay=36,0,0,0',
+    'KeyEffects=118,0,0,0',
+    'KeyScreenshot=44,0,0,0',
     '',
     '[OVERLAY]',
     'TutorialProgress=4',
     'ShowFPS=0',
     '',
+    '[SCREENSHOT]',
+    'SavePath=.\\PrismNR-Screenshots',
+    'FileFormat=1',
+    'ClearAlpha=1',
+    '',
   ];
-  for (const [section, body] of Object.entries(learned)) lines.push(`[${section}]`, body.trim(), '');
+  for (const [section, body] of Object.entries(learned)) {
+    // Prism's own RenoDX values win over learned ones; everything else learned is carried over.
+    if (renodx && section === 'RenoDX.DLSS5') continue;
+    lines.push(`[${section}]`, body.trim(), '');
+  }
+  if (renodx) lines.push('[RenoDX.DLSS5]', renodx, '');
   return lines.join('\r\n');
 }
 
@@ -328,7 +368,8 @@ function buildOps(plan: InstallPlan, analysis: GameAnalysis, comps: Components, 
     if (!dll) throw new Error('ReShade 组件里没有对应位数的 DLL。');
     const name = plan.route === 'optiscaler' ? (x64 ? 'ReShade64.dll' : 'ReShade32.dll') : reshadeDllName(analysis);
     ops.push({ kind: 'copy', from: dll, to: path.join(exeDir, name), label: `ReShade（${name}）` });
-    ops.push({ kind: 'write', to: path.join(exeDir, 'ReShade.ini'), content: reshadeIni(store.settings().learnedAddonSections), label: 'ReShade.ini' });
+    const renodx = plan.plugins.includes('nr-renodx') ? renodxSection(plan.values, plan.route, plan.preset) : null;
+    ops.push({ kind: 'write', to: path.join(exeDir, 'ReShade.ini'), content: reshadeIni(store.settings().learnedAddonSections, renodx), label: 'ReShade.ini（含神经渲染参数）' });
 
     // Prism shaders.
     for (const f of fs.readdirSync(shaderDir)) {

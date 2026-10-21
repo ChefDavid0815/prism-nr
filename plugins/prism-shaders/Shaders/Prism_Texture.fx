@@ -25,7 +25,7 @@ uniform float GrainSize <
 	ui_label = "Grain size";
 > = 1.4;
 
-uniform int PrismFrame < source = "framecount"; >;
+uniform uint PrismFrame < source = "framecount"; >;
 
 float4 PS_PrismTexture(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
@@ -53,7 +53,7 @@ float4 PS_PrismTexture(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Targ
 
 	// Grain on a coarser grid, re-seeded every frame.
 	float2 cell = floor(pos.xy / GrainSize);
-	float g = PrismHash(cell + float2(PrismFrame % 977, PrismFrame % 613)) - 0.5;
+	float g = PrismHash(cell + float2(PrismFrame % 977u, PrismFrame % 613u)) - 0.5;
 	float mid = 4.0 * lc * (1.0 - lc);
 	c += g * GrainAmount * 0.25 * mid;
 

@@ -87,9 +87,8 @@ float PrismSoftLimit(float d, float lim)
 float2 PrismSoftLimit2(float2 d, float lim)
 {
 	float len = length(d);
-	if (len < 1e-6)
-		return d;
-	return d * (PrismSoftLimit(len, lim) / len);
+	float scale = len < 1e-6 ? 1.0 : PrismSoftLimit(len, lim) / max(len, 1e-6);
+	return d * scale;
 }
 
 float PrismHash(float2 p)

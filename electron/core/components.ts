@@ -15,6 +15,8 @@ export interface ComponentSource {
   kind: 'github' | 'reshade-site' | 'manual';
   repo?: string;
   asset?: RegExp;
+  /** Only releases whose tag matches; the repository may publish unrelated releases. */
+  tag?: RegExp;
   homepage: string;
   license: string;
   /** Shown when the component cannot be fetched automatically. */
@@ -24,7 +26,7 @@ export interface ComponentSource {
 export const SOURCES: ComponentSource[] = [
   { id: 'reshade', name: 'ReShade（含插件支持）', kind: 'reshade-site', homepage: 'https://reshade.me', license: 'BSD-3-Clause' },
   { id: 'feeder', name: 'DLSS5-Feeder', kind: 'github', repo: 'jlrouzies-fr/DLSS5-Feeder', asset: /^DLSS5-Feeder-[\d.]+\.zip$/i, homepage: 'https://github.com/jlrouzies-fr/DLSS5-Feeder', license: '见项目仓库' },
-  { id: 'renodx-dlss5', name: 'RenoDX DLSS 5 插件', kind: 'github', repo: 'RankFTW/rhi-repo', asset: /dlss.*\.addon64$/i, homepage: 'https://github.com/RankFTW/rhi-repo', license: '见项目仓库', manualHint: '如果自动获取失败，从 RenoDX 官方 Discord 下载 .addon64 文件后导入。' },
+  { id: 'renodx-dlss5', name: 'RenoDX DLSS 5 插件', kind: 'github', repo: 'RankFTW/rhi-repo', tag: /^renodx-dlss5-[\d.]+$/i, asset: /^renodx-dlss5_[\d.]+\.zip$/i, homepage: 'https://github.com/RankFTW/rhi-repo', license: '见项目仓库', manualHint: '如果自动获取失败，从 RenoDX 官方 Discord 下载 .addon64 文件后导入。' },
   { id: 'optiscaler-nr', name: 'OptiScaler DLSS-NR（稳定版）', kind: 'github', repo: 'Dagherbou/OptiScaler_DLSSNR', asset: /\.(7z|zip)$/i, homepage: 'https://github.com/Dagherbou/OptiScaler_DLSSNR', license: 'GPL-3.0' },
   { id: 'optiscaler-presr', name: 'OptiScaler DLSS-NR Pre-SR', kind: 'github', repo: 'wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass', asset: /\.(7z|zip)$/i, homepage: 'https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass', license: 'GPL-3.0' },
   { id: 'lumenite', name: 'LumeniteFX 运动矢量', kind: 'manual', homepage: 'https://www.nexusmods.com/fallout4/mods/108067', license: '见作者说明', manualHint: '在 Nexus 下载 LumeniteFX 压缩包后导入，所有游戏共用这一份。' },
@@ -118,9 +120,9 @@ interface GhRelease {
 
 async function fetchGithub(src: ComponentSource, onProgress: (msg: string) => void): Promise<ComponentInfo> {
   onProgress(`查询 ${src.name} 的最新版本`);
-  const res = await fetch(`https://api.github.com/repos/${src.repo}/releases?per_page=10`, { headers: { 'User-Agent': 'PrismNR', Accept: 'application/vnd.github+json' } });
+  const res = await fetch(`https://api.github.com/repos/${src.repo}/releases?per_page=100`, { headers: { 'User-Agent': 'PrismNR', Accept: 'application/vnd.github+json' } });
   if (!res.ok) throw new Error(`无法访问 ${src.repo} 的发布页（${res.status}）`);
-  const releases = ((await res.json()) as GhRelease[]).filter((r) => !r.draft);
+  const releases = ((await res.json()) as GhRelease[]).filter((r) => !r.draft && (!src.tag || src.tag.test(r.tag_name)));
   const ordered = [...releases.filter((r) => !r.prerelease), ...releases.filter((r) => r.prerelease)];
   for (const rel of ordered) {
     const asset = rel.assets.find((a) => src.asset!.test(a.name));
@@ -139,6 +141,7 @@ async function fetchGithub(src: ComponentSource, onProgress: (msg: string) => vo
       ensureDir(outDir);
       fs.copyFileSync(dl, path.join(outDir, asset.name));
     }
+    stripNvidiaBinaries(outDir);
     return saveComponent(src.id, rel.tag_name, outDir);
   }
   throw new Error(`${src.repo} 最近的发布里没有找到匹配的文件。`);
@@ -162,6 +165,16 @@ async function fetchReshade(onProgress: (msg: string) => void): Promise<Componen
   const files = listFiles(outDir);
   if (!files.some((f) => /ReShade64\.dll$/i.test(f))) throw new Error('ReShade 安装包里没有找到 ReShade64.dll。');
   return saveComponent('reshade', version, outDir);
+}
+
+/** Prism never keeps NVIDIA binaries that arrive inside third-party archives; only local signed copies are used. */
+function stripNvidiaBinaries(dir: string): void {
+  walk(dir, (f, _d, isDir) => {
+    if (!isDir && /^(nvngx|_nvngx|sl\.)[^\\/]*\.dll$/i.test(path.basename(f))) {
+      fs.rmSync(f, { force: true });
+      log(`removed bundled NVIDIA binary ${path.basename(f)}`);
+    }
+  }, { maxDepth: 8, maxEntries: 5000 });
 }
 
 /** Fetches a component automatically. Throws with a user-facing message when that is not possible. */

@@ -7,7 +7,7 @@
 **Light in, spectrum out.**
 A DLSS 5 neural rendering manager. One click, guarded, reversible.
 
-![Version](https://img.shields.io/badge/version-0.1.0%20source%20preview-000000)
+![Version](https://img.shields.io/badge/version-0.1.0-000000)
 ![Platform](https://img.shields.io/badge/platform-Windows%2011-000000)
 ![GPU](https://img.shields.io/badge/GPU-RTX%2050-000000)
 ![License](https://img.shields.io/badge/license-MIT-000000)
@@ -83,6 +83,12 @@ Bridge.
 | **Fluid** | RTX 5060 / 5070 | Pre-SR at 50 %, 3× frame generation, stronger texture restore | Displayed frame rate often above native thanks to frame generation. Base frame rate and latency still pay; it is not free. |
 | **Faithful** | Any RTX 50 | Low intensity, strict guard | Lighting improves; faces and art direction stay. |
 
+## Download
+
+[**PrismNR-0.1.0-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · per-user install, no admin rights needed.
+
+The installer is not code-signed yet, so Windows SmartScreen may warn on first run: choose *More info → Run anyway*. The SHA-256 of the installer is listed on the release page.
+
 ## Build from source
 
 Requirements: Windows 11, Node.js 20+, an RTX 50 GPU for neural rendering.
@@ -99,10 +105,10 @@ npm run test:core  # read-only self-test against this PC: GPU, scan, analysis, p
 - Type-check and production build pass.
 - The self-test ran on an RTX 5090 Laptop (driver 617.42, Windows build 26300): GPU classification, Steam and Epic scanning, PE analysis (including delay-loaded DX12), anti-cheat detection and NGX file discovery with signature checks.
 - The Electron app ran against that real backend; the UI was checked at 1440 × 900 and 1120 × 720.
+- End-to-end install into CONTROL Resonant (DX12, native DLSS route): ReShade 6.8.0 and the RenoDX DLSS5 add-on 6.5.3 downloaded live and verified, the local NVIDIA-signed DLSSNR 310.8 runtime initialised, and all six Prism shaders compiled in ReShade with no warnings. Restore put the folder back.
+- Measured on the same machine at 2560 × 1600, maximum settings, ray tracing maximum, frame generation 2×: with the same game settings, Prism's preset ran 8% faster than RenoDX defaults at DLSS Quality and 13% faster at DLSS Performance; the flagship preset, with three extra quality shaders, ran 2.5% slower than RenoDX at DLAA.
 
-Not verified yet: an end-to-end install into a game, the component downloads
-against live release pages, and the Prism shaders compiled inside ReShade. There
-is no signed installer; this is a source preview.
+Not verified yet: the OptiScaler and DLSS5-Feeder routes inside a game, and GPUs other than the RTX 5090 Laptop.
 
 ## Credits and license
 

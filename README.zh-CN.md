@@ -7,7 +7,7 @@
 **一束光进去，一道光谱出来。**
 DLSS 5 神经渲染管理器。一键安装，有守护，可还原。
 
-![Version](https://img.shields.io/badge/version-0.1.0%20source%20preview-000000)
+![Version](https://img.shields.io/badge/version-0.1.0-000000)
 ![Platform](https://img.shields.io/badge/platform-Windows%2011-000000)
 ![GPU](https://img.shields.io/badge/GPU-RTX%2050-000000)
 ![License](https://img.shields.io/badge/license-MIT-000000)
@@ -72,6 +72,12 @@ DLSS 5 神经渲染管理器。一键安装，有守护，可还原。
 | **流畅优先** | RTX 5060 / 5070 | Pre-SR 50%，3× 帧生成，加强质感还原 | 靠帧生成，显示帧率常常高于不开时。基础帧率和延迟仍有代价，不是零损失。 |
 | **原片优先** | 任意 RTX 50 | 低强度，严格守护 | 光照质感提升，人脸和美术风格不变。 |
 
+## 下载
+
+[**PrismNR-0.1.0-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · 安装到当前用户，不需要管理员权限。
+
+安装包暂未做代码签名，首次运行时 Windows SmartScreen 可能会拦截：点“更多信息 → 仍要运行”。安装包的 SHA-256 写在发布页上。
+
 ## 从源码构建
 
 需要 Windows 11、Node.js 20 以上；神经渲染需要 RTX 50 显卡。
@@ -89,7 +95,10 @@ npm run test:core  # 只读自测：显卡、扫描、分析、安装方案
 - 自测在 RTX 5090 Laptop（驱动 617.42，Windows build 26300）上运行：显卡分档、Steam 和 Epic 扫描、PE 分析（包括延迟加载的 DX12）、反作弊识别、NGX 文件查找和签名校验。
 - Electron 桌面版连接真实后端运行；界面在 1440 × 900 和 1120 × 720 下检查过。
 
-尚未验证：在真实游戏里完整安装一次、组件从线上发布页下载、Prism 着色器在 ReShade 中编译。目前没有签名安装包，这是源码预览版。
+- 在 CONTROL Resonant（DX12，原生挂钩路线）上完整安装：ReShade 6.8.0 和 RenoDX DLSS5 插件 6.5.3 从线上下载并校验，本机 NVIDIA 签名版 DLSSNR 310.8 运行库初始化成功，6 个 Prism 着色器在 ReShade 中全部编译通过、没有警告。还原后游戏目录恢复原样。
+- 同一台机器实测（2560 × 1600、极致画质、光追极致、帧生成 2×）：同样的游戏设置下，Prism 方案比 RenoDX 默认在 DLSS 质量档快 8%、性能档快 13%；旗舰方案多跑三个画质插件，在 DLAA 下比 RenoDX 慢 2.5%。
+
+尚未验证：OptiScaler 和 DLSS5-Feeder 路线在真实游戏中的表现，以及 RTX 5090 Laptop 以外的显卡。
 
 ## 致谢与许可证
 

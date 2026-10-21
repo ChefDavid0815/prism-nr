@@ -13,7 +13,7 @@ export const PLUGINS: PluginDef[] = [
     category: 'core',
     origin: 'community',
     summary: '把 DLSS 5 神经渲染接进游戏。游戏每次调用 DLSS，它就把画面交给 NVIDIA 的模型处理。',
-    does: ['挂钩游戏自己的 DLSS 调用，在超分之后执行神经渲染', '画质最完整，开销跟着输出分辨率涨', '参数在游戏内 ReShade 面板（Home 键）里调整'],
+    does: ['挂钩游戏自己的 DLSS 调用，在超分之后执行神经渲染', '画质最完整，开销跟着输出分辨率涨', '强度、遍数和超分前模式由 Prism 自动写好，也可以在游戏内 ReShade 面板（Home 键）里微调'],
     cost: '高：社区实测 4K 下帧率约减半（RTX 5070 Ti，Control）',
     gpu: 'RTX 50 系。RTX 40 需要社区 Ada 适配包',
     routes: ['native-hook', 'feeder'],
@@ -23,8 +23,9 @@ export const PLUGINS: PluginDef[] = [
     source: { name: 'RenoDX DLSS 5 add-on', note: '从 RenoDX 官方 Discord 获取，下载后导入到 Prism 组件仓库' },
     params: [
       { key: 'nr-renodx.intensity', label: '神经渲染强度', help: '越高改动越大。20% 到 35% 最稳，超过 50% 人脸和光影容易变味。', type: 'range', min: 0, max: 100, step: 1, unit: '%', default: 30 },
-      { key: 'nr-renodx.structure', label: '局部结构', help: '控制模型对材质细节的重建程度。', type: 'range', min: 0, max: 100, step: 1, unit: '%', default: 18 },
-      { key: 'nr-renodx.color', label: '色彩影响', help: '模型可以改动多少颜色。保持低值能守住原作色调。', type: 'range', min: 0, max: 100, step: 1, unit: '%', default: 10 },
+      { key: 'nr-renodx.structure', label: '局部结构', help: '控制模型对材质细节的重建程度。', type: 'range', min: 0, max: 100, step: 1, unit: '%', default: 70 },
+      { key: 'nr-renodx.color', label: '色彩影响', help: '模型可以改动多少颜色。保持低值能守住原作色调。', type: 'range', min: 0, max: 100, step: 1, unit: '%', default: 60 },
+      { key: 'nr-renodx.passes', label: '叠加遍数', help: '神经渲染处理几遍。2 遍效果更明显，开销约翻倍，第 2 遍起不保留历史帧，更依赖时域稳定。', type: 'choice', choices: [{ value: '1', label: '1 遍' }, { value: '2', label: '2 遍' }, { value: '3', label: '3 遍' }, { value: '4', label: '4 遍' }], default: '1' },
     ],
   },
   {
@@ -259,7 +260,7 @@ export const PRESETS: PresetDef[] = [
     summary: '神经渲染在超分之后完整执行，配齐守护、稳定和质感插件。',
     nativeRoutePreference: ['native-hook', 'optiscaler'],
     plugins: ['nr-renodx', 'prism-capture', 'prism-guard', 'prism-stabilize', 'prism-texture', 'prism-tone'],
-    values: { 'nr-renodx.intensity': 32, 'prism-guard.GuardStrength': 0.5, 'prism-guard.DetailTransfer': 0.3, 'prism-texture.DetailAmount': 0.15, 'prism-texture.GrainAmount': 0.06, 'framegen.mode': 'off' },
+    values: { 'nr-renodx.intensity': 100, 'nr-renodx.structure': 100, 'nr-renodx.color': 100, 'nr-renodx.passes': '2', 'prism-guard.GuardStrength': 0.5, 'prism-guard.DetailTransfer': 0.3, 'prism-texture.DetailAmount': 0.15, 'prism-texture.GrainAmount': 0.06, 'framegen.mode': 'off' },
     expectation: '画质最好。4K 下神经渲染本身可能吃掉接近一半帧率，建议游戏内超分开到“质量”档或配合 2× 帧生成。',
   },
   {
@@ -270,7 +271,7 @@ export const PRESETS: PresetDef[] = [
     summary: '神经渲染挪到超分之前，模型分辨率 67%，配 2× 帧生成。',
     nativeRoutePreference: ['optiscaler', 'native-hook'],
     plugins: ['nr-optiscaler', 'framegen', 'prism-capture', 'prism-guard', 'prism-stabilize', 'prism-texture', 'prism-tone'],
-    values: { 'nr-optiscaler.modelResolution': 67, 'framegen.mode': '2x', 'prism-guard.GuardStrength': 0.6, 'prism-texture.DetailAmount': 0.25, 'feeder.work_resolution': 80 },
+    values: { 'nr-optiscaler.modelResolution': 67, 'nr-renodx.intensity': 70, 'framegen.mode': '2x', 'prism-guard.GuardStrength': 0.6, 'prism-texture.DetailAmount': 0.25, 'feeder.work_resolution': 80 },
     expectation: '画质接近旗舰，神经渲染开销大约降到三成以内（社区数据，因游戏而异）。',
   },
   {
@@ -281,7 +282,7 @@ export const PRESETS: PresetDef[] = [
     summary: '模型分辨率 50%，配 3× 多帧生成，用质感还原补回清晰度。',
     nativeRoutePreference: ['optiscaler', 'native-hook'],
     plugins: ['nr-optiscaler', 'framegen', 'prism-capture', 'prism-guard', 'prism-stabilize', 'prism-texture', 'prism-tone'],
-    values: { 'nr-optiscaler.modelResolution': 50, 'framegen.mode': '3x', 'prism-guard.GuardStrength': 0.65, 'prism-stabilize.StabilizeAmount': 0.6, 'prism-texture.DetailAmount': 0.4, 'prism-texture.GrainAmount': 0.1, 'feeder.work_resolution': 67 },
+    values: { 'nr-optiscaler.modelResolution': 50, 'nr-renodx.intensity': 60, 'framegen.mode': '3x', 'prism-guard.GuardStrength': 0.65, 'prism-stabilize.StabilizeAmount': 0.6, 'prism-texture.DetailAmount': 0.4, 'prism-texture.GrainAmount': 0.1, 'feeder.work_resolution': 67 },
     expectation: '显示帧率通常能高于不开神经渲染时（靠多帧生成），基础帧率和延迟仍有代价，不是零损失。',
   },
   {
@@ -292,7 +293,7 @@ export const PRESETS: PresetDef[] = [
     summary: '低强度神经渲染加严格守护，给风格化、手绘感强的游戏用。',
     nativeRoutePreference: ['native-hook', 'optiscaler'],
     plugins: ['nr-renodx', 'prism-capture', 'prism-guard', 'prism-stabilize', 'prism-tone'],
-    values: { 'nr-renodx.intensity': 18, 'nr-renodx.color': 5, 'prism-guard.GuardStrength': 0.85, 'prism-guard.MaxLumaShift': 0.08, 'prism-guard.MaxChromaShift': 0.03, 'prism-guard.ShadowProtect': 0.8, 'prism-tone.BlackAnchor': 0.7 },
+    values: { 'nr-renodx.intensity': 18, 'nr-renodx.color': 30, 'prism-guard.GuardStrength': 0.85, 'prism-guard.MaxLumaShift': 0.08, 'prism-guard.MaxChromaShift': 0.03, 'prism-guard.ShadowProtect': 0.8, 'prism-tone.BlackAnchor': 0.7 },
     expectation: '改动最小，主要提升光照质感，人脸和美术风格基本不变。',
   },
 ];

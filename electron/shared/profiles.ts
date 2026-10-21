@@ -21,13 +21,13 @@ export const STYLES: StyleDef[] = [
     id: 'stylized',
     name: '风格化',
     summary: '手绘、油画、低多边形一类美术，守住原作的笔触和配色。',
-    values: { 'nr-renodx.intensity': 18, 'nr-renodx.color': 4, 'prism-guard.GuardStrength': 0.85, 'prism-guard.MaxChromaShift': 0.03, 'prism-guard.DetailTransfer': 0.55, 'prism-texture.GrainAmount': 0 },
+    values: { 'nr-renodx.intensity': 18, 'nr-renodx.color': 30, 'prism-guard.GuardStrength': 0.85, 'prism-guard.MaxChromaShift': 0.03, 'prism-guard.DetailTransfer': 0.55, 'prism-texture.GrainAmount': 0 },
   },
   {
     id: 'anime',
     name: '动漫',
     summary: '赛璐璐和描边画面。神经渲染容易给角色加上写实光影，强度压到最低，颗粒关闭。',
-    values: { 'nr-renodx.intensity': 12, 'nr-renodx.structure': 8, 'nr-renodx.color': 2, 'prism-guard.GuardStrength': 0.9, 'prism-guard.MaxLumaShift': 0.06, 'prism-guard.MaxChromaShift': 0.02, 'prism-texture.DetailAmount': 0.1, 'prism-texture.GrainAmount': 0, 'prism-tone.SaturationGuard': 0.1 },
+    values: { 'nr-renodx.intensity': 12, 'nr-renodx.structure': 40, 'nr-renodx.color': 20, 'prism-guard.GuardStrength': 0.9, 'prism-guard.MaxLumaShift': 0.06, 'prism-guard.MaxChromaShift': 0.02, 'prism-texture.DetailAmount': 0.1, 'prism-texture.GrainAmount': 0, 'prism-tone.SaturationGuard': 0.1 },
   },
   {
     id: 'dark',
