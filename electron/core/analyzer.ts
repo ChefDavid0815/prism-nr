@@ -4,6 +4,9 @@ import type { AntiCheatHit, GameAnalysis, GameEntry, GraphicsApi, Route } from '
 import { readPe } from './pe';
 import { exists, log, psJson, psQuote, walk } from './util';
 
+/** Bumped when the analysis gains a field or a route, so cached analyses are redone. */
+export const ANALYSIS_SCHEMA = 2;
+
 // Executables that are never the game itself.
 const NOT_GAME_EXE =
   /(unins\d*|setup|install|redist|vc_?redist|dxsetup|crash|report|launcher|uplay|easyanticheat|battleye|be(service|launcher)|start_protected_game|cefprocess|ue4prereq|helper|update|patch|config|settings|benchmark|dotnet|7z|python|node|ffmpeg|unitycrashhandler|steamerrorreporter|eac|server|editor|tool)/i;
@@ -146,11 +149,16 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
     routeReason = '没有找到游戏主程序。可以在详情里手动指定。';
   } else {
     const modern = apis.includes('dx12') || apis.includes('dx11');
+    // Prism Core drives the network through its own D3D12 pipeline: DX12, 64-bit, the game's own DLSS.
+    const core = nativeDlss.present && apis.includes('dx12') && pe?.bitness === 'x64';
     if (nativeDlss.present && modern) {
+      if (core) routes.push('prism-core');
       routes.push('native-hook');
       routes.push('optiscaler');
-      recommendedRoute = 'native-hook';
-      routeReason = '游戏自带 DLSS，可以直接挂钩它的 DLSS 调用。性能优先的方案会改用 OptiScaler，在超分之前执行神经渲染。';
+      recommendedRoute = core ? 'prism-core' : 'native-hook';
+      routeReason = core
+        ? '游戏是 DX12 并自带 DLSS，可以用 Prism Core：拦截游戏的 DLSS 调用，网络隔几帧跑一次全分辨率，不需要 ReShade。'
+        : '游戏自带 DLSS，可以直接挂钩它的 DLSS 调用。性能优先的方案会改用 OptiScaler，在超分之前执行神经渲染。';
     } else if (apis.length) {
       routes.push('feeder');
       // OptiScaler needs an upscaler call to replace; FSR 2/3 or XeSS works too.
@@ -169,6 +177,7 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
 
   log(`analyze ${entry.name}: exe=${exe ? path.basename(exe) : '-'} apis=${apis.join('/')} dlss=${nativeDlss.present} ac=${antiCheat.length} route=${recommendedRoute}`);
   return {
+    schema: ANALYSIS_SCHEMA,
     gameId: entry.id,
     exe,
     exeCandidates: candidates.slice(0, 8),
@@ -177,6 +186,7 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
     nativeDlss,
     streamline,
     dlssFrameGen,
+    importsVersionDll: pe ? pe.imports.includes('version.dll') : undefined,
     antiCheat,
     existing,
     routes,

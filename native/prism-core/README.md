@@ -38,7 +38,10 @@ Quality of the default, measured offline against the network's own full-resoluti
 every frame: 0.06–0.09 stop mean error, against 0.16 for running the network at half resolution.
 Fast-moving faces lose the most detail; motion-adaptive cadence is next.
 
-## Install (manual, for now)
+## Install
+
+Prism NR 1.1.1 and later install Core in one click: pick a DX12 game with its own DLSS, keep the
+Prism Core preset, apply. Rolling back in the app removes everything. By hand:
 
 1. Close the game. Copy `version.dll` and `prism_nvngx.dll` next to the game's executable.
 2. Make sure a signed `nvngx_dlssnr.dll` is in the same folder (Prism NR's app finds the one on
@@ -47,7 +50,28 @@ Fast-moving faces lose the most detail; motion-adaptive cadence is next.
 4. Start the game with DLSS (super resolution or ray reconstruction) on. `prism-core.log` beside
    the game says what Core found.
 
-To remove it, delete the two DLLs.
+To remove it, delete the two DLLs (and `prism-core.ini` if you made one).
+
+## Settings: prism-core.ini
+
+Core reads `prism-core.ini` beside the game at start and again whenever the file changes (it checks
+about once a second), so it can be tuned while the game runs. The app writes it; by hand:
+
+```ini
+[Prism Core]
+Enabled=1        ; 0 starts with Core off (the toggle key still works)
+Cadence=4        ; the network every 1-4 frames
+Async=1          ; the network on its own compute queue (cadence 2 and up)
+Intensity=1.00   ; how much of the network's edit is kept, 0-1
+Guard=1.00       ; character guard strength on skin and strong colour, 0-1
+KeyToggle=F8     ; F1-F24, a virtual-key number, or none
+KeyCadence=F2
+KeyAsync=F3
+KeySplit=F4
+KeyCapture=F11
+```
+
+Missing keys keep their defaults. Intensity and guard apply from the next network frame.
 
 | Key | Action |
 |---|---|

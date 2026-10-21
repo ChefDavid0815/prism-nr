@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { pluginById, PRESETS } from '../../electron/shared/catalog';
+import { pluginById, PRESETS, resolveValues } from '../../electron/shared/catalog';
 import { STYLES } from '../../electron/shared/profiles';
 import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PresetId, Route, SystemInfo } from '../../electron/shared/types';
 import { api } from '../api';
 import { Barcode } from '../components/Barcode';
 import { DataField } from '../components/DataField';
 import { RollingNumber } from '../components/RollingNumber';
+import { TickRange } from '../components/TickRange';
 import { fingerprint, routeTone, TONE_COLOR } from '../lib/fingerprint';
 
 export const ROUTE_LABEL: Record<Route, string> = {
+  'prism-core': 'Prism Core',
   'native-hook': '原生挂钩',
   optiscaler: '前置 OptiScaler',
   feeder: '输入补全',
@@ -26,6 +28,7 @@ interface Props {
   installs: InstallRecord[];
   onApplied: () => void;
   onRolledBack: () => void;
+  onTuned: () => void;
   onAddManual: () => void;
 }
 
@@ -38,7 +41,7 @@ function groupOf(a: GameAnalysis | undefined): 0 | 1 | 2 | 3 {
 
 const GROUPS = ['可以直接启用', '需要补全输入', '已阻止', '分析中或未识别'];
 
-export function LibraryView({ games, analyses, scanning, system, installs, onApplied, onRolledBack, onAddManual }: Props) {
+export function LibraryView({ games, analyses, scanning, system, installs, onApplied, onRolledBack, onTuned, onAddManual }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [progress, setProgress] = useState<InstallProgress | null>(null);
@@ -60,7 +63,8 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
   const game = games.find((g) => g.id === selected) ?? null;
   const analysis = selected ? analyses[selected] : undefined;
   const bars = useMemo(() => (game ? fingerprint(game, analysis) : []), [game, analysis]);
-  const intensity = plan ? Number(plan.values['nr-renodx.intensity'] ?? 30) / 100 : 0.3;
+  const isCore = plan?.route === 'prism-core';
+  const intensity = plan ? Number(plan.values[isCore ? 'prism-core.intensity' : 'nr-renodx.intensity'] ?? 30) / 100 : 0.3;
   const modelRes = plan ? Number(plan.values['nr-optiscaler.modelResolution'] ?? 100) : 100;
 
   const fieldLabels = {
@@ -72,7 +76,7 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
     ],
     right: [
       `NR    ${Math.round(intensity * 100)}%`,
-      `MODEL ${plan?.route === 'optiscaler' ? modelRes + '%' : '100%'}`,
+      isCore ? `NET   1/${plan?.values['prism-core.cadence'] ?? 4}` : `MODEL ${plan?.route === 'optiscaler' ? modelRes + '%' : '100%'}`,
       `PLUG  ${plan?.plugins.length ?? 0}`,
       `SEED  ${game ? game.id.slice(0, 6).toUpperCase() : '—'}`,
     ],
@@ -165,6 +169,7 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
           onPlan={setPlan}
           onApplied={onApplied}
           onRolledBack={onRolledBack}
+          onTuned={onTuned}
         />
       )}
     </div>
@@ -196,6 +201,18 @@ function pipeline(plan: InstallPlan): Stage[] {
     .map((id) => ({ label: pluginById(id)!.name.replace('Prism ', ''), weight: costOf(id), prism: true }));
   const nrWeight = plan.route === 'optiscaler' ? Math.max(3, Math.round(14 * (Number(plan.values['nr-optiscaler.modelResolution'] ?? 67) / 100) ** 2)) : 14;
   const stages: Stage[] = [{ label: '游戏渲染', weight: 0 }];
+  if (plan.route === 'prism-core') {
+    const cadence = Number(plan.values['prism-core.cadence'] ?? 4);
+    const async = plan.values['prism-core.async'] !== false && cadence >= 2;
+    // From the CONTROL measurements: every frame 13.4 ms, every 2nd 61% of that, every 4th async 37%.
+    const weight = ({ 1: 14, 2: 9, 3: 7, 4: 5 } as Record<number, number>)[cadence] + (async || cadence === 1 ? 0 : 1);
+    stages.push({ label: 'DLSS', weight: 2 }, { label: cadence === 1 ? '神经渲染 每帧' : `神经渲染 每 ${cadence} 帧`, weight });
+    if (cadence > 1) stages.push({ label: '携带改动', weight: 1, prism: true });
+    if (Number(plan.values['prism-core.guard'] ?? 100) > 0) stages.push({ label: '角色守护', weight: 1, prism: true });
+    if (has('framegen') && plan.values['framegen.mode'] !== 'off') stages.push({ label: `帧生成 ${plan.values['framegen.mode']}`, weight: 0 });
+    stages.push({ label: '输出', weight: 0 });
+    return stages;
+  }
   if (plan.route === 'optiscaler') stages.push({ label: `神经渲染 ${plan.values['nr-optiscaler.modelResolution']}%`, weight: nrWeight }, { label: 'DLSS 超分', weight: 2 });
   else if (plan.route === 'feeder') stages.push({ label: '参考帧', weight: 1, prism: true }, { label: '运动矢量', weight: 3 }, { label: '神经渲染', weight: nrWeight });
   else stages.push({ label: 'DLSS 超分', weight: 2 }, { label: '神经渲染', weight: nrWeight });
@@ -215,9 +232,12 @@ interface DetailProps {
   onPlan: (p: InstallPlan | null) => void;
   onApplied: () => void;
   onRolledBack: () => void;
+  onTuned: () => void;
 }
 
-function Detail({ game, analysis, system, record, progress, onProgress, onPlan, onApplied, onRolledBack }: DetailProps) {
+type CoreValues = Record<string, number | boolean | string>;
+
+function Detail({ game, analysis, system, record, progress, onProgress, onPlan, onApplied, onRolledBack, onTuned }: DetailProps) {
   const [preset, setPreset] = useState<PresetId | undefined>(undefined);
   const [style, setStyle] = useState<string | undefined>(undefined);
   const [disabled, setDisabled] = useState<Set<string>>(new Set());
@@ -227,13 +247,15 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
   const [justDone, setJustDone] = useState(false);
   const [nonce, setNonce] = useState(0);
   const basePlugins = useRef<string[] | null>(null);
+  // Prism Core settings: start from what is installed, so the panel shows the game's live values.
+  const [coreValues, setCoreValues] = useState<CoreValues>(() => (record?.route === 'prism-core' ? pickCore(record.values ?? {}) : {}));
 
   useEffect(() => {
     if (!analysis) return;
     let alive = true;
     const plugins = basePlugins.current ? basePlugins.current.filter((p) => !disabled.has(p)) : undefined;
     api
-      .planInstall({ gameId: game.id, preset, style, plugins })
+      .planInstall({ gameId: game.id, preset, style, plugins, overrides: coreValues })
       .then((p) => {
         if (!alive) return;
         setPlan(p);
@@ -245,7 +267,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
     return () => {
       alive = false;
     };
-  }, [game.id, analysis, preset, style, disabled, onPlan, nonce]);
+  }, [game.id, analysis, preset, style, disabled, onPlan, nonce, coreValues]);
 
   // The preset defines the plugin baseline; toggles subtract from it.
   useEffect(() => {
@@ -295,6 +317,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
     if (c) setNonce((n) => n + 1);
   };
 
+  const coreAvailable = analysis?.routes.includes('prism-core') ?? false;
   const tier = system?.primary?.tier;
   const blocked = Boolean(plan?.blockers.length);
   const tone = routeTone(plan?.route ?? analysis?.recommendedRoute);
@@ -347,8 +370,13 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
           </section>
         )}
 
+        {plan && !blocked && plan.route === 'prism-core' && (
+          <CoreSettings values={{ ...resolveValues('core'), ...coreValues }} live={record?.route === 'prism-core' ? record : null} onChange={setCoreValues} onTuned={onTuned} />
+        )}
+
         {plan && !blocked && (
           <>
+            {plan.route !== 'prism-core' && (
             <section className="block">
               <h2 className="block-title">画风</h2>
               <div className="segmented" role="radiogroup" aria-label="画风">
@@ -360,20 +388,22 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
               </div>
               <p className="block-text">{STYLES.find((s) => s.id === style)?.summary}</p>
             </section>
+            )}
 
             <section className="block">
               <h2 className="block-title">方案</h2>
               <div className="presets" role="radiogroup" aria-label="方案">
                 {PRESETS.map((p) => {
-                  const fits = tier ? p.forTiers.includes(tier) : false;
+                  const unavailable = p.id === 'core' && !coreAvailable;
+                  const fits = !unavailable && tier ? p.forTiers.includes(tier) : false;
                   return (
-                    <button key={p.id} role="radio" aria-checked={preset === p.id} className={`preset ${preset === p.id ? 'is-on' : ''}`} onClick={() => setPreset(p.id)}>
+                    <button key={p.id} role="radio" aria-checked={preset === p.id} disabled={unavailable} className={`preset ${preset === p.id ? 'is-on' : ''}`} onClick={() => setPreset(p.id)}>
                       <span className="preset-name">
                         {p.name}
                         {fits && <span className="preset-fit">适合你的显卡</span>}
                       </span>
                       <span className="preset-gpu mono">{p.gpuLabel}</span>
-                      <span className="preset-sum">{p.summary}</span>
+                      <span className="preset-sum">{unavailable ? '这个游戏用不了：Prism Core 需要 DX12、64 位并且自带 DLSS。' : p.summary}</span>
                     </button>
                   );
                 })}
@@ -494,5 +524,113 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
         </div>
       </footer>
     </aside>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+const CORE_KEYS = ['prism-core.cadence', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard'];
+
+function pickCore(values: CoreValues): CoreValues {
+  return Object.fromEntries(Object.entries(values).filter(([k]) => CORE_KEYS.includes(k)));
+}
+
+/** What each cadence costs and keeps, from the CONTROL measurements and the offline comparison. */
+const CADENCE_NOTE: Record<number, string> = {
+  1: '网络每帧跑一次，就是网络的完整答案，成本最高：CONTROL 实测每帧 +13.4 ms。',
+  2: '和每帧的答案相比误差约 0.03 档，成本约为每帧的六成：CONTROL 实测 +7.4 ms。',
+  3: '介于每 2 帧和每 4 帧之间，还没有单独实测。',
+  4: '成本最低：CONTROL 实测每帧 +5.0 ms，误差 0.06–0.09 档。快速运动的人脸细节损失最大。',
+};
+
+interface CoreSettingsProps {
+  values: CoreValues;
+  /** The active Core install, when there is one: changes are written to it right away. */
+  live: InstallRecord | null;
+  onChange: (v: CoreValues) => void;
+  onTuned: () => void;
+}
+
+function CoreSettings({ values, live, onChange, onTuned }: CoreSettingsProps) {
+  const [status, setStatus] = useState<'idle' | 'writing' | 'written' | 'error'>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cadence = Number(values['prism-core.cadence'] ?? 4);
+  const async = values['prism-core.async'] !== false;
+  const defaults = resolveValues('core');
+  const changed = CORE_KEYS.some((k) => String(values[k]) !== String(defaults[k]));
+
+  useEffect(() => () => {
+    if (pending.current) clearTimeout(pending.current);
+  }, []);
+
+  const set = (patch: CoreValues) => {
+    const next = pickCore({ ...values, ...patch });
+    onChange(next);
+    if (!live) return;
+    // Sliders fire on every step: write once the hand stops.
+    if (pending.current) clearTimeout(pending.current);
+    setStatus('writing');
+    pending.current = setTimeout(() => {
+      api
+        .updateCoreConfig(live.id, next)
+        .then(() => {
+          setStatus('written');
+          setError(null);
+          onTuned();
+        })
+        .catch((e) => {
+          setStatus('error');
+          setError((e as Error).message);
+        });
+    }, 350);
+  };
+
+  return (
+    <section className="block">
+      <h2 className="block-title">Prism Core 设置</h2>
+
+      <div className="core-field">
+        <span className="core-field-label" id="core-cadence-label">网络节奏</span>
+        <div className="segmented segmented-4" role="radiogroup" aria-labelledby="core-cadence-label">
+          {[1, 2, 3, 4].map((n) => (
+            <button key={n} role="radio" aria-checked={cadence === n} className={cadence === n ? 'is-on' : ''} onClick={() => set({ 'prism-core.cadence': String(n) })}>
+              {n === 1 ? '每帧' : `每 ${n} 帧`}
+            </button>
+          ))}
+        </div>
+        <p className="block-note">{CADENCE_NOTE[cadence]}</p>
+      </div>
+
+      <label className={`core-toggle ${cadence === 1 ? 'is-disabled' : ''}`}>
+        <input type="checkbox" checked={async && cadence > 1} disabled={cadence === 1} onChange={() => set({ 'prism-core.async': !async })} />
+        <span>异步计算队列</span>
+        <span className="dim">{cadence === 1 ? '每帧模式下不生效' : '网络和下一帧并行跑'}</span>
+      </label>
+
+      <div className="core-field">
+        <TickRange label="改动强度" value={Number(values['prism-core.intensity'] ?? 100)} min={0} max={100} step={5} unit="%" help="保留网络改动的多少。100% 是网络的完整答案，调低画面更接近原画。" onChange={(v) => set({ 'prism-core.intensity': v })} />
+        <TickRange label="角色守护" value={Number(values['prism-core.guard'] ?? 100)} min={0} max={100} step={5} unit="%" help="压住肤色和高饱和颜色上的色度改动。0% 等于不干预。" onChange={(v) => set({ 'prism-core.guard': v })} />
+      </div>
+
+      <div className="core-foot">
+        <p className={`block-note ${status === 'error' ? 'tone-blocked' : ''}`} role="status" aria-live="polite">
+          {!live
+            ? '启用时写入游戏目录的 prism-core.ini。启用以后再调，游戏运行中约 1 秒内生效。'
+            : status === 'writing'
+              ? '正在写入 prism-core.ini'
+              : status === 'written'
+                ? '已写入 prism-core.ini，游戏运行中约 1 秒内生效。'
+                : status === 'error'
+                  ? `写入失败：${error}`
+                  : '这些设置已经写在游戏目录里。改动会直接写入，游戏运行中约 1 秒内生效。'}
+        </p>
+        {changed && (
+          <button className="btn btn-line btn-small" onClick={() => set({ ...pickCore(defaults) })}>
+            恢复默认
+          </button>
+        )}
+      </div>
+    </section>
   );
 }

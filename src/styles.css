@@ -760,6 +760,141 @@ html.negative {
   font-size: 12px;
   color: var(--grey);
 }
+.preset:disabled {
+  cursor: not-allowed;
+}
+.preset:disabled .preset-name {
+  color: var(--grey);
+}
+.preset:disabled:hover::after {
+  content: none;
+}
+
+/* ------------------------------------------------------------------ Prism Core settings */
+.segmented-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+.core-field + .core-field,
+.core-toggle + .core-field {
+  margin-top: 18px;
+}
+.core-field-label {
+  display: block;
+  font-size: 13px;
+  color: #d0d0d0;
+  margin-bottom: 6px;
+}
+.core-toggle {
+  display: grid;
+  grid-template-columns: 14px auto 1fr;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+  padding: 9px 0;
+  border-top: 1px solid var(--rule-2);
+  border-bottom: 1px solid var(--rule-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.core-toggle .dim {
+  font-size: 12px;
+  text-align: right;
+}
+.core-toggle.is-disabled {
+  cursor: not-allowed;
+  color: var(--grey);
+}
+.core-toggle input:disabled {
+  border-color: var(--grey-2);
+  cursor: not-allowed;
+}
+.core-foot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+}
+.core-foot .block-note {
+  margin-top: 0;
+}
+.core-foot .btn {
+  flex: none;
+}
+
+/* A range drawn as hairline ticks: one per step, white up to the value; the thumb is a taller
+   white bar knocked out of the ticks around it. */
+.tick-range + .tick-range {
+  margin-top: 14px;
+}
+.tick-range-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+}
+.tick-range-head label {
+  color: #d0d0d0;
+}
+.tick-range-head .mono {
+  font-size: 13px;
+}
+.tick-range-track {
+  position: relative;
+  height: 24px;
+  margin-top: 4px;
+}
+.tick-range-ticks {
+  position: absolute;
+  inset: 0 1px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+}
+.tick-range-ticks i {
+  width: 1px;
+  height: 10px;
+  background: var(--grey-2);
+  transition: background 160ms var(--ease);
+}
+.tick-range-ticks i:nth-child(5n + 1) {
+  height: 16px;
+}
+.tick-range-ticks i.is-on {
+  background: var(--white);
+}
+.tick-range input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.tick-range input::-webkit-slider-runnable-track {
+  height: 24px;
+  background: transparent;
+}
+.tick-range input::-webkit-slider-thumb {
+  appearance: none;
+  width: 3px;
+  height: 24px;
+  background: var(--white);
+  box-shadow: 0 0 0 2px var(--black);
+}
+.tick-range input:focus-visible {
+  outline: 1px solid var(--white);
+  outline-offset: 4px;
+}
+.tick-range.is-disabled {
+  opacity: 0.4;
+}
+.tick-range.is-disabled input {
+  cursor: not-allowed;
+}
 
 .plugin-list {
   list-style: none;

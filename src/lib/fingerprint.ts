@@ -19,6 +19,7 @@ export const TONE_COLOR: Record<Tone, string> = {
 
 export function routeTone(route: Route | undefined): Tone {
   switch (route) {
+    case 'prism-core':
     case 'native-hook':
     case 'optiscaler':
       return 'ready';
@@ -63,7 +64,7 @@ export function fingerprint(game: GameEntry, a: GameAnalysis | undefined): Bar[]
   bars.push({ w: 2, on: false });
   const route = a?.recommendedRoute;
   const tone = routeTone(route);
-  const routeCode = { 'native-hook': 0b101, optiscaler: 0b110, feeder: 0b011, blocked: 0b111, unknown: 0b001 }[route ?? 'unknown'];
+  const routeCode = { 'prism-core': 0b100, 'native-hook': 0b101, optiscaler: 0b110, feeder: 0b011, blocked: 0b111, unknown: 0b001 }[route ?? 'unknown'];
   push(bitsOf(routeCode, 3), tone);
   push([Boolean(a?.antiCheat.length)], a?.antiCheat.length ? 'blocked' : undefined);
   bars.push({ w: 2, on: false });

@@ -7,7 +7,7 @@
 **Light in, spectrum out.**
 A DLSS 5 neural rendering manager. One click, guarded, reversible.
 
-![Version](https://img.shields.io/badge/version-1.1.0-000000)
+![Version](https://img.shields.io/badge/version-1.1.1-000000)
 ![Platform](https://img.shields.io/badge/platform-Windows%2011-000000)
 ![GPU](https://img.shields.io/badge/GPU-RTX%2050-000000)
 ![License](https://img.shields.io/badge/license-MIT-000000)
@@ -52,8 +52,9 @@ move the network onto **its own compute queue** so it runs beside the game's nex
 network's own every-frame answer (running the network at half resolution: 0.16). A character
 guard keeps the network from recolouring skin and hair (skin colour shift −82%).
 
-Prism Core is an experimental preview, installed by hand and tested on one game so far:
-[native/prism-core](native/prism-core/README.md). How it was found, including the ideas the
+Prism Core is an experimental preview, tested on one game so far. Since 1.1.1 the app installs it
+in one click for DX12 games with their own DLSS, and its cadence, intensity and character guard
+can be tuned while the game runs: [native/prism-core](native/prism-core/README.md). How it was found, including the ideas the
 real network disproved: [research](docs/research/dlss5-neural-rendering.md) ·
 [architecture](docs/architecture/prism-1.1.md).
 
@@ -111,9 +112,9 @@ Bridge.
 
 ## Download
 
-[**PrismNR-1.1.0-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · per-user install, no admin rights needed.
+[**PrismNR-1.1.1-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · per-user install, no admin rights needed.
 
-[**PrismCore-1.1.0-win64.zip**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · the Prism Core runtime (experimental): `version.dll` and `prism_nvngx.dll`, installed by hand as described in [native/prism-core](native/prism-core/README.md).
+[**PrismCore-1.1.1-win64.zip**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · the Prism Core runtime (experimental): `version.dll` and `prism_nvngx.dll`, for installing by hand (the app does it for you) as described in [native/prism-core](native/prism-core/README.md).
 
 The installer is not code-signed yet, so Windows SmartScreen may warn on first run: choose *More info → Run anyway*. The SHA-256 of the installer is listed on the release page.
 

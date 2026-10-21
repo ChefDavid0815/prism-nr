@@ -165,11 +165,11 @@ void Compose(uint3 id : SV_DispatchThreadID) {
   const float3 kept = (e - y) * (1.0 - w);
   e = y + kept + (clamp(kept, -0.08, 0.08) - kept) * w;
   NewEdit[id.xy] = float4(e, DepthAt(id.xy));
-  // F9 split view: the original on the left half, a thin line at the split.
+  // Split view (F4): the original on the left half, a thin line at the split.
   if (Split != 0u && id.x < Size.x / 2u) e = 0.0;
   float3 result = o * exp2(e);
   if (Split != 0u && (id.x == Size.x / 2u || id.x + 1u == Size.x / 2u)) result = 2.0;
-  if (Split == 2u) result = float3(4.0, 0.0, 4.0);  // F10 debug paint: proves the writes reach the screen
+  if (Split == 2u) result = float3(4.0, 0.0, 4.0);  // debug paint: proves the writes reach the screen
   Out0[id.xy] = float4(result, 1.0);
 }
 
@@ -287,9 +287,9 @@ ID3D12Resource *origCopy = nullptr, *proxy = nullptr, *neural = nullptr, *tiles 
 ID3D12Resource* edits[2] = {};  // ping-pong: last frame's edit and this frame's
 int current = 0;
 bool historyValid = false;
-int cadence = 4;  // the network every N frames (F5 cycles 1-4)
+int cadence = 4;  // the network every N frames (F2 cycles 1-4)
 
-// Asynchronous network (F6): its own compute queue, launched on frame t, landed on frame t+1.
+// Asynchronous network (F3): its own compute queue, launched on frame t, landed on frame t+1.
 bool asyncMode = true;  // measured fastest with cadence 4 (CONTROL, RTX 5090 Laptop)
 ID3D12CommandQueue* computeQueue = nullptr;
 ID3D12CommandAllocator* computeAlloc[2] = {};
@@ -525,12 +525,64 @@ void UavBarrier(ID3D12GraphicsCommandList* l) {
   l->ResourceBarrier(1, &br);
 }
 
+// prism-core.ini beside the game: defaults and hotkeys, written by the Prism NR app. It is
+// re-read whenever it changes, so the app can tune a running game.
+struct Keys { int toggle = VK_F8, cadence = VK_F2, async = VK_F3, split = VK_F4, capture = VK_F11; } keys;
+float intensity = 1.0f, guardStrength = 1.0f;
+FILETIME configTime = {};
+
+// "F1".."F24", a virtual-key number, or "none" to disable the key.
+int ParseKey(const std::wstring& s, int fallback) {
+  if (s.empty()) return fallback;
+  if (!lstrcmpiW(s.c_str(), L"none")) return 0;
+  if ((s[0] == L'F' || s[0] == L'f') && s.size() > 1) {
+    const int n = _wtoi(s.c_str() + 1);
+    return n >= 1 && n <= 24 ? VK_F1 + n - 1 : fallback;
+  }
+  const int n = _wtoi(s.c_str());
+  return n > 0 && n < 256 ? n : fallback;
+}
+
+void LoadConfig() {
+  const std::wstring path = gameDir + L"prism-core.ini";
+  WIN32_FILE_ATTRIBUTE_DATA fa;
+  if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) return;
+  if (CompareFileTime(&fa.ftLastWriteTime, &configTime) == 0) return;
+  configTime = fa.ftLastWriteTime;
+  auto Get = [&](const wchar_t* key) {
+    wchar_t buf[64] = {};
+    GetPrivateProfileStringW(L"Prism Core", key, L"", buf, 64, path.c_str());
+    return std::wstring(buf);
+  };
+  auto Num = [&](const wchar_t* key, double fallback, double lo, double hi) {
+    const std::wstring v = Get(key);
+    const double x = v.empty() ? fallback : _wtof(v.c_str());
+    return x < lo ? lo : x > hi ? hi : x;
+  };
+  const int oldCadence = cadence;
+  const bool oldAsync = asyncMode;
+  enabled = Num(L"Enabled", enabled ? 1 : 0, 0, 1) != 0;
+  cadence = int(Num(L"Cadence", cadence, 1, 4));
+  asyncMode = Num(L"Async", asyncMode ? 1 : 0, 0, 1) != 0;
+  intensity = float(Num(L"Intensity", intensity, 0, 1));
+  guardStrength = float(Num(L"Guard", guardStrength, 0, 1));
+  split = Num(L"Split", split ? 1 : 0, 0, 1) != 0;
+  keys.toggle = ParseKey(Get(L"KeyToggle"), keys.toggle);
+  keys.cadence = ParseKey(Get(L"KeyCadence"), keys.cadence);
+  keys.async = ParseKey(Get(L"KeyAsync"), keys.async);
+  keys.split = ParseKey(Get(L"KeySplit"), keys.split);
+  keys.capture = ParseKey(Get(L"KeyCapture"), keys.capture);
+  if (cadence != oldCadence || asyncMode != oldAsync) historyValid = false;
+  if (Log) Log("prism-core.ini: %s, network every %d frame(s), async %s, intensity %.2f, guard %.2f", enabled ? "on" : "off", cadence, asyncMode ? "on" : "off", intensity, guardStrength);
+}
+
 }  // namespace
 
 void PipelineInit(const std::wstring& dir, int createFlags, LogFn log) {
   gameDir = dir;
   gameCreateFlags = createFlags;
   Log = log;
+  LoadConfig();
 }
 
 // Rendered frame rate, measured between the game's upscale calls (one per rendered frame;
@@ -563,11 +615,13 @@ void MeasureFrameRate(int mode) {
 bool PipelineRecord(const UpscaleCall& c) {
   if (failed || !Log) return false;
   MeasureFrameRate(enabled ? cadence : 0);
-  if (Pressed(VK_F8)) { enabled = !enabled; historyValid = false; Log("Prism NR %s (F8)", enabled ? "on" : "off"); }
-  if (Pressed(VK_F2)) { cadence = cadence % 4 + 1; historyValid = false; Log("network every %d frame(s) (F2)", cadence); }
-  if (Pressed(VK_F3)) { asyncMode = !asyncMode; historyValid = false; Log("asynchronous network %s (F3)", asyncMode ? "on" : "off"); }
-  if (Pressed(VK_F4)) { split = !split; Log("split view %s (F4)", split ? "on" : "off"); }
-  if (Pressed(VK_F11) && !captureAt) { captureAt = frame + 1; Log("capture requested (F11)"); }
+  static uint32_t calls = 0;
+  if (++calls % 60 == 0) LoadConfig();  // about once a second; a stat call when nothing changed
+  if (keys.toggle && Pressed(keys.toggle)) { enabled = !enabled; historyValid = false; Log("Prism NR %s (key)", enabled ? "on" : "off"); }
+  if (keys.cadence && Pressed(keys.cadence)) { cadence = cadence % 4 + 1; historyValid = false; Log("network every %d frame(s) (key)", cadence); }
+  if (keys.async && Pressed(keys.async)) { asyncMode = !asyncMode; historyValid = false; Log("asynchronous network %s (key)", asyncMode ? "on" : "off"); }
+  if (keys.split && Pressed(keys.split)) { split = !split; Log("split view %s (key)", split ? "on" : "off"); }
+  if (keys.capture && Pressed(keys.capture) && !captureAt) { captureAt = frame + 1; Log("capture requested (key)"); }
 
   if (!enabled) return true;
   if (!heap && !Setup(c.list, c.output)) return false;
@@ -604,7 +658,7 @@ bool PipelineRecord(const UpscaleCall& c) {
     device->CreateUnorderedAccessView(c.output, nullptr, nullptr, Cpu(ring + 10));
     device->CreateUnorderedAccessView(next, nullptr, nullptr, Cpu(ring + 13));
   }
-  const Constants k = {w, h, tilesX * tilesY, tilesX, 1.0f, 1.0f, 0.05f, paint ? 2u : (split ? 1u : 0u),
+  const Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, paint ? 2u : (split ? 1u : 0u),
                        c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f, {0, 0, 0}};
 
   const UINT slot = UINT(frame % kRing);

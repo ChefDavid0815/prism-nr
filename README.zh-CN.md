@@ -7,7 +7,7 @@
 **一束光进去，一道光谱出来。**
 DLSS 5 神经渲染管理器。一键安装，有守护，可还原。
 
-![Version](https://img.shields.io/badge/version-1.1.0-000000)
+![Version](https://img.shields.io/badge/version-1.1.1-000000)
 ![Platform](https://img.shields.io/badge/platform-Windows%2011-000000)
 ![GPU](https://img.shields.io/badge/GPU-RTX%2050-000000)
 ![License](https://img.shields.io/badge/license-MIT-000000)
@@ -38,7 +38,7 @@ Prism NR 1.1 带来了 **Prism Core**——我们自己的神经渲染运行时�
 
 **神经渲染成本降低 67%，帧率提升 34%**；与网络每帧全分辨率的答案相比，平均误差 0.06–0.09 档（把网络降到一半分辨率时是 0.16）。角色守护让网络不再改肤色和发色（肤色偏移降低 82%）。
 
-Prism Core 目前是实验性预览版，需要手动安装，暂时只在一个游戏上验证过：[native/prism-core](native/prism-core/README.md)。研究过程，包括被真实网络否定的想法：[研究报告](docs/research/dlss5-neural-rendering.md) · [架构文档](docs/architecture/prism-1.1.md)。
+Prism Core 目前是实验性预览版，暂时只在一个游戏上验证过。从 1.1.1 起，DX12 并自带 DLSS 的游戏可以在应用里一键启用 Core，网络节奏、改动强度和角色守护在游戏运行中也能实时调：[native/prism-core](native/prism-core/README.md)。研究过程，包括被真实网络否定的想法：[研究报告](docs/research/dlss5-neural-rendering.md) · [架构文档](docs/architecture/prism-1.1.md)。
 
 ## 它能做什么
 
@@ -91,9 +91,9 @@ Prism Core 目前是实验性预览版，需要手动安装，暂时只在一个
 
 ## 下载
 
-[**PrismNR-1.1.0-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · 安装到当前用户，不需要管理员权限。
+[**PrismNR-1.1.1-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · 安装到当前用户，不需要管理员权限。
 
-[**PrismCore-1.1.0-win64.zip**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Prism Core 运行时（实验性）：`version.dll` 和 `prism_nvngx.dll`，按 [native/prism-core](native/prism-core/README.md) 的说明手动安装。
+[**PrismCore-1.1.1-win64.zip**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Prism Core 运行时（实验性）：`version.dll` 和 `prism_nvngx.dll`，想手动安装时按 [native/prism-core](native/prism-core/README.md) 的说明操作（应用会自动完成）。
 
 安装包暂未做代码签名，首次运行时 Windows SmartScreen 可能会拦截：点“更多信息 → 仍要运行”。安装包的 SHA-256 写在发布页上。
 

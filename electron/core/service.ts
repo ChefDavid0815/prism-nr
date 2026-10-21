@@ -1,8 +1,8 @@
 import { PLUGINS, PRESETS } from '../shared/catalog';
 import type { DiagnosticsReport, GameAnalysis, GameEntry, InstallPlan, InstallProgress, NvidiaDll, PlanRequest, SystemInfo } from '../shared/types';
-import { analyzeGame } from './analyzer';
+import { ANALYSIS_SCHEMA, analyzeGame } from './analyzer';
 import { importComponent, listComponents } from './components';
-import { buildPlan, learnAddonSettings, rollback, runInstall } from './installer';
+import { buildPlan, learnAddonSettings, rollback, runInstall, updateCoreConfig } from './installer';
 import { locateNvidiaDlls } from './nvidia';
 import { leftoverDirs, manualEntry, scanAllGames } from './scanner';
 import { store } from './store';
@@ -36,7 +36,7 @@ export class PrismService {
 
   async analyzeGame(id: string, force = false): Promise<GameAnalysis> {
     const cached = this.analyses[id];
-    if (cached && !force) return cached;
+    if (cached && cached.schema === ANALYSIS_SCHEMA && !force) return cached;
     const a = await analyzeGame(this.game(id));
     this.analyses[id] = a;
     store.saveAnalysisCache(this.analyses);
@@ -87,6 +87,10 @@ export class PrismService {
 
   rollback(id: string) {
     return rollback(id);
+  }
+
+  updateCoreConfig(id: string, values: Record<string, number | boolean | string>) {
+    return updateCoreConfig(id, values);
   }
 
   getSettings() {

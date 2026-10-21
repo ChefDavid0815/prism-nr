@@ -60,7 +60,7 @@ export interface GameProfile {
  */
 export const PROFILES: GameProfile[] = [
   { key: 'cyberpunk2077', title: '赛博朋克 2077', steamAppIds: ['1091500'], names: /cyberpunk\s*2077|赛博朋克/i, style: 'realistic', preset: 'flagship', values: { 'nr-renodx.intensity': 28 }, notes: ['社区反馈人脸、材质和光影变化明显，强度建议不超过 35%。', '游戏内开启 DLSS 超分或 DLAA，路径追踪和光线重建可以保留。'] },
-  { key: 'control', title: '控制', steamAppIds: ['870780'], names: /^control|控制/i, style: 'realistic', preset: 'flagship', values: {}, notes: ['最早跑通 RenoDX 实现的游戏之一，兼容性好。'] },
+  { key: 'control', title: '控制', steamAppIds: ['870780'], names: /^control|控制/i, style: 'realistic', preset: 'flagship', values: {}, notes: ['最早跑通 RenoDX 实现的游戏之一，兼容性好。', 'Prism Core 在这款游戏上实测：比每帧全分辨率跑网络快 40%。'] },
   { key: 'witcher3', title: '巫师 3：狂猎 次世代版', steamAppIds: ['292030'], names: /witcher\s*3|巫师\s*3/i, style: 'stylized', preset: 'faithful', values: {}, notes: ['原作风格容易被明显改变，默认用原片优先。', 'NPC 脸部可能显得不自然，强度不要高。'] },
   { key: 'gtav-enhanced', title: 'GTA V 增强版', steamAppIds: ['3240220'], names: /grand theft auto v|gta\s*v/i, style: 'realistic', preset: 'balanced', values: {}, notes: ['只在故事模式使用。GTA 在线模式有反作弊，Prism 会阻止。'] },
   { key: 'stalker2', title: 'S.T.A.L.K.E.R. 2', steamAppIds: ['1643320'], names: /stalker\s*2/i, style: 'dark', preset: 'balanced', values: {}, notes: ['本身就很吃配置，建议均衡或流畅优先。'] },

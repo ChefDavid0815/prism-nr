@@ -1,6 +1,6 @@
 import { PLUGINS, PRESETS, resolveValues } from '../electron/shared/catalog';
 import { matchProfile, styleById } from '../electron/shared/profiles';
-import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PrismApi, SystemInfo } from '../electron/shared/types';
+import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PrismApi, Route, SystemInfo } from '../electron/shared/types';
 
 declare global {
   interface Window {
@@ -41,9 +41,9 @@ function createPreviewApi(): PrismApi {
     dlssFrameGen: true,
     antiCheat: [],
     existing: { reshade: false, optiscaler: false, prism: false, proxies: [] },
-    routes: ['native-hook', 'optiscaler'],
-    recommendedRoute: 'native-hook',
-    routeReason: '游戏自带 DLSS，可以直接挂钩它的 DLSS 调用。性能优先的方案会改用 OptiScaler，在超分之前执行神经渲染。',
+    routes: ['prism-core', 'native-hook', 'optiscaler'],
+    recommendedRoute: 'prism-core',
+    routeReason: '游戏是 DX12 并自带 DLSS，可以用 Prism Core：拦截游戏的 DLSS 调用，网络隔几帧跑一次全分辨率，不需要 ReShade。',
     warnings: [],
     analyzedAt: new Date().toISOString(),
     ...partial,
@@ -79,11 +79,18 @@ function createPreviewApi(): PrismApi {
       const g = games.find((x) => x.id === req.gameId)!;
       const an = analyses[req.gameId];
       const profile = matchProfile(g.name, g.steamAppId);
-      const preset = req.preset ?? profile?.preset ?? 'flagship';
+      const preset = req.preset ?? (an.routes.includes('prism-core') ? 'core' : profile?.preset ?? 'flagship');
       const style = styleById(req.style ?? profile?.style ?? 'realistic');
-      const route = an.recommendedRoute === 'blocked' ? 'blocked' : preset === 'balanced' || preset === 'fluid' ? (an.routes.includes('optiscaler') ? 'optiscaler' : an.recommendedRoute) : an.recommendedRoute;
+      const addonRoute: Route = an.recommendedRoute === 'prism-core' ? 'native-hook' : an.recommendedRoute;
+      const route: Route =
+        an.recommendedRoute === 'blocked' ? 'blocked'
+        : preset === 'core' ? (an.routes.includes('prism-core') ? 'prism-core' : an.recommendedRoute)
+        : preset === 'balanced' || preset === 'fluid' ? (an.routes.includes('optiscaler') ? 'optiscaler' : addonRoute)
+        : addonRoute;
       const p = PRESETS.find((x) => x.id === preset)!;
       let plugins = req.plugins ?? p.plugins;
+      const core = route === 'prism-core';
+      if (core) plugins = ['nr-prism-core', ...plugins.filter((x) => x === 'framegen')];
       if (route === 'feeder') plugins = [...new Set([...plugins.filter((x) => x !== 'nr-optiscaler'), 'nr-renodx', 'feeder', 'motion-lumenite', 'prism-capture'])];
       if (route !== 'feeder') plugins = plugins.filter((x) => x !== 'prism-guard');
       const plan: InstallPlan = {
@@ -94,11 +101,15 @@ function createPreviewApi(): PrismApi {
         style: style.id,
         plugins,
         values: { ...resolveValues(preset), ...style.values, ...(profile?.values ?? {}), ...(req.overrides ?? {}) },
-        needs: [{ id: 'reshade', name: 'ReShade（含插件支持）', status: 'auto' }],
-        steps: ['下载并校验 ReShade、RenoDX DLSS 5 插件', '备份游戏目录里会被覆盖的文件', '部署 ReShade 和神经渲染插件', '复制本机的 nvngx_dlssnr.dll', '部署 Prism 原生插件，写好参数和顺序', '写入安装清单，之后可以一键还原'],
-        manualSteps: route === 'feeder' ? [] : ['在游戏设置里开启 DLSS 超分或 DLAA。'],
-        blockers: route === 'blocked' ? [an.routeReason] : [],
-        warnings: an.warnings,
+        needs: core ? [] : [{ id: 'reshade', name: 'ReShade（含插件支持）', status: 'auto' }],
+        steps: core
+          ? ['备份游戏目录里会被覆盖的文件', '部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini', '复制本机的 nvngx_dlssnr.dll', '写入安装清单，之后可以一键还原']
+          : ['下载并校验 ReShade、RenoDX DLSS 5 插件', '备份游戏目录里会被覆盖的文件', '部署 ReShade 和神经渲染插件', '复制本机的 nvngx_dlssnr.dll', '部署 Prism 原生插件，写好参数和顺序', '写入安装清单，之后可以一键还原'],
+        manualSteps: core
+          ? ['在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。', '游戏里按 F8 开关 Prism Core、F4 分屏对比原画。节奏和强度在这里调，游戏运行中约 1 秒内生效。']
+          : route === 'feeder' ? [] : ['在游戏设置里开启 DLSS 超分或 DLAA。'],
+        blockers: route === 'blocked' ? [an.routeReason] : preset === 'core' && !core ? ['这个游戏用不了 Prism Core：它需要 DX12、64 位并且自带 DLSS 的游戏。可以换用其他方案。'] : [],
+        warnings: core ? [...an.warnings, 'Prism Core 是实验性预览，目前只在 CONTROL Resonant 上实测过。'] : an.warnings,
         profileNotes: profile?.notes ?? [],
       };
       return plan;
@@ -117,7 +128,7 @@ function createPreviewApi(): PrismApi {
         await delay(420);
       }
       listeners.forEach((l) => l({ gameId: plan.gameId, stage: 'done', message: '已就绪，可以直接启动游戏', fraction: 1 }));
-      const rec: InstallRecord = { id: String(Date.now()), gameId: plan.gameId, gameName: plan.gameName, installDir: '', route: plan.route, preset: plan.preset, plugins: plan.plugins, files: new Array(17).fill(0).map((_, i) => ({ target: `file${i}`, backup: i < 3 ? 'b' : null, sha256After: '' })), installedAt: new Date().toISOString(), status: 'active' };
+      const rec: InstallRecord = { id: String(Date.now()), gameId: plan.gameId, gameName: plan.gameName, installDir: '', route: plan.route, preset: plan.preset, plugins: plan.plugins, values: plan.values, files: new Array(17).fill(0).map((_, i) => ({ target: `file${i}`, backup: i < 3 ? 'b' : null, sha256After: '' })), installedAt: new Date().toISOString(), status: 'active' };
       installs = [rec, ...installs.map((r) => (r.gameId === plan.gameId && r.status === 'active' ? { ...r, status: 'superseded' as const } : r))];
       return rec;
     },
@@ -128,6 +139,11 @@ function createPreviewApi(): PrismApi {
     listInstalls: async () => installs,
     rollback: async (id) => {
       installs = installs.map((r) => (r.id === id ? { ...r, status: 'rolled-back' as const, rolledBackAt: new Date().toISOString() } : r));
+      return installs.find((r) => r.id === id)!;
+    },
+    updateCoreConfig: async (id, values) => {
+      await delay(120);
+      installs = installs.map((r) => (r.id === id ? { ...r, values: { ...(r.values ?? {}), ...values } } : r));
       return installs.find((r) => r.id === id)!;
     },
     diagnostics: async () => ({ generatedAt: new Date().toISOString(), system, games: games.length, installs, components: [], nvidiaDlls: [], log: ['preview mode'] }),

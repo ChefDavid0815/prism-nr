@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { setShaderDir } from './core/installer';
+import { setCoreDir, setShaderDir } from './core/installer';
 import { PrismService } from './core/service';
 import { initStore } from './core/store';
 import { log } from './core/util';
@@ -56,6 +56,7 @@ app.whenReady().then(() => {
   initStore(app.getPath('userData'));
   const shaders = app.isPackaged ? path.join(process.resourcesPath, 'prism-shaders', 'Shaders') : path.join(__dirname, '..', 'plugins', 'prism-shaders', 'Shaders');
   setShaderDir(shaders);
+  setCoreDir(app.isPackaged ? path.join(process.resourcesPath, 'prism-core') : path.join(__dirname, '..', 'native', 'prism-core', 'build'));
   service = new PrismService();
 
   handle('system', () => service.getSystem());
@@ -80,6 +81,7 @@ app.whenReady().then(() => {
   handle('install', (plan: InstallPlan) => service.install(plan, (p) => win?.webContents.send('progress', p)));
   handle('installs', () => service.listInstalls());
   handle('rollback', (id: string) => service.rollback(id));
+  handle('updateCoreConfig', (id: string, values: Record<string, number | boolean | string>) => service.updateCoreConfig(id, values));
   handle('diagnostics', () => service.diagnostics());
   handle('exportDiagnostics', async () => {
     const r = await dialog.showSaveDialog(win!, { title: '导出诊断报告', defaultPath: `prism-nr-diagnostics-${Date.now()}.json` });

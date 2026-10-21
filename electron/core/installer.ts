@@ -28,11 +28,62 @@ export function setShaderDir(dir: string): void {
   shaderDir = dir;
 }
 
+// Prism Core's two binaries ship with the app (extraResources), built from native/prism-core.
+let coreDir = '';
+export function setCoreDir(dir: string): void {
+  coreDir = dir;
+}
+
 type Values = Record<string, number | boolean | string>;
 
 const MANIFEST = 'prism-nr.manifest.json';
 const PRESET_FILE = 'PrismNR.ini';
 const SHADER_SUBDIR = path.join('reshade-shaders', 'Shaders', 'PrismNR');
+const CORE_INI = 'prism-core.ini';
+const CORE_FILES = ['version.dll', 'prism_nvngx.dll'];
+
+/** A version.dll that loads prism_nvngx.dll is Prism Core's loader; anything else belongs to another mod. */
+function isPrismLoader(file: string): boolean {
+  try {
+    return fs.readFileSync(file).includes(Buffer.from('prism_nvngx.dll', 'utf16le'));
+  } catch {
+    return false;
+  }
+}
+
+/** DLSS 5 add-ons that hook the same NGX calls as Prism Core; two hooks make one of them fail silently. */
+function conflictingAddons(exeDir: string): string[] {
+  try {
+    return fs
+      .readdirSync(exeDir)
+      .filter((f) => /dlss5.*\.addon(64|32)$/i.test(f))
+      .map((f) => path.join(exeDir, f));
+  } catch {
+    return [];
+  }
+}
+
+/** prism-core.ini: Prism Core reads it at start and again whenever it changes. ASCII only. */
+export function coreIni(values: Values): string {
+  const pct = (k: string, d: number) => (Math.max(0, Math.min(100, Number(values[k] ?? d))) / 100).toFixed(2);
+  const cadence = Math.max(1, Math.min(4, Math.round(Number(values['prism-core.cadence'] ?? 4))));
+  const async = values['prism-core.async'] ?? true;
+  return [
+    '; Written by Prism NR. Prism Core re-reads this file while the game runs.',
+    '[Prism Core]',
+    'Enabled=1',
+    `Cadence=${cadence}`,
+    `Async=${async === true || async === '1' || async === 1 ? 1 : 0}`,
+    `Intensity=${pct('prism-core.intensity', 100)}`,
+    `Guard=${pct('prism-core.guard', 100)}`,
+    'KeyToggle=F8',
+    'KeyCadence=F2',
+    'KeyAsync=F3',
+    'KeySplit=F4',
+    'KeyCapture=F11',
+    '',
+  ].join('\r\n');
+}
 
 // ---------------------------------------------------------------------------
 // Planning
@@ -59,6 +110,12 @@ function chooseRoute(analysis: GameAnalysis, preset: PresetId, requested?: Route
 
 /** Swaps plugins that do not fit the chosen route for ones that do. */
 function pluginsForRoute(route: Route, wanted: string[]): string[] {
+  if (route === 'prism-core') {
+    // Core needs no ReShade, so only plugins that work without it stay (frame generation).
+    const keep = new Set(wanted.filter((id) => pluginById(id)?.routes.includes('prism-core')));
+    keep.add('nr-prism-core');
+    return PLUGINS.filter((p) => keep.has(p.id)).map((p) => p.id);
+  }
   const set = new Set(wanted);
   if (route === 'optiscaler') {
     set.delete('nr-renodx');
@@ -89,6 +146,7 @@ function pluginsForRoute(route: Route, wanted: string[]): string[] {
 }
 
 function componentIdsFor(route: Route, plugins: string[]): string[] {
+  if (route === 'prism-core') return [];
   const ids: string[] = [];
   const reshadeNeeded = route !== 'optiscaler' || plugins.some((p) => pluginById(p)?.origin === 'prism');
   if (reshadeNeeded) ids.push('reshade');
@@ -105,7 +163,8 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const profile = matchProfile(game.name, game.steamAppId);
   const savedStyle = store.settings().styles[game.id];
   const style = styleById(req.style ?? savedStyle ?? profile?.style ?? 'realistic');
-  const preset: PresetId = req.preset ?? profile?.preset ?? recommendedPreset(gpu);
+  // Prism Core is the default wherever it can run; profiles were written for the add-on routes.
+  const preset: PresetId = req.preset ?? (analysis.routes.includes('prism-core') ? 'core' : profile?.preset ?? recommendedPreset(gpu));
   const route = chooseRoute(analysis, preset, req.route);
   const presetDef = PRESETS.find((p) => p.id === preset)!;
   const plugins = pluginsForRoute(route, req.plugins ?? presetDef.plugins);
@@ -123,6 +182,21 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   if (route === 'feeder' && analysis.bitness === 'x86') blockers.push('32 位游戏需要辅助进程，暂不支持一键安装。');
   if (analysis.apis.length === 1 && analysis.apis[0] === 'vulkan' && route !== 'optiscaler')
     blockers.push('纯 Vulkan 游戏需要注册 ReShade 的 Vulkan 层，暂不支持一键安装。');
+  if (preset === 'core' && route !== 'prism-core' && route !== 'blocked')
+    blockers.push('这个游戏用不了 Prism Core：它需要 DX12、64 位并且自带 DLSS 的游戏。可以换用其他方案。');
+  if (route === 'prism-core' && analysis.exe) {
+    const exeDir = path.dirname(analysis.exe);
+    const loader = path.join(exeDir, 'version.dll');
+    if (exists(loader) && !isPrismLoader(loader))
+      blockers.push('游戏目录里已有别的 version.dll（可能是其他 Mod）。Prism Core 的加载器也叫这个名字，为避免弄坏那个 Mod，这次不安装。');
+    if (CORE_FILES.some((f) => !exists(path.join(coreDir, f)))) blockers.push('这个 Prism NR 安装包里缺少 Prism Core 文件，请重新安装 Prism NR。');
+    if (analysis.importsVersionDll === false)
+      warnings.push('主程序没有直接导入 version.dll，Prism Core 可能不会被加载。启用后进一次游戏，游戏目录里出现 prism-core.log 就说明加载成功。');
+    const ours = new Set(store.installs().filter((r) => r.gameId === game.id && r.status === 'active').flatMap((r) => r.files.map((x) => x.target.toLowerCase())));
+    const addons = conflictingAddons(exeDir).filter((a) => !ours.has(a.toLowerCase()));
+    if (addons.length) warnings.push(`检测到 ${addons.map((a) => path.basename(a)).join('、')}，它和 Prism Core 挂钩同一个 DLSS 调用。启用时会先移走，还原时放回。`);
+    warnings.push('Prism Core 是实验性预览，目前只在 CONTROL Resonant 上实测过。');
+  }
   if (gpu && gpu.nrSupport === 'none') blockers.push(gpu.expectation);
   if (gpu?.nrSupport === 'experimental') warnings.push(gpu.expectation);
 
@@ -143,19 +217,22 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   if (existsAnyPrevious(game.id)) steps.push('还原这个游戏上一次的 Prism 安装');
   steps.push('备份游戏目录里会被覆盖的文件');
   if (route === 'optiscaler') steps.push('部署 OptiScaler 前置神经渲染，写入 OptiScaler.ini');
-  if (route !== 'optiscaler') steps.push('部署 ReShade 和神经渲染插件');
+  if (route === 'prism-core') steps.push('部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini');
+  else if (route !== 'optiscaler') steps.push('部署 ReShade 和神经渲染插件');
   if (route === 'feeder') steps.push('部署 Feeder 与运动矢量，补全神经渲染输入');
   steps.push(`复制本机的 nvngx_dlssnr.dll${nr?.version ? `（${nr.version}）` : ''}`);
   const prismCount = plugins.filter((p) => pluginById(p)?.origin === 'prism').length;
   if (prismCount) steps.push(`部署 ${prismCount} 个 Prism 原生插件，写好参数和顺序`);
   steps.push('写入安装清单，之后可以一键还原');
 
-  if (route !== 'feeder' && analysis.nativeDlss.present) manualSteps.push('在游戏设置里开启 DLSS 超分或 DLAA。');
+  if (route === 'prism-core') manualSteps.push('在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。');
+  else if (route !== 'feeder' && analysis.nativeDlss.present) manualSteps.push('在游戏设置里开启 DLSS 超分或 DLAA。');
   if (plugins.includes('framegen') && values['framegen.mode'] !== 'off') manualSteps.push(`在游戏设置或 NVIDIA App 里开启 ${values['framegen.mode']} 帧生成。`);
   if (plugins.includes('nr-renodx')) steps.push('写入神经渲染强度、遍数和工作分辨率，进游戏即生效');
   if (route === 'native-hook' && (preset === 'balanced' || preset === 'fluid'))
     manualSteps.push(`在游戏设置里把 DLSS 设为${Number(values['nr-optiscaler.modelResolution']) <= 50 ? '性能' : '质量'}档，神经渲染会跟随渲染分辨率，帧率明显提升。`);
-  if (route !== 'optiscaler') manualSteps.push('游戏里按 F6 开关神经渲染、F7 开关 Prism 插件，可以随时对比。');
+  if (route === 'prism-core') manualSteps.push('游戏里按 F8 开关 Prism Core、F4 分屏对比原画。节奏和强度在这里调，游戏运行中约 1 秒内生效。');
+  else if (route !== 'optiscaler') manualSteps.push('游戏里按 F6 开关神经渲染、F7 开关 Prism 插件，可以随时对比。');
   if (route === 'optiscaler') manualSteps.push('第一次进游戏如果画面没有变化，按 Insert 打开 OptiScaler 菜单确认 Neural Rendering 已开启。');
 
   return {
@@ -337,6 +414,13 @@ function buildOps(plan: InstallPlan, analysis: GameAnalysis, comps: Components, 
   const nr = bestDll(dlls, 'nvngx_dlssnr.dll', true)!;
   ops.push({ kind: 'copy', from: nr.path, to: path.join(exeDir, 'nvngx_dlssnr.dll'), label: 'NVIDIA 神经渲染运行库' });
 
+  if (plan.route === 'prism-core') {
+    for (const f of CORE_FILES) ops.push({ kind: 'copy', from: path.join(coreDir, f), to: path.join(exeDir, f), label: `Prism Core：${f}` });
+    ops.push({ kind: 'write', to: path.join(exeDir, CORE_INI), content: coreIni(plan.values), label: 'Prism Core 设置' });
+    for (const a of conflictingAddons(exeDir)) ops.push({ kind: 'remove', to: a, label: `移走 ${path.basename(a)}` });
+    return { ops, warnings };
+  }
+
   if (plan.route === 'optiscaler') {
     const opti = comps['optiscaler-presr'];
     const main = componentFile(opti, /(^|\\)OptiScaler\.dll$/i);
@@ -441,6 +525,7 @@ function applyOps(recordId: string, gameId: string, ops: FileOp[]): BackupRecord
   const done: BackupRecord[] = [];
   try {
     ops.forEach((op, i) => {
+      if (op.kind === 'remove' && !exists(op.to)) return;
       let backup: string | null = null;
       if (exists(op.to)) {
         backup = path.join(backupDir, `${String(i).padStart(3, '0')}-${path.basename(op.to)}`);
@@ -448,8 +533,10 @@ function applyOps(recordId: string, gameId: string, ops: FileOp[]): BackupRecord
       }
       ensureDir(path.dirname(op.to));
       if (op.kind === 'copy') fs.copyFileSync(op.from, op.to);
-      else fs.writeFileSync(op.to, op.content, 'utf8');
-      done.push({ target: op.to, backup, sha256After: op.kind === 'copy' ? sha256File(op.to) : sha256Text(op.content) });
+      else if (op.kind === 'write') fs.writeFileSync(op.to, op.content, 'utf8');
+      else fs.rmSync(op.to, { force: true });
+      // A removed file records an empty hash: it is meant to be absent until rollback puts it back.
+      done.push({ target: op.to, backup, sha256After: op.kind === 'copy' ? sha256File(op.to) : op.kind === 'write' ? sha256Text(op.content) : '' });
     });
   } catch (e) {
     restore(done);
@@ -462,7 +549,7 @@ function restore(files: BackupRecord[]): string[] {
   const notes: string[] = [];
   for (const f of [...files].reverse()) {
     try {
-      if (exists(f.target) && sha256File(f.target) !== f.sha256After) notes.push(`${path.basename(f.target)} 在安装后被改动过，已按备份还原。`);
+      if (f.sha256After && exists(f.target) && sha256File(f.target) !== f.sha256After) notes.push(`${path.basename(f.target)} 在安装后被改动过，已按备份还原。`);
       if (f.backup && exists(f.backup)) fs.copyFileSync(f.backup, f.target);
       else fs.rmSync(f.target, { force: true });
     } catch (e) {
@@ -483,6 +570,13 @@ function restore(files: BackupRecord[]): string[] {
     }
   }
   return notes;
+}
+
+/** Files Prism Core writes itself while the game runs; captures are the user's and stay. */
+function cleanupCore(r: InstallRecord): void {
+  if (r.route !== 'prism-core') return;
+  const loader = r.files.find((f) => /[\\/]version\.dll$/i.test(f.target));
+  if (loader) fs.rmSync(path.join(path.dirname(loader.target), 'prism-core.log'), { force: true });
 }
 
 export async function runInstall(
@@ -506,6 +600,7 @@ export async function runInstall(
   for (const r of records.filter((x) => x.gameId === game.id && x.status === 'active')) {
     emit('deploy', '还原上一次的安装', 0.7);
     r.rollbackNotes = restore(r.files);
+    cleanupCore(r);
     r.status = 'superseded';
     r.rolledBackAt = new Date().toISOString();
   }
@@ -521,7 +616,12 @@ export async function runInstall(
   const files = applyOps(recordId, game.id, ops);
 
   emit('verify', '校验写入结果', 0.95);
-  for (const f of files) if (!exists(f.target)) throw new Error(`校验失败：${f.target} 不存在`);
+  // A removed file (empty hash) is meant to be absent; anything else must be on disk.
+  const missing = files.find((f) => f.sha256After && !exists(f.target));
+  if (missing) {
+    restore(files);
+    throw new Error(`校验失败：${missing.target} 不存在，已自动撤回这次安装。`);
+  }
 
   const record: InstallRecord = {
     id: recordId,
@@ -531,6 +631,7 @@ export async function runInstall(
     route: plan.route,
     preset: plan.preset,
     plugins: plan.plugins,
+    values: plan.values,
     files,
     installedAt: new Date().toISOString(),
     status: 'active',
@@ -551,10 +652,28 @@ export function rollback(recordId: string): InstallRecord {
   if (!r) throw new Error('找不到这条安装记录。');
   if (r.status !== 'active') throw new Error('这条记录已经还原过了。');
   r.rollbackNotes = restore(r.files);
+  cleanupCore(r);
   r.status = 'rolled-back';
   r.rolledBackAt = new Date().toISOString();
   store.saveInstalls(records);
   log(`rollback ${r.gameName}`);
+  return r;
+}
+
+/** Rewrites prism-core.ini of an active Core install; the running game re-reads it within a second. */
+export function updateCoreConfig(recordId: string, values: Values): InstallRecord {
+  const records = store.installs();
+  const r = records.find((x) => x.id === recordId);
+  if (!r || r.status !== 'active' || r.route !== 'prism-core') throw new Error('这个游戏当前没有启用 Prism Core。');
+  const file = r.files.find((f) => /prism-core\.ini$/i.test(f.target));
+  if (!file) throw new Error('安装记录里没有 prism-core.ini，请重新应用一次。');
+  const merged = { ...resolveValues('core'), ...(r.values ?? {}), ...values };
+  const content = coreIni(merged);
+  fs.writeFileSync(file.target, content, 'utf8');
+  // Keep rollback's change check quiet: this edit is Prism's own.
+  file.sha256After = sha256Text(content);
+  r.values = merged;
+  store.saveInstalls(records);
   return r;
 }
 

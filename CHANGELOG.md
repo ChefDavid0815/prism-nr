@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.1 — 2026-10-21 · One-click Prism Core
+
+- Prism Core is now a route and a preset in the app: DX12, 64-bit games with their own DLSS get it
+  by default. No ReShade and nothing to download; Core ships inside the installer. Install and
+  rollback go through the same transactional installer as every other route.
+- Core settings in the game panel: network cadence (every 1–4 frames), asynchronous queue, edit
+  intensity and character guard. With Core installed, changes are written to `prism-core.ini` at
+  once and a running game picks them up within a second.
+- Prism Core reads `prism-core.ini` beside the game (defaults, intensity, guard, remappable
+  hotkeys) and re-reads it when it changes. Verified in CONTROL Resonant: a rewrite of the file
+  switched the running game from every 2nd to every 4th frame within a second.
+- Safety checks before installing Core: anti-cheat (as before; F1 25's EA Javelin is detected and
+  blocked), another mod's `version.dll` (blocks the install rather than overwrite it), and DLSS 5
+  add-ons that hook the same calls (moved out on install, put back on rollback).
+- Installer: a failed post-install check now rolls the install back instead of leaving files
+  behind without a record. Rollback also removes Core's log.
+- The rail shows the real app version (it said 0.1.0).
+
 ## 1.1.0 — 2026-10-21 · Prism Core
 
 Prism Core, Prism NR's own DLSS 5 neural rendering runtime (experimental preview,

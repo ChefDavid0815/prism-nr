@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { version } from './package.json';
 
 // Strict CSP for the packaged app only; the dev server needs React Refresh's inline preamble.
 const csp: Plugin = {
@@ -14,6 +15,7 @@ const csp: Plugin = {
 
 export default defineConfig({
   plugins: [react(), csp],
+  define: { __APP_VERSION__: JSON.stringify(version) },
   base: './',
   server: { port: 5173, strictPort: true },
   build: { outDir: 'dist', emptyOutDir: true, target: 'chrome128' },

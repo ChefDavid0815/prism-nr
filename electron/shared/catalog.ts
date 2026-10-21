@@ -7,6 +7,32 @@ import type { PluginDef, PresetDef } from './types';
  */
 export const PLUGINS: PluginDef[] = [
   {
+    code: 'PR-00',
+    id: 'nr-prism-core',
+    name: '神经渲染核心 · Prism Core',
+    category: 'core',
+    origin: 'prism',
+    summary: 'Prism 自己的神经渲染运行时：网络隔几帧跑一次全分辨率，中间的帧沿运动矢量携带它的改动。',
+    does: [
+      '拦截游戏自己的 DX12 DLSS 调用，直接运行本机的签名版神经网络，不需要 ReShade',
+      '网络放在独立计算队列上异步运行，和后面的帧并行',
+      '角色守护：限制改动里的色度，肤色和发色不被改掉',
+      '设置写在游戏目录的 prism-core.ini，游戏运行中改动约 1 秒内生效',
+    ],
+    cost: '中：CONTROL 实测每帧 +5.0 ms，每帧全分辨率是 +13.4 ms（RTX 5090 Laptop，2560×1600）',
+    gpu: 'RTX 50 系，DX12 且自带 DLSS 的游戏',
+    routes: ['prism-core'],
+    conflicts: ['nr-renodx', 'nr-dfc', 'nr-optiscaler'],
+    requires: [],
+    risk: '实验性预览，目前只在 CONTROL Resonant 上实测过。快速运动的人脸在每 4 帧时细节损失最大。',
+    params: [
+      { key: 'prism-core.cadence', label: '网络节奏', help: '网络每几帧跑一次。每 4 帧最快，每 2 帧误差约减半，每帧等于不做时域复用。', type: 'choice', choices: [{ value: '1', label: '每帧' }, { value: '2', label: '每 2 帧' }, { value: '3', label: '每 3 帧' }, { value: '4', label: '每 4 帧' }], default: '4' },
+      { key: 'prism-core.async', label: '异步计算队列', help: '网络在独立队列上和下一帧并行跑。节奏 2 帧以上生效。', type: 'toggle', default: true },
+      { key: 'prism-core.intensity', label: '改动强度', help: '网络改动保留多少。100% 是网络的完整答案。', type: 'range', min: 0, max: 100, step: 5, unit: '%', default: 100 },
+      { key: 'prism-core.guard', label: '角色守护', help: '肤色和高饱和颜色上的色度改动被压住多少。0 等于不干预。', type: 'range', min: 0, max: 100, step: 5, unit: '%', default: 100 },
+    ],
+  },
+  {
     code: 'PR-01',
     id: 'nr-renodx',
     name: '神经渲染核心 · RenoDX',
@@ -111,7 +137,7 @@ export const PLUGINS: PluginDef[] = [
     does: ['RTX 50 支持 2× 到 4× 多帧生成', '在游戏设置或 NVIDIA App 的驱动覆盖里开启', '显示帧率提高，但操作延迟不会降低'],
     cost: '负：提高显示帧率，增加少量延迟',
     gpu: 'RTX 50 系（多帧）、RTX 40（2×）',
-    routes: ['native-hook', 'optiscaler', 'feeder'],
+    routes: ['prism-core', 'native-hook', 'optiscaler', 'feeder'],
     conflicts: [],
     requires: [],
     risk: 'Feeder 路线下 Vulkan 游戏开 Smooth Motion 会有一半的帧没被处理。',
@@ -252,6 +278,17 @@ export const PLUGINS: PluginDef[] = [
 ];
 
 export const PRESETS: PresetDef[] = [
+  {
+    id: 'core',
+    name: 'Prism Core',
+    forTiers: ['flagship', 'high', 'mainstream', 'entry'],
+    gpuLabel: '任意 RTX 50 · DX12 + DLSS 游戏',
+    summary: '我们自己的运行时：网络每 4 帧跑一次全分辨率，其余帧携带改动，异步运行，带角色守护。不需要 ReShade。',
+    nativeRoutePreference: ['prism-core'],
+    plugins: ['nr-prism-core'],
+    values: { 'framegen.mode': 'off' },
+    expectation: 'CONTROL 实测：比每帧全分辨率跑网络快 40%，神经渲染成本降低 63%。实验性预览，目前只在 CONTROL 上验证过。',
+  },
   {
     id: 'flagship',
     name: '旗舰画质',

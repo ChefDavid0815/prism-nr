@@ -25,6 +25,7 @@ const api: PrismApi = {
   },
   listInstalls: () => call('installs'),
   rollback: (id) => call('rollback', id),
+  updateCoreConfig: (id, values) => call('updateCoreConfig', id, values),
   diagnostics: () => call('diagnostics'),
   exportDiagnostics: () => call('exportDiagnostics'),
   getSettings: () => call('settings'),

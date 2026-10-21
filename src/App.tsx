@@ -130,7 +130,7 @@ export function App() {
           ))}
           <div className="rail-foot">
             {isPreview && <p className="rail-note">预览模式：数据为示例</p>}
-            <p>v0.1.0</p>
+            <p>v{__APP_VERSION__}</p>
           </div>
         </nav>
 
@@ -140,7 +140,7 @@ export function App() {
               {error}
             </div>
           )}
-          {view === 'library' && <LibraryView games={games} analyses={analyses} scanning={scanning} system={system} installs={installs} onApplied={onApplied} onRolledBack={refreshInstalls} onAddManual={async () => { const g = await api.addManualGame(); if (g) await scan(); }} />}
+          {view === 'library' && <LibraryView games={games} analyses={analyses} scanning={scanning} system={system} installs={installs} onApplied={onApplied} onRolledBack={refreshInstalls} onTuned={refreshInstalls} onAddManual={async () => { const g = await api.addManualGame(); if (g) await scan(); }} />}
           {view === 'plugins' && <PluginsView />}
           {view === 'history' && <HistoryView installs={installs} onChange={refreshInstalls} />}
           {view === 'diagnostics' && <DiagnosticsView />}

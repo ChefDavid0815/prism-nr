@@ -46,12 +46,14 @@ export type Bitness = 'x64' | 'x86' | 'unknown';
 
 /**
  * How neural rendering gets into a game.
+ * - prism-core: Prism's own runtime (version.dll loader) hooks the game's DX12 DLSS calls and runs the
+ *   network itself, on one frame in N, carrying its edit in between. No ReShade.
  * - native-hook: the game already calls DLSS; a ReShade add-on hooks those calls (post-upscale, best quality).
  * - optiscaler: OptiScaler replaces the upscaler and can run neural rendering before upscaling (cheapest).
  * - feeder: the game has no DLSS; DLSS5-Feeder builds the inputs from ReShade depth and estimated motion.
  * - blocked: anti-cheat or an online-only game; Prism refuses to install.
  */
-export type Route = 'native-hook' | 'optiscaler' | 'feeder' | 'blocked' | 'unknown';
+export type Route = 'prism-core' | 'native-hook' | 'optiscaler' | 'feeder' | 'blocked' | 'unknown';
 
 export interface AntiCheatHit {
   name: string;
@@ -67,6 +69,8 @@ export interface ExistingMods {
 }
 
 export interface GameAnalysis {
+  /** Analyzer version; cached analyses from an older one are redone. */
+  schema?: number;
   gameId: string;
   exe: string | null;
   exeCandidates: string[];
@@ -75,6 +79,8 @@ export interface GameAnalysis {
   nativeDlss: { present: boolean; path?: string; version?: string };
   streamline: boolean;
   dlssFrameGen: boolean;
+  /** The executable imports VERSION.dll, so Prism Core's loader is picked up at start-up. */
+  importsVersionDll?: boolean;
   antiCheat: AntiCheatHit[];
   existing: ExistingMods;
   routes: Route[];
@@ -127,7 +133,7 @@ export interface PluginDef {
   params: PluginParam[];
 }
 
-export type PresetId = 'flagship' | 'balanced' | 'fluid' | 'faithful';
+export type PresetId = 'core' | 'flagship' | 'balanced' | 'fluid' | 'faithful';
 
 export interface PresetDef {
   id: PresetId;
@@ -162,7 +168,9 @@ export interface NvidiaDll {
 
 export type FileOp =
   | { kind: 'copy'; from: string; to: string; label: string }
-  | { kind: 'write'; to: string; content: string; label: string };
+  | { kind: 'write'; to: string; content: string; label: string }
+  /** Moves a file out of the game folder (kept in the backup, put back on rollback). */
+  | { kind: 'remove'; to: string; label: string };
 
 export interface PlanNeed {
   id: string;
@@ -214,6 +222,8 @@ export interface InstallRecord {
   route: Route;
   preset: PresetId;
   plugins: string[];
+  /** Values written at install (and later tuning), so the app can show and edit them. */
+  values?: Record<string, number | boolean | string>;
   files: BackupRecord[];
   installedAt: string;
   status: 'active' | 'rolled-back' | 'superseded';
@@ -259,6 +269,8 @@ export interface PrismApi {
   setMotion(m: 'max' | 'standard' | 'off'): Promise<void>;
   listInstalls(): Promise<InstallRecord[]>;
   rollback(recordId: string): Promise<InstallRecord>;
+  /** Rewrites prism-core.ini of an active Prism Core install; a running game picks it up within a second. */
+  updateCoreConfig(recordId: string, values: Record<string, number | boolean | string>): Promise<InstallRecord>;
   diagnostics(): Promise<DiagnosticsReport>;
   exportDiagnostics(): Promise<string | null>;
   openPath(p: string): Promise<void>;

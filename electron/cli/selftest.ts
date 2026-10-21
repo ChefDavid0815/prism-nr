@@ -1,7 +1,7 @@
 /* Runs the core against this PC without Electron: system, scan, analysis, plan. Read-only. */
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { setShaderDir } from '../core/installer';
+import { coreIni, setCoreDir, setShaderDir } from '../core/installer';
 import { parseVdf } from '../core/scanner';
 import { PrismService } from '../core/service';
 import { initStore } from '../core/store';
@@ -23,6 +23,12 @@ async function main(): Promise<void> {
   assert(/Enabled=true/.test(ini) && !/Enabled=false/.test(ini), 'INI writer replaces an existing key');
   assert(/\[Plugins\]\r\nLoadReshade=true/.test(setIniValue('[A]\r\nx=1', 'Plugins', 'LoadReshade', 'true')), 'INI writer adds a missing section');
 
+  const ini0 = coreIni({});
+  assert(/\[Prism Core\]\r\nEnabled=1\r\nCadence=4\r\nAsync=1\r\nIntensity=1\.00\r\nGuard=1\.00/.test(ini0), 'Core INI: defaults are cadence 4, async, full intensity and guard');
+  const ini1 = coreIni({ 'prism-core.cadence': '2', 'prism-core.async': false, 'prism-core.intensity': 60, 'prism-core.guard': 150 });
+  assert(/Cadence=2/.test(ini1) && /Async=0/.test(ini1) && /Intensity=0\.60/.test(ini1) && /Guard=1\.00/.test(ini1), 'Core INI: values are written and clamped');
+  assert(/^[\x00-\x7f]*$/.test(ini0), 'Core INI: ASCII only (GetPrivateProfileString reads it as ANSI)');
+
   const c5060 = nrCostFor('NVIDIA GeForce RTX 5060', false);
   assert(c5060?.source === 'published' && Math.abs(c5060.msPerMP - 2.27) < 1e-9 && Math.abs(c5060.fixedMs - 0.07) < 1e-9, 'NR cost: RTX 5060 uses the published figure');
   assert(nrCostFor('NVIDIA GeForce RTX 5070 Ti Laptop GPU', true)?.source === 'estimated', 'NR cost: laptop parts without a measurement are estimated');
@@ -39,6 +45,7 @@ async function main(): Promise<void> {
 
   initStore(path.join(os.tmpdir(), 'prism-nr-selftest'));
   setShaderDir(path.join(__dirname, '..', '..', 'plugins', 'prism-shaders', 'Shaders'));
+  setCoreDir(path.join(__dirname, '..', '..', 'native', 'prism-core', 'build'));
   const svc = new PrismService();
   const sys = await svc.getSystem();
   console.log('GPU:', sys.gpus.map((g) => `${g.name} tier=${g.tier} nr=${g.nrSupport} driver=${g.driver}`).join(' | '));
@@ -49,8 +56,12 @@ async function main(): Promise<void> {
     const a = await svc.analyzeGame(g.id, true);
     const plan = await svc.plan({ gameId: g.id });
     console.log(
-      `- [${g.store}] ${g.name} | exe=${a.exe ? path.basename(a.exe) : '-'} ${a.bitness} ${a.apis.join('/') || '?'} dlss=${a.nativeDlss.present ? a.nativeDlss.version ?? 'y' : 'n'} ac=${a.antiCheat.map((x) => x.name).join(',') || '-'} route=${plan.route} preset=${plan.preset} style=${plan.style} blockers=${plan.blockers.length}`,
+      `- [${g.store}] ${g.name} | v=${a.importsVersionDll ?? '?'} exe=${a.exe ? path.basename(a.exe) : '-'} ${a.bitness} ${a.apis.join('/') || '?'} dlss=${a.nativeDlss.present ? a.nativeDlss.version ?? 'y' : 'n'} ac=${a.antiCheat.map((x) => x.name).join(',') || '-'} route=${plan.route} preset=${plan.preset} style=${plan.style} blockers=${plan.blockers.length}`,
     );
+    if (plan.route === 'prism-core') {
+      console.log('    plugins', plan.plugins.join(','), '| needs', plan.needs.length, '| blockers', plan.blockers.join(' / ') || '-');
+      console.log('    warnings', plan.warnings.join(' / ') || '-');
+    }
   }
   const dlls = await svc.nvidiaDlls();
   console.log('NGX files:', dlls.map((d) => `${d.file} ${d.version} signed=${d.signed} @ ${d.path}`));
