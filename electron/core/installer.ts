@@ -79,6 +79,7 @@ export function coreIni(values: Values): string {
     `Intensity=${pct('prism-core.intensity', 200, 300)}`,
     `Guard=${pct('prism-core.guard', 100)}`,
     `Passes=${passes}`,
+    `Guided=${values['prism-core.guided'] === true || values['prism-core.guided'] === 1 || values['prism-core.guided'] === '1' ? 1 : 0}`,
     'KeyToggle=F8',
     'KeyCadence=F2',
     'KeyAsync=F3',
@@ -170,7 +171,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const preset: PresetId = req.preset && PRESETS.some((p) => p.id === req.preset) ? req.preset : recommendedPreset(gpu);
   const route = chooseRoute(analysis);
   const plugins = pluginsForRoute('prism-core', req.plugins ?? ['nr-prism-core']);
-  const values: Values = { ...resolveValues(preset), ...(req.overrides ?? {}) };
+  const values: Values = { ...resolveValues(preset), ...(profile?.coreValues ?? {}), ...(req.overrides ?? {}) };
 
   const blockers: string[] = [];
   const warnings = [...analysis.warnings];
@@ -714,19 +715,23 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
         log(`upgrade ${r.gameName}: ${name} busy (${(e as Error).message}), next start`);
       }
     }
-    // Installs from before the tiers move to the recommended tier, unless the user tuned them.
-    if (r.preset === 'core') {
+    // Installs from before the tiers move to the recommended tier, unless the user tuned them; a
+    // game-specific build (profile coreValues) is added where the install lacks it.
+    const legacy = r.preset === 'core';
+    const extra = Object.entries(matchProfile(r.gameName)?.coreValues ?? {}).filter(([k]) => r.values?.[k] === undefined);
+    if (legacy || extra.length) {
       const ini = r.files.find((f) => /prism-core\.ini$/i.test(f.target));
       if (ini && exists(ini.target)) {
         const tuned = Boolean(r.values?.['prism-core.cadenceChosen']);
-        const values = tuned ? { ...resolveValues('high'), ...r.values } : { ...(r.values ?? {}), ...resolveValues('high') };
+        let values = !legacy ? { ...(r.values ?? {}) } : tuned ? { ...resolveValues('high'), ...r.values } : { ...(r.values ?? {}), ...resolveValues('high') };
+        values = { ...values, ...Object.fromEntries(extra) };
         const content = coreIni(values);
         try {
           fs.writeFileSync(ini.target, content, 'utf8');
           ini.sha256After = sha256Text(content);
           r.values = values;
-          r.preset = 'high';
-          notes.push(tuned ? 'passes 2' : 'tier high');
+          if (legacy) r.preset = 'high';
+          notes.push([legacy ? (tuned ? 'passes 2' : 'tier high') : '', ...extra.map(([k]) => k.replace('prism-core.', ''))].filter(Boolean).join(' + '));
         } catch (e) {
           log(`upgrade ${r.gameName}: prism-core.ini busy (${(e as Error).message})`);
         }

@@ -120,8 +120,70 @@ function throughWarp(f, warp, L, i, x, y, sigma) {
   return [a * n0 / ns, a * n1 / ns, a * n2 / ns];
 }
 
+// Luminance-guided edit: per tile of the launch frame, a least-squares line per channel from the
+// pixel's log2 luma to the network's edit (the network mostly re-grades tone, so on fast or
+// unreliable surfaces the edit is predicted from the current frame's own luma instead of carried).
+// layers: two lines per tile, one for the near and one for the far depth layer (split halfway
+// between the tile's depth extremes when they differ), so a tile holding both a car and the road
+// under it gives the road the road's line.
+function tileFits(L, T, layers = false) {
+  const tx = Math.ceil(W / T), ty = Math.ceil(H / T), fit = new Float32Array(tx * ty * 12), split = new Float32Array(tx * ty).fill(NaN);
+  // The luma range each tile's line was fitted on: the line is not extrapolated far beyond it.
+  const range = new Float32Array(tx * ty * 2);
+  for (let q = 0; q < tx * ty; q++) { range[q * 2] = Infinity; range[q * 2 + 1] = -Infinity; }
+  for (let j = 0; j < ty; j++) for (let i = 0; i < tx; i++) {
+    // A tile plus half a tile around it, so neighbouring lines agree at the seams.
+    const x0 = Math.max(0, (i - 0.5) * T | 0), x1 = Math.min(W, (i + 1.5) * T), y0 = Math.max(0, (j - 0.5) * T | 0), y1 = Math.min(H, (j + 1.5) * T);
+    let dmin = Infinity, dmax = -Infinity;
+    for (let y = y0; y < y1; y += 2) for (let x = x0; x < x1; x += 2) { const d = L.d[y * W + x]; dmin = Math.min(dmin, d); dmax = Math.max(dmax, d); }
+    const sp = layers && dmax - dmin > TOL * 2 * Math.max(Math.abs(dmax), 1e-4) ? (dmin + dmax) / 2 : NaN;
+    split[j * tx + i] = sp;
+    const counts = [0, 0];
+    for (let layer = 0; layer < 2; layer++) {
+      let n = 0, sy = 0, syy = 0, ylo = Infinity, yhi = -Infinity; const se = [0, 0, 0], sye = [0, 0, 0];
+      for (let y = y0; y < y1; y += 2) for (let x = x0; x < x1; x += 2) {
+        const p = y * W + x;
+        if (!Number.isNaN(sp) && (L.d[p] >= sp ? 1 : 0) !== layer) continue;
+        const Y = L.Y[p];
+        n++; sy += Y; syy += Y * Y; ylo = Math.min(ylo, Y); yhi = Math.max(yhi, Y);
+        for (let c = 0; c < 3; c++) { se[c] += L.E[p * 3 + c]; sye[c] += Y * L.E[p * 3 + c]; }
+      }
+      const k = (j * tx + i) * 12 + layer * 6;
+      counts[layer] = n;
+      if (n < 4) continue;
+      const my = sy / n, vy = syy / n - my * my;
+      for (let c = 0; c < 3; c++) {
+        const me = se[c] / n, b = vy > 1e-3 ? Math.max(-1.5, Math.min(1.5, (sye[c] / n - my * me) / (vy + 0.02))) : 0;
+        fit[k + c * 2] = me - b * my; fit[k + c * 2 + 1] = b;
+      }
+      range[(j * tx + i) * 2] = Math.min(range[(j * tx + i) * 2], ylo);
+      range[(j * tx + i) * 2 + 1] = Math.max(range[(j * tx + i) * 2 + 1], yhi);
+    }
+    const k0 = (j * tx + i) * 12;
+    if (Number.isNaN(sp) || counts[1] < 4) fit.copyWithin(k0 + 6, k0, k0 + 6);
+    else if (counts[0] < 4) fit.copyWithin(k0, k0 + 6, k0 + 12);
+  }
+  return { fit, split, range, tx, T };
+}
+// The guided edit at a launch-frame position (bilinear over the tile centres) for luma Y; with
+// layers, each tile answers with the layer this pixel's depth belongs to.
+function guidedAt(G, lx, ly, Y, out, d) {
+  const fx = Math.max(0, Math.min(G.tx - 1, lx / G.T - 0.5)), ty = G.split.length / G.tx;
+  const fy = Math.max(0, Math.min(ty - 1, ly / G.T - 0.5));
+  const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(G.tx - 1, x0 + 1), y1 = Math.min(ty - 1, y0 + 1), ax = fx - x0, ay = fy - y0;
+  const layerOf = (q) => (Number.isNaN(G.split[q]) ? 0 : d >= G.split[q] ? 6 : 0);
+  const m = G.margin ?? Infinity;
+  const yc = (q) => Math.max(G.range[q * 2] - m, Math.min(G.range[q * 2 + 1] + m, Y));
+  for (let c = 0; c < 3; c++) {
+    const v = (q) => { const k = q * 12 + layerOf(q); return G.fit[k + c * 2] + G.fit[k + c * 2 + 1] * yc(q); };
+    out[c] = (v(y0 * G.tx + x0) * (1 - ax) + v(y0 * G.tx + x1) * ax) * (1 - ay) + (v(y1 * G.tx + x0) * (1 - ax) + v(y1 * G.tx + x1) * ax) * ay;
+  }
+}
+
 // One scheme over the whole sequence; returns per-frame shown edits.
-function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride, fillHoles = false, blend = 1, cad = CAD }) {
+// guided: { tile, near, far } - where the surface moved more than `near` px since the launch the
+// guided edit takes over, fully beyond `far`; holes take it too.
+function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride, fillHoles = false, blend = 1, cad = CAD, guided = null }) {
   const L = launchEdits(net, cad), age = ageOverride ?? AGE;
   let hist = new Float32Array(W * H * 3), histD = new Float32Array(W * H), warpF = new Float32Array(W * H * 4), warpL = new Float32Array(W * H * 4);
   let landed = null, flight = null;
@@ -144,6 +206,52 @@ function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride, fi
         if (v && blend < 1 && F.ok[i]) { for (let ch = 0; ch < 3; ch++) out[i * 3 + ch] = blend * v[ch] + (1 - blend) * e[i * 3 + ch]; valid[i] = 1; } else if (v) { out[i * 3] = v[0]; out[i * 3 + 1] = v[1]; out[i * 3 + 2] = v[2]; valid[i] = 1; } else { out[i * 3] = e[i * 3]; out[i * 3 + 1] = e[i * 3 + 1]; out[i * 3 + 2] = e[i * 3 + 2]; }
       }
       e = out;
+    }
+    if (guided && landed) {
+      if (landed.G?.T !== guided.tile) { landed.G = tileFits(landed, guided.tile, guided.layers); landed.G.margin = guided.margin ?? Infinity; }
+      const g = [0, 0, 0], wp = warpL;
+      const ramp = (v, a, b) => (v <= a ? 0 : v >= b ? 1 : (v - a) / (b - a));
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x, ok = wp[i * 4 + 3] > 0.5;
+        // Speed: this frame's own motion, px per frame. Mismatch: how far this pixel's luma is from
+        // the launch frame's at the warped spot, in stops (reflections, spray and blur don't follow
+        // the vectors). Either one hands the pixel to the guided edit; holes go to it when fast.
+        const speed = Math.hypot(f.mv[i * 2], f.mv[i * 2 + 1]);
+        let w = guided.near != null ? ramp(speed, guided.near, guided.far) : 0;
+        if (guided.m0 != null) {
+          if (ok && valid[i]) {
+            // Averaged over a 3x3 neighbourhood (same warp offset): raindrops and sparkle on one
+            // pixel must not flip it alone, or the switch shows as salt and pepper.
+            const r = guided.mr ?? 0, ox = Math.round(wp[i * 4]), oy = Math.round(wp[i * 4 + 1]);
+            let s = 0, n = 0;
+            for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+              const xx = Math.min(W - 1, Math.max(0, x + dx)), yy = Math.min(H - 1, Math.max(0, y + dy));
+              const px = Math.min(W - 1, Math.max(0, xx + ox)), py = Math.min(H - 1, Math.max(0, yy + oy));
+              s += Math.abs(f.Y[yy * W + xx] - landed.Y[py * W + px]); n++;
+            }
+            w = Math.max(w, ramp(s / n, guided.m0, guided.m1));
+          } else if (!valid[i]) w = Math.max(w, ramp(speed, guided.holeNear ?? 16, guided.holeFar ?? 48));
+        }
+        // edge: within a few pixels of a depth edge, the farther side (road behind a bumper) takes
+        // the guided edit when fast: the vectors are render resolution, the edge is off by a pixel or two.
+        if (guided.edge && masks[t].edge[i]) {
+          const d = f.d[i]; let far = false;
+          for (let dy = -guided.edge; dy <= guided.edge && !far; dy += 2) for (let dx = -guided.edge; dx <= guided.edge; dx += 2) {
+            const xx = Math.min(W - 1, Math.max(0, x + dx)), yy = Math.min(H - 1, Math.max(0, y + dy)), dd = f.d[yy * W + xx];
+            if (INV ? dd > d * (1 + TOL) : dd < d * (1 - TOL)) { far = true; break; }
+          }
+          if (far) w = Math.max(w, ramp(speed, guided.holeNear ?? 16, guided.holeFar ?? 48));
+        }
+        if (w <= 0) continue;
+        guidedAt(landed.G, ok ? x + wp[i * 4] : x, ok ? y + wp[i * 4 + 1] : y, f.Y[i], g, ok ? wp[i * 4 + 2] : f.d[i]);
+        // Smoothed in time like the landed edit: part of what this pixel showed last frame stays.
+        const sb = guided.blend ?? 1, carried = F.ok[i];
+        for (let c = 0; c < 3; c++) {
+          const gv = carried && sb < 1 ? sb * g[c] + (1 - sb) * F.e[i * 3 + c] : g[c];
+          e[i * 3 + c] = (1 - w) * e[i * 3 + c] + w * gv;
+        }
+        valid[i] = 1;
+      }
     }
     if (fillHoles) e = fill(f, e, valid);
     hist = e; histD = f.d;
@@ -194,7 +302,7 @@ function score(shown) {
 }
 
 const ap = 'c' + CAD + 'approx', ex = 'c' + CAD + 'exact';
-const schemes = process.env.QUICK ? {
+const schemes = process.env.SCHEMES ? JSON.parse(process.env.SCHEMES) : process.env.QUICK ? {
   'carry chain, approx motion (1.2)': { net: ap },
   'warp-direct, exact motion': { net: ex, direct: true },
   'warp-direct, approx motion': { net: ap, direct: true },
