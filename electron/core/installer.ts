@@ -535,8 +535,13 @@ function applyOps(recordId: string, gameId: string, ops: FileOp[]): BackupRecord
         fs.copyFileSync(op.to, backup);
       }
       ensureDir(path.dirname(op.to));
-      if (op.kind === 'copy') fs.copyFileSync(op.from, op.to);
-      else if (op.kind === 'write') fs.writeFileSync(op.to, op.content, 'utf8');
+      if (exists(op.to)) fs.chmodSync(op.to, 0o666);  // a read-only file in the way (see below)
+      if (op.kind === 'copy') {
+        fs.copyFileSync(op.from, op.to);
+        // Copies keep the source's read-only flag (the shipped NVIDIA file has it), which would make
+        // a later rollback or reinstall fail to replace them.
+        fs.chmodSync(op.to, 0o666);
+      } else if (op.kind === 'write') fs.writeFileSync(op.to, op.content, 'utf8');
       else fs.rmSync(op.to, { force: true });
       // A removed file records an empty hash: it is meant to be absent until rollback puts it back.
       done.push({ target: op.to, backup, sha256After: op.kind === 'copy' ? sha256File(op.to) : op.kind === 'write' ? sha256Text(op.content) : '' });
@@ -553,6 +558,7 @@ function restore(files: BackupRecord[]): string[] {
   for (const f of [...files].reverse()) {
     try {
       if (f.sha256After && exists(f.target) && sha256File(f.target) !== f.sha256After) notes.push(`${path.basename(f.target)} 在安装后被改动过，已按备份还原。`);
+      if (exists(f.target)) fs.chmodSync(f.target, 0o666);
       if (f.backup && exists(f.backup)) fs.copyFileSync(f.backup, f.target);
       else fs.rmSync(f.target, { force: true });
     } catch (e) {

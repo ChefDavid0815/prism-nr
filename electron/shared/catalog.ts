@@ -19,7 +19,7 @@ export const PLUGINS: PluginDef[] = [
       '角色守护：限制改动里的色度，肤色和发色不被改掉',
       '设置写在游戏目录的 prism-core.ini，游戏运行中改动约 1 秒内生效',
     ],
-    cost: '中：CONTROL 实测每帧 +5.0 ms，每帧全分辨率是 +13.4 ms（RTX 5090 Laptop，2560×1600）',
+    cost: '中：网络单次 5.1 ms（310.9.16 模型，RTX 5090 Laptop，2560×1600），每 2 帧一次；1.1 在 CONTROL 实测每帧 +5.0 ms，每帧全分辨率是 +13.4 ms（旧模型、每 4 帧）',
     gpu: 'RTX 50 系，DX12 且自带 DLSS 的游戏',
     routes: ['prism-core'],
     conflicts: ['nr-renodx', 'nr-dfc', 'nr-optiscaler'],
@@ -287,7 +287,7 @@ export const PRESETS: PresetDef[] = [
     nativeRoutePreference: ['prism-core'],
     plugins: ['nr-prism-core'],
     values: { 'framegen.mode': 'off' },
-    expectation: 'CONTROL 实测：比每帧全分辨率跑网络快 40%，神经渲染成本降低 63%。实验性预览，目前只在 CONTROL 上验证过。',
+    expectation: '1.1 在 CONTROL 实测比每帧全分辨率跑网络快 40%（旧模型）；1.1.2 换成 NVIDIA 新模型，网络本身再便宜 44%，运动中的鬼影比 1.1.1 少约四成（离线实测）。实验性预览，目前只在 CONTROL 上验证过。',
   },
   {
     id: 'flagship',
