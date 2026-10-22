@@ -57,7 +57,7 @@ function dilate(f) {
 // Follow (pipeline.cpp): carry last frame's edit and warp along this frame's motion, taps admitted
 // where the stored depth matches this pixel's.
 function follow(f, mv, hist, histD, warp) {
-  const e = new Float32Array(W * H * 3), wo = new Float32Array(W * H * 4);
+  const e = new Float32Array(W * H * 3), wo = new Float32Array(W * H * 4), ok = new Uint8Array(W * H);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = y * W + x, px = x + mv[i * 2], py = y + mv[i * 2 + 1];
     const bx = Math.floor(px), by = Math.floor(py), fx = px - bx, fy = py - by, d = f.d[i], tol = TOL * Math.max(Math.abs(d), 1e-4);
@@ -70,10 +70,36 @@ function follow(f, mv, hist, histD, warp) {
       qx += (tx + warp[ti * 4]) * wq; qy += (ty + warp[ti * 4 + 1]) * wq; qz += warp[ti * 4 + 2] * wq; qs += wq;
     }
     const inside = px >= -0.5 && py >= -0.5 && px <= W - 0.5 && py <= H - 0.5;
-    if (inside && ws > 1e-3) { e[i * 3] = e0 / ws; e[i * 3 + 1] = e1 / ws; e[i * 3 + 2] = e2 / ws; }
+    if (inside && ws > 1e-3) { e[i * 3] = e0 / ws; e[i * 3 + 1] = e1 / ws; e[i * 3 + 2] = e2 / ws; ok[i] = 1; }
     if (inside && qs > 1e-3) { wo[i * 4] = qx / qs - x; wo[i * 4 + 1] = qy / qs - y; wo[i * 4 + 2] = qz / qs; wo[i * 4 + 3] = 1; }
   }
-  return { e, warp: wo };
+  return { e, warp: wo, ok };
+}
+
+// Newly revealed pixels (no landed edit reaches them and no carried one either) borrow the edit of
+// nearby pixels on the same depth layer: rings of taps in 8 directions, the nearest ring that has
+// any same-depth valid tap wins.
+const FILL_RINGS = [2, 4, 8, 16, 32];
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+function fill(f, e, valid) {
+  const out = e.slice();
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    if (valid[i]) continue;
+    const d = f.d[i], tol = TOL * Math.max(Math.abs(d), 1e-4) * 2;
+    for (const r of FILL_RINGS) {
+      let n = 0, a0 = 0, a1 = 0, a2 = 0;
+      for (const [dx, dy] of DIRS) {
+        const xx = x + dx * r, yy = y + dy * r;
+        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+        const j = yy * W + xx;
+        if (!valid[j] || Math.abs(f.d[j] - d) > tol) continue;
+        a0 += e[j * 3]; a1 += e[j * 3 + 1]; a2 += e[j * 3 + 2]; n++;
+      }
+      if (n) { out[i * 3] = a0 / n; out[i * 3 + 1] = a1 / n; out[i * 3 + 2] = a2 / n; break; }
+    }
+  }
+  return out;
 }
 
 // The network's edit reached through a warp (Land, pipeline.cpp), with an optional consistency
@@ -95,7 +121,7 @@ function throughWarp(f, warp, L, i, x, y, sigma) {
 }
 
 // One scheme over the whole sequence; returns per-frame shown edits.
-function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride }) {
+function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride, fillHoles = false }) {
   const L = launchEdits(net), age = ageOverride ?? AGE;
   let hist = new Float32Array(W * H * 3), histD = new Float32Array(W * H), warpF = new Float32Array(W * H * 4), warpL = new Float32Array(W * H * 4);
   let landed = null, flight = null;
@@ -104,6 +130,7 @@ function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride }) 
     const f = frames[t], mv = dilateMv ? dilate(f) : f.mv;
     const F = follow(f, mv, hist, histD, warpF);
     let e = F.e;
+    const valid = F.ok.slice();
     warpF = F.warp;
     if (direct && landed) warpL = follow(f, mv, hist, histD, warpL).warp;
     // Land first, then launch: a frame may do both (the landed edit is kept apart from the next launch).
@@ -111,13 +138,14 @@ function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride }) 
     if (landNow) { landed = flight; warpL = warpF.slice(); flight = null; }
     if (t % CAD === 0) { flight = L[t / CAD]; for (let i = 0; i < W * H; i++) { warpF[i * 4] = 0; warpF[i * 4 + 1] = 0; warpF[i * 4 + 2] = f.d[i]; warpF[i * 4 + 3] = 1; } }
     if (landNow || (direct && landed)) {
-      const wp = landNow ? warpF : warpL, out = new Float32Array(W * H * 3);
+      const wp = warpL, out = new Float32Array(W * H * 3);
       for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const i = y * W + x, v = throughWarp(f, wp, landed, i, x, y, sigma);
-        if (v) { out[i * 3] = v[0]; out[i * 3 + 1] = v[1]; out[i * 3 + 2] = v[2]; } else { out[i * 3] = e[i * 3]; out[i * 3 + 1] = e[i * 3 + 1]; out[i * 3 + 2] = e[i * 3 + 2]; }
+        if (v) { out[i * 3] = v[0]; out[i * 3 + 1] = v[1]; out[i * 3 + 2] = v[2]; valid[i] = 1; } else { out[i * 3] = e[i * 3]; out[i * 3 + 1] = e[i * 3 + 1]; out[i * 3 + 2] = e[i * 3 + 2]; }
       }
       e = out;
     }
+    if (fillHoles) e = fill(f, e, valid);
     hist = e; histD = f.d;
     shown.push(e);
   }
@@ -160,6 +188,8 @@ const ap = 'c' + CAD + 'approx', ex = 'c' + CAD + 'exact';
 const schemes = process.env.QUICK ? {
   'carry chain, approx motion (1.2)': { net: ap },
   'warp-direct, exact motion': { net: ex, direct: true },
+  'warp-direct, approx motion': { net: ap, direct: true },
+  'warp-direct, exact motion, depth fill': { net: ex, direct: true, fillHoles: true },
 } : {
   'S1 1.1 (wait, age 1, approx motion)': { net: ap, ageOverride: 1 },
   'S0 1.2 (poll, carry chain, approx motion)': { net: ap },
