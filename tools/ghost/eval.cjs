@@ -121,7 +121,7 @@ function throughWarp(f, warp, L, i, x, y, sigma) {
 }
 
 // One scheme over the whole sequence; returns per-frame shown edits.
-function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride, fillHoles = false }) {
+function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride, fillHoles = false, blend = 1 }) {
   const L = launchEdits(net), age = ageOverride ?? AGE;
   let hist = new Float32Array(W * H * 3), histD = new Float32Array(W * H), warpF = new Float32Array(W * H * 4), warpL = new Float32Array(W * H * 4);
   let landed = null, flight = null;
@@ -141,7 +141,7 @@ function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride, fi
       const wp = warpL, out = new Float32Array(W * H * 3);
       for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const i = y * W + x, v = throughWarp(f, wp, landed, i, x, y, sigma);
-        if (v) { out[i * 3] = v[0]; out[i * 3 + 1] = v[1]; out[i * 3 + 2] = v[2]; valid[i] = 1; } else { out[i * 3] = e[i * 3]; out[i * 3 + 1] = e[i * 3 + 1]; out[i * 3 + 2] = e[i * 3 + 2]; }
+        if (v && blend < 1 && F.ok[i]) { for (let ch = 0; ch < 3; ch++) out[i * 3 + ch] = blend * v[ch] + (1 - blend) * e[i * 3 + ch]; valid[i] = 1; } else if (v) { out[i * 3] = v[0]; out[i * 3 + 1] = v[1]; out[i * 3 + 2] = v[2]; valid[i] = 1; } else { out[i * 3] = e[i * 3]; out[i * 3 + 1] = e[i * 3 + 1]; out[i * 3 + 2] = e[i * 3 + 2]; }
       }
       e = out;
     }
@@ -167,9 +167,9 @@ const masks = frames.map((f) => {
   return { moving, edge };
 });
 function score(shown) {
-  const acc = { all: [0, 0], moving: [0, 0], edge: [0, 0] };
+  const acc = { all: [0, 0], moving: [0, 0], edge: [0, 0], flicker: [0, 0] };
   for (let t = START; t < N; t++) {
-    const s = shown[t], r = frames[t].E, m = masks[t];
+    const s = shown[t], r = frames[t].E, m = masks[t], sp = shown[t - 1], rp = frames[t - 1].E, mv = frames[t].mv, d = frames[t].d, dp = frames[t - 1].d;
     for (let y = MARGIN; y < H - MARGIN; y++) for (let x = MARGIN; x < W - MARGIN; x++) {
       const i = y * W + x;
       let e2 = 0;
@@ -178,10 +178,19 @@ function score(shown) {
       acc.all[0] += e2; acc.all[1]++;
       if (m.moving[i]) { acc.moving[0] += e2; acc.moving[1]++; }
       if (m.edge[i]) { acc.edge[0] += e2; acc.edge[1]++; }
+      // Flicker: the change since last frame (followed along the motion, same surface only)
+      // against the reference's own change there.
+      const px = Math.round(x + mv[i * 2]), py = Math.round(y + mv[i * 2 + 1]);
+      if (px < 0 || py < 0 || px >= W || py >= H) continue;
+      const j = py * W + px;
+      if (Math.abs(dp[j] - d[i]) > TOL * Math.max(Math.abs(d[i]), 1e-4)) continue;
+      let f2 = 0;
+      for (let ch = 0; ch < 3; ch++) f2 += ((s[i * 3 + ch] - sp[j * 3 + ch]) - (r[i * 3 + ch] - rp[j * 3 + ch])) ** 2;
+      acc.flicker[0] += f2 / 3; acc.flicker[1]++;
     }
   }
   const f = (a) => (a[1] ? +Math.sqrt(a[0] / a[1]).toFixed(4) : null);
-  return { rmse: f(acc.all), moving: f(acc.moving), edge: f(acc.edge) };
+  return { rmse: f(acc.all), moving: f(acc.moving), edge: f(acc.edge), flicker: f(acc.flicker) };
 }
 
 const ap = 'c' + CAD + 'approx', ex = 'c' + CAD + 'exact';
@@ -190,6 +199,8 @@ const schemes = process.env.QUICK ? {
   'warp-direct, exact motion': { net: ex, direct: true },
   'warp-direct, approx motion': { net: ap, direct: true },
   'warp-direct, exact motion, depth fill': { net: ex, direct: true, fillHoles: true },
+  'fill + blend 0.7': { net: ex, direct: true, fillHoles: true, blend: 0.7 },
+  'fill + blend 0.5': { net: ex, direct: true, fillHoles: true, blend: 0.5 },
 } : {
   'S1 1.1 (wait, age 1, approx motion)': { net: ap, ageOverride: 1 },
   'S0 1.2 (poll, carry chain, approx motion)': { net: ap },

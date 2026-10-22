@@ -102,7 +102,7 @@ ngx::Result ScalingRatio(void* p) { ngx::SetF(p, "DLSSNR.ScalingRatio", 1.f); re
 const char* kShaders = R"(
 cbuffer C : register(b0) {
   uint2 Size; uint TileCount; uint TilesX; float Intensity; float Guard; float Adapt; uint Split;
-  uint2 RenderSize; float2 MotionScale; float DepthTolerance; uint Flags; float Span; uint Pad2;
+  uint2 RenderSize; float2 MotionScale; float DepthTolerance; uint Flags; float Span; float Blend;
 };
 // Flags: 1 launch frame (the in-flight warp starts here), 2 landing frame (the in-flight warp
 // becomes the landed one), 4 a landed edit exists, 8 the network gets motion from the landed warp.
@@ -285,7 +285,8 @@ void Carry(uint3 id : SV_DispatchThreadID) {
   const float d = DepthAt(id.xy);
   if (Flags & 2u) warpL = warp;
   float3 n = 0.0;
-  if ((Flags & 4u) && Sample(id.xy, warpL, n)) { e = n; reached = true; }
+  // Where last frame's edit also reaches, a little of it stays (Blend): a fresh landing does not pop.
+  if ((Flags & 4u) && Sample(id.xy, warpL, n)) { e = reached ? lerp(e, n, Blend) : n; reached = true; }
   if (Flags & 1u) warp = float4(0.0, 0.0, d, 1.0);
   // Into the scratch texture: Fill writes the edit and the frame. A hole keeps its depth as -1 - d.
   NewEdit[id.xy] = float4(e, reached ? d : -1.0 - d);
@@ -375,7 +376,7 @@ void Bake(uint3 id : SV_DispatchThreadID) {
 
 struct Constants {
   uint32_t w, h, tileCount, tilesX; float intensity, guard, adapt; uint32_t split;
-  uint32_t renderW, renderH; float mvScaleX, mvScaleY, depthTolerance; uint32_t flags; float span; uint32_t pad;
+  uint32_t renderW, renderH; float mvScaleX, mvScaleY, depthTolerance; uint32_t flags; float span; float blend;
 };
 static_assert(sizeof(Constants) == 64, "16 root constants");
 
@@ -402,6 +403,7 @@ ID3D12Resource* landedEdit = nullptr;  // the landed network edit and its depth,
 ID3D12Resource* scratch = nullptr;     // Carry's edit with its holes, before Fill
 bool haveLanded = false;
 bool exactMotion = true;  // the network gets its motion from the landed warp (NetMotion=exact)
+float stability = 0.3f;   // how much of last frame's edit stays where a landed edit is sampled (0..0.9)
 int current = 0;
 bool historyValid = false;
 int cadence = 2;  // the network every N frames (F2 cycles 1-4); 0: adaptive (see Adapt)
@@ -942,6 +944,7 @@ void LoadConfig() {
     label.assign(lb.begin(), lb.end());  // ASCII labels
   }
   fpsCap = int(Num(L"FpsCap", fpsCap, 0, 500));
+  stability = float(Num(L"Stability", stability, 0, 0.9));
   {
     const int asked = int(Num(L"Record", 0, 0, 240));
     if (asked != recordAsked) { recordAsked = asked; if (asked > 0 && recFrames.empty()) recordLeft = asked; }
@@ -1016,7 +1019,7 @@ void RecordFrame(const UpscaleCall& c, ID3D12GraphicsCommandList* l, UINT ring) 
   ID3D12DescriptorHeap* heaps[] = {heap};
   l->SetDescriptorHeaps(1, heaps);
   l->SetComputeRootSignature(root);
-  const Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, 0u, c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f, 0u, 1.0f, 0u};
+  const Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, 0u, c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f, 0u, 1.0f, 1.0f};
   l->SetComputeRoot32BitConstants(0, 16, &k, 0);
   l->SetComputeRootDescriptorTable(1, Gpu(ring));
   l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetR));
@@ -1224,7 +1227,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   const bool landedBefore = haveLanded || landNow;
   Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, paint ? 2u : (split ? 1u : 0u),
                  c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f,
-                 (launchNow ? 1u : 0u) | (landNow ? 2u : 0u) | (landedBefore ? 4u : 0u), span, 0u};
+                 (launchNow ? 1u : 0u) | (landNow ? 2u : 0u) | (landedBefore ? 4u : 0u), span, 1.0f - stability};
 
   const UINT slot = UINT(frame % kRing);
   // The slot written kRing frames ago is long finished: read it before reusing it.
