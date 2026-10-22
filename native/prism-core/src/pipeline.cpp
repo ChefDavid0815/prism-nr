@@ -175,6 +175,51 @@ void Encode(uint3 id : SV_DispatchThreadID) {
   Out0[id.xy] = float4(Enc(c), 1.0);
 }
 
+// Reduced working resolution (NetScale < 1, flag 32, Span holds the scale): the network runs on a
+// smaller proxy (Down) and its edit comes back to native resolution through a joint bilateral
+// upsample guided by the native proxy's luma, so edges stay on the native picture's edges.
+// In that mode Neural is the small output and Scratch the small proxy.
+uint2 LowSize() { return uint2(floor(float2(Size) * Span + 0.5)); }
+
+[numthreads(16, 16, 1)]
+void Down(uint3 id : SV_DispatchThreadID) {
+  const uint2 ls = LowSize();
+  if (any(id.xy >= ls)) return;
+  // Bilinear at the footprint centre, in linear light.
+  const float2 f = (float2(id.xy) + 0.5) / Span - 0.5;
+  const int2 b = int2(floor(f)), last = int2(Size) - 1;
+  const float2 a = f - float2(b);
+  float3 c = 0.0;
+  [unroll] for (int j = 0; j <= 1; ++j) {
+    [unroll] for (int i = 0; i <= 1; ++i) {
+      c += Dec(Proxy.Load(int3(clamp(b + int2(i, j), int2(0, 0), last), 0)).rgb) * ((i ? a.x : 1.0 - a.x) * (j ? a.y : 1.0 - a.y));
+    }
+  }
+  Out0[id.xy] = float4(Enc(c), 1.0);
+}
+
+float3 UpEdit(uint2 p, float yFull) {
+  const int2 lastL = int2(LowSize()) - 1;
+  const float2 f = (float2(p) + 0.5) * Span - 0.5;
+  const int2 b = int2(floor(f));
+  float3 acc = 0.0, bil = 0.0;
+  float ws = 0.0;
+  [unroll] for (int j = -1; j <= 2; ++j) {
+    [unroll] for (int i = -1; i <= 2; ++i) {
+      const int2 q = clamp(b + int2(i, j), int2(0, 0), lastL);
+      const float3 pl = Dec(Scratch.Load(int3(q, 0)).rgb), nl = Dec(Neural.Load(int3(q, 0)).rgb);
+      const float3 el = clamp(log2(max(nl, 1.0 / 512.0) / max(pl, 1.0 / 512.0)), -3.0, 3.0);
+      const float2 dd = f - float2(b + int2(i, j));
+      const float r = (yFull - log2(max(Luma(pl), 1e-4))) / 0.15;
+      const float w = exp(-dot(dd, dd) / 1.28) * exp(-0.5 * r * r);
+      acc += el * w;
+      ws += w;
+      if (i >= 0 && i <= 1 && j >= 0 && j <= 1) bil += el * ((1.0 - abs(dd.x)) * (1.0 - abs(dd.y)));
+    }
+  }
+  return ws > 1e-4 ? acc / ws : bil;  // nothing alike nearby: plain bilinear
+}
+
 // Edit = log2(neural / proxy) in the proxy's linear light; guard its chroma on skin and strong
 // colour; apply it to the game's HDR frame as a ratio, so the frame's range is untouched.
 [numthreads(16, 16, 1)]
@@ -182,8 +227,14 @@ void Compose(uint3 id : SV_DispatchThreadID) {
   if (any(id.xy >= Size)) return;
   const float3 o = Orig[id.xy].rgb;
   const float3 pd = Proxy[id.xy].rgb;
-  const float3 p = Dec(pd), n = Dec(Neural[id.xy].rgb);
-  float3 e = clamp(log2(max(n, 1.0 / 512.0) / max(p, 1.0 / 512.0)), -3.0, 3.0) * Intensity;
+  const float3 p = Dec(pd);
+  float3 e;
+  if (Flags & 32u) {
+    e = UpEdit(id.xy, log2(max(Luma(p), 1e-4))) * Intensity;
+  } else {
+    const float3 n = Dec(Neural[id.xy].rgb);
+    e = clamp(log2(max(n, 1.0 / 512.0) / max(p, 1.0 / 512.0)), -3.0, 3.0) * Intensity;
+  }
   const float3 d = pd * 255.0;
   const float cb = 128.0 - 0.168736 * d.r - 0.331264 * d.g + 0.5 * d.b;
   const float cr = 128.0 + 0.5 * d.r - 0.418688 * d.g - 0.081312 * d.b;
@@ -478,6 +529,14 @@ ID3D12RootSignature* root = nullptr;
 ID3D12PipelineState *psoReduce1 = nullptr, *psoReduce2 = nullptr, *psoEncode = nullptr, *psoCompose = nullptr, *psoCarry = nullptr, *psoBake = nullptr, *psoCopyGuides = nullptr, *psoFill = nullptr, *psoFit = nullptr;
 bool guided = false;  // the luminance-guided edit (Guided=1)
 bool netReset = false;  // NetReset=1: the network starts without its history on every run (study)
+// NetScale (0.5-1, synchronous mode only): the network's working resolution. Below 1 it runs on
+// a reduced proxy and Compose brings its edit back with a joint bilateral upsample.
+float netScale = 1.0f, builtScale = 1.0f;
+uint32_t nw = 0, nh = 0;  // the network's working size
+ID3D12Resource *proxyLow = nullptr, *neuralLow = nullptr, *midsLow[2] = {};
+// What the network's passes read and write: the native textures, or the reduced ones.
+ID3D12Resource *netProxy = nullptr, *netNeural = nullptr, *netMids[2] = {};
+ID3D12PipelineState* psoDown = nullptr;
 ID3D12DescriptorHeap* heap = nullptr;
 UINT inc = 0;
 constexpr UINT kRing = 8;
@@ -663,7 +722,7 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   hr = D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
   if (FAILED(hr) || FAILED(hr = device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), __uuidof(ID3D12RootSignature), (void**)&root)))
     return Fail("root signature", hr);
-  for (auto [entry, pso] : {std::pair{"Reduce1", &psoReduce1}, std::pair{"Reduce2", &psoReduce2}, std::pair{"Encode", &psoEncode}, std::pair{"Compose", &psoCompose}, std::pair{"Carry", &psoCarry}, std::pair{"Bake", &psoBake}, std::pair{"Fill", &psoFill}, std::pair{"CopyGuides", &psoCopyGuides}, std::pair{"Fit", &psoFit}}) {
+  for (auto [entry, pso] : {std::pair{"Reduce1", &psoReduce1}, std::pair{"Reduce2", &psoReduce2}, std::pair{"Encode", &psoEncode}, std::pair{"Compose", &psoCompose}, std::pair{"Carry", &psoCarry}, std::pair{"Bake", &psoBake}, std::pair{"Fill", &psoFill}, std::pair{"CopyGuides", &psoCopyGuides}, std::pair{"Fit", &psoFit}, std::pair{"Down", &psoDown}}) {
     ID3DBlob *cs = nullptr, *e = nullptr;
     if (FAILED(hr = compile(kShaders, std::strlen(kShaders), "prism", nullptr, nullptr, entry, "cs_5_1", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &cs, &e))) {
       Log("shader %s: %s", entry, e ? (const char*)e->GetBufferPointer() : "?");
@@ -717,6 +776,35 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
     device->CreateUnorderedAccessView(landedLuma, nullptr, nullptr, Cpu(b + kSetL + 4));
   }
 
+  // The network's working size; below native it gets its own textures, and the descriptors the
+  // synchronous path uses point at them: t2 the small output, t11 the small proxy, set G's u0 the
+  // small proxy for Down (sets G and the scratch are only used asynchronously, off at this scale).
+  builtScale = netScale;
+  nw = netScale < 1.0f ? UINT(float(w) * netScale + 0.5f) : w;
+  nh = netScale < 1.0f ? UINT(float(h) * netScale + 0.5f) : h;
+  netProxy = proxy; netNeural = neural; netMids[0] = mids[0]; netMids[1] = mids[1];
+  if (nw != w || nh != h) {
+    auto small = [&](bool uav) -> ID3D12Resource* {
+      D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+      D3D12_RESOURCE_DESC d = {};
+      d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; d.Width = nw; d.Height = nh; d.DepthOrArraySize = 1; d.MipLevels = 1;
+      d.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; d.SampleDesc.Count = 1; d.Flags = uav ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
+      ID3D12Resource* t = nullptr;
+      return SUCCEEDED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, __uuidof(ID3D12Resource), (void**)&t)) ? t : nullptr;
+    };
+    proxyLow = small(true); neuralLow = small(true); midsLow[0] = small(true); midsLow[1] = small(true);
+    if (!proxyLow || !neuralLow || !midsLow[0] || !midsLow[1]) return Fail("reduced network resources");
+    netProxy = proxyLow; netNeural = neuralLow; netMids[0] = midsLow[0]; netMids[1] = midsLow[1];
+    for (UINT k = 0; k < kRing; ++k) {
+      const UINT b = k * kBlock;
+      sv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      device->CreateShaderResourceView(neuralLow, &sv, Cpu(b + 2));
+      device->CreateShaderResourceView(proxyLow, &sv, Cpu(b + 11));
+      device->CreateUnorderedAccessView(proxyLow, nullptr, nullptr, Cpu(b + kSetG));
+    }
+    Log("network at %ux%u (%.0f%% of %ux%u), edge-aware upsample", nw, nh, netScale * 100.0f, w, h);
+  }
+
   // The network: the signed runtime from the game folder, initialised on the game's device (once).
   ngx::Result r = ngx::kSuccess;
   if (!nrCreate) {
@@ -732,9 +820,9 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   }  // once
   nrParams.vtable = ownedVtable;
   void* p = &nrParams;
-  ngx::SetUI(p, "Width", w); ngx::SetUI(p, "Height", h); ngx::SetUI(p, "OutWidth", w); ngx::SetUI(p, "OutHeight", h);
-  for (const char* k : {"DLSSNR.Width", "DLSSNR.InputWidth", "DLSSNR.OutputWidth", "DLSSNR.Output.Width"}) ngx::SetUI(p, k, w);
-  for (const char* k : {"DLSSNR.Height", "DLSSNR.InputHeight", "DLSSNR.OutputHeight", "DLSSNR.Output.Height"}) ngx::SetUI(p, k, h);
+  ngx::SetUI(p, "Width", nw); ngx::SetUI(p, "Height", nh); ngx::SetUI(p, "OutWidth", nw); ngx::SetUI(p, "OutHeight", nh);
+  for (const char* k : {"DLSSNR.Width", "DLSSNR.InputWidth", "DLSSNR.OutputWidth", "DLSSNR.Output.Width"}) ngx::SetUI(p, k, nw);
+  for (const char* k : {"DLSSNR.Height", "DLSSNR.InputHeight", "DLSSNR.OutputHeight", "DLSSNR.Output.Height"}) ngx::SetUI(p, k, nh);
   ngx::SetF(p, "DLSSNR.ScalingRatio", 1.f); ngx::SetF(p, "DLSSNR.Scale", 1.f);
   ngx::SetPtr(p, "DLSSNRComputeScalingRatioCallback", (void*)&ScalingRatio);
   ngx::SetI(p, "PerfQualityValue", 0);
@@ -844,7 +932,7 @@ void ReleaseAsync() {
 // released while the GPU might still use it: it waits in the graveyard for a few frames.
 void Teardown() {
   ID3D12Resource** slots[] = {&origCopy, &proxy, &neural, &tiles, &exposure, &edits[0], &edits[1], &warps[0], &warps[1], &warpsL[0], &warpsL[1], &landedEdit, &landedLuma, &scratch,
-                              &motionCopy, &depthCopy, &recMotion, &recDepth, &mids[0], &mids[1]};
+                              &motionCopy, &depthCopy, &recMotion, &recDepth, &mids[0], &mids[1], &proxyLow, &neuralLow, &midsLow[0], &midsLow[1]};
   for (ID3D12Resource** r : slots) {
     Bury(*r);
     *r = nullptr;
@@ -1057,7 +1145,7 @@ ngx::Result BeginPasses(ID3D12GraphicsCommandList* l, PassFeatures& more, void* 
     more.fresh[i - 1] = true;
   }
   run = PassRun{};
-  run.n = n; run.reset = reset; run.in = proxy;
+  run.n = n; run.reset = reset; run.in = netProxy;
   return ngx::kSuccess;
 }
 
@@ -1068,8 +1156,8 @@ ngx::Result RunPasses(ID3D12GraphicsCommandList* l, void* first, PassFeatures& m
   ngx::Result r = ngx::kSuccess;
   for (; run.next < std::min(until, run.n) && r == ngx::kSuccess; ++run.next) {
     const int i = run.next, m = i & 1;
-    ID3D12Resource* out = i == run.n - 1 ? neural : mids[m];
-    if (out == mids[m] && run.readable[m]) { Barrier(l, out, SRV, UAV); run.readable[m] = false; }
+    ID3D12Resource* out = i == run.n - 1 ? netNeural : netMids[m];
+    if (out == netMids[m] && run.readable[m]) { Barrier(l, out, SRV, UAV); run.readable[m] = false; }
     bool rs = run.reset;
     if (i > 0) { rs = rs || more.fresh[i - 1]; more.fresh[i - 1] = false; }
     ngx::SetRes(p, "DLSSNR.Color", run.in); ngx::SetRes(p, "DLSSNR.Output", out);
@@ -1079,7 +1167,7 @@ ngx::Result RunPasses(ID3D12GraphicsCommandList* l, void* first, PassFeatures& m
     run.in = out;
   }
   if (run.next >= run.n)
-    for (int m = 0; m < 2; ++m) if (run.readable[m]) { Barrier(l, mids[m], SRV, UAV); run.readable[m] = false; }
+    for (int m = 0; m < 2; ++m) if (run.readable[m]) { Barrier(l, netMids[m], SRV, UAV); run.readable[m] = false; }
   return r;
 }
 
@@ -1165,6 +1253,7 @@ void LoadConfig() {
   stagger = Num(L"Stagger", stagger ? 1 : 0, 0, 1) != 0;
   guided = Num(L"Guided", guided ? 1 : 0, 0, 1) != 0;
   netReset = Num(L"NetReset", netReset ? 1 : 0, 0, 1) != 0;
+  netScale = float(Num(L"NetScale", netScale, 0.5, 1.0));
   {
     const std::wstring land = Get(L"Land");
     if (!land.empty()) landPoll = !lstrcmpiW(land.c_str(), L"poll");
@@ -1382,7 +1471,7 @@ bool PipelineRecord(const UpscaleCall& c) {
     // A new output or render size: let the network in flight finish, then rebuild.
     static uint32_t builtRW = 0, builtRH = 0, waited = 0;
     const D3D12_RESOURCE_DESC nd = c.output->GetDesc();
-    if (heap && (UINT(nd.Width) != w || nd.Height != h || c.renderWidth != builtRW || c.renderHeight != builtRH)) {
+    if (heap && (UINT(nd.Width) != w || nd.Height != h || c.renderWidth != builtRW || c.renderHeight != builtRH || netScale != builtScale)) {
       bool busy = false;
       {
         std::lock_guard<std::mutex> lock(asyncMutex);
@@ -1420,7 +1509,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   bool landNow = false, launchNow = false;
   // Every frame can run asynchronous too: the network of frame t overlaps frame t+1 and lands a
   // frame later (Cadence=1 with Async=1).
-  const bool async = asyncMode && historyValid && !c.reset;
+  const bool async = asyncMode && historyValid && !c.reset && netProxy == proxy;  // a reduced network runs synchronously
   if (async) {
     std::lock_guard<std::mutex> lock(asyncMutex);
     // Land once the launch was submitted; in poll mode only once the network has also finished on
@@ -1640,16 +1729,27 @@ bool PipelineRecord(const UpscaleCall& c) {
   l->SetPipelineState(psoReduce2); l->Dispatch(1, 1, 1); UavBarrier(l);
   l->SetPipelineState(psoEncode); l->Dispatch(tilesX, tilesY, 1);
   Barrier(l, proxy, UAV, SRV);
+  const bool reduced = netProxy != proxy;
+  if (reduced) {
+    // 3b. The reduced proxy the network runs on (Compose brings the edit back up).
+    k.flags |= 32u;
+    k.span = float(nw) / float(w);
+    l->SetComputeRoot32BitConstants(0, 16, &k, 0);
+    l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetG));
+    l->SetPipelineState(psoDown); l->Dispatch((nw + 15) / 16, (nh + 15) / 16, 1);
+    UavBarrier(l);
+    Barrier(l, proxyLow, UAV, SRV);
+  }
   // 4. The network.
   void* p = &nrParams;
-  ngx::SetRes(p, "DLSSNR.Color", proxy);
-  ngx::SetRes(p, "DLSSNR.Output", neural);
+  ngx::SetRes(p, "DLSSNR.Color", netProxy);
+  ngx::SetRes(p, "DLSSNR.Output", netNeural);
   ngx::SetRes(p, "DLSSNR.MVec", c.motion);
   ngx::SetRes(p, "DLSSNR.Depth", c.depth);
   for (const char* key : {"DLSSNR.ColorSubrect", "DLSSNR.OutputSubrect"}) {
     const std::string s(key);
     ngx::SetUI(p, (s + "BaseX").c_str(), 0); ngx::SetUI(p, (s + "BaseY").c_str(), 0);
-    ngx::SetUI(p, (s + "Width").c_str(), w); ngx::SetUI(p, (s + "Height").c_str(), h);
+    ngx::SetUI(p, (s + "Width").c_str(), nw); ngx::SetUI(p, (s + "Height").c_str(), nh);
   }
   for (const char* key : {"DLSSNR.DepthSubrect", "DLSSNR.MVecSubrect"}) {
     const std::string s(key);
@@ -1663,7 +1763,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   const ngx::Result r = EvaluatePasses(l, nrHandle, morePasses, p, c.reset || frame == 0 || netReset);
   if (r != ngx::kSuccess) { Log("NR evaluate 0x%08x", r); return Fail("NR evaluate"); }
   // 5. Compose onto the game's frame. NGX changed the bindings: set ours again.
-  Barrier(l, neural, UAV, SRV);
+  Barrier(l, netNeural, UAV, SRV);
   l->SetDescriptorHeaps(1, heaps);
   l->SetComputeRootSignature(root);
   l->SetComputeRoot32BitConstants(0, 16, &k, 0);
@@ -1673,7 +1773,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   UavBarrier(l);
   historyValid = true;
   if (captureAt && captureAt <= frame + 1 && !captures[0].rb) {
-    const Capture list4[4] = {{origCopy, "orig"}, {proxy, "proxy"}, {neural, "neural"}, {c.output, "final"}};
+    const Capture list4[4] = {{origCopy, "orig"}, {proxy, "proxy"}, {netNeural, "neural"}, {c.output, "final"}};
     const D3D12_RESOURCE_STATES st[4] = {SRV, SRV, SRV, UAV};
     for (int i = 0; i < 4; ++i) {
       Capture& cp = captures[i];
@@ -1715,8 +1815,9 @@ bool PipelineRecord(const UpscaleCall& c) {
     l->ResolveQueryData(queries, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2, 2, stamps, UINT64(slot) * 16);
   }
   // Back to the states the next frame starts from.
-  Barrier(l, neural, SRV, UAV);
+  Barrier(l, netNeural, SRV, UAV);
   Barrier(l, proxy, SRV, UAV);
+  if (reduced) Barrier(l, proxyLow, SRV, UAV);
   }  // refresh
   if (recordLeft > 0) RecordFrame(c, l, ring);
   if (recordDoneAt && frame >= recordDoneAt) WriteRecording();

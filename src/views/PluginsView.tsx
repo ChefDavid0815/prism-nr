@@ -29,7 +29,7 @@ export function PluginsView() {
               <span role="cell" className="prow-name">{p.name}</span>
               <span role="cell" className="mono">{p.gpuLabel}</span>
               <span role="cell" className="prow-sum">{p.summary}</span>
-              <span role="cell" className="mono dim">{p.forTiers.includes('flagship') ? 'RTX 5080 / 5090' : p.forTiers.includes('high') ? 'RTX 5070 Ti / 5080' : 'RTX 5060 / 5070'}</span>
+              <span role="cell" className="mono dim">{p.requiresGpu ? '仅 RTX 5090，谨慎开启' : p.forTiers.includes('flagship') ? 'RTX 5080 / 5090' : p.forTiers.includes('high') ? 'RTX 5070 Ti / 5080' : 'RTX 5060 / 5070'}</span>
             </div>
           </div>
         ))}

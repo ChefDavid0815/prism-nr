@@ -777,6 +777,9 @@ html.negative {
 .segmented-3 {
   grid-template-columns: repeat(3, 1fr);
 }
+.segmented-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
 /* Passes 3 and up: the playground, marked in the caution colour until chosen. */
 .segmented button.is-playground:not(.is-on) {
   color: var(--caution);

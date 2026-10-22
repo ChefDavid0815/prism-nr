@@ -136,7 +136,7 @@ export interface PluginDef {
 }
 
 /** Prism Core tiers. */
-export type PresetId = 'extreme' | 'high' | 'standard' | 'light';
+export type PresetId = 'extreme' | 'flagship' | 'high' | 'standard' | 'light';
 /** Presets of earlier versions, still found in install records and history. */
 export type LegacyPresetId = 'core' | 'flagship' | 'balanced' | 'fluid' | 'faithful';
 
@@ -152,6 +152,8 @@ export interface PresetDef {
   values: Record<string, number | boolean | string>;
   /** Honest expectation, never a promise. */
   expectation: string;
+  /** Only GPUs whose name matches may run this tier; others see it locked with this reason. */
+  requiresGpu?: { pattern: string; reason: string };
 }
 
 export interface ComponentInfo {

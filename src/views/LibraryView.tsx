@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { LEGACY_PRESET_NAMES, pluginById, PRESETS, resolveValues, tierOf } from '../../electron/shared/catalog';
+import { LEGACY_PRESET_NAMES, pluginById, PRESETS, resolveValues, tierLocked, tierOf } from '../../electron/shared/catalog';
 import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PresetDef, PresetId, Route, SystemInfo } from '../../electron/shared/types';
 import { api } from '../api';
 import { Barcode } from '../components/Barcode';
@@ -216,9 +216,12 @@ function pipeline(plan: InstallPlan): Stage[] {
     const cadence = Number(plan.values['prism-core.cadence'] ?? 2);
     const async = plan.values['prism-core.async'] !== false && cadence >= 2;
     // From the CONTROL measurements: every frame 13.4 ms, every 2nd 61% of that, every 4th async 37%.
-    const passes = Math.max(1, Math.min(3, Number(plan.values['prism-core.passes'] ?? 2)));
-    const weight = (({ 1: 14, 2: 9, 3: 7, 4: 5 } as Record<number, number>)[cadence] + (async || cadence === 1 ? 0 : 1)) * passes;
-    stages.push({ label: 'DLSS', weight: 2 }, { label: `${cadence === 1 ? '神经渲染 每帧' : `神经渲染 每 ${cadence} 帧`} × ${passes} 遍`, weight });
+    const passes = Math.max(1, Math.min(5, Number(plan.values['prism-core.passes'] ?? 2)));
+    const reduced = cadence === 1 && plan.values['prism-core.async'] === false && Number(plan.values['prism-core.netScale'] ?? 100) < 100;
+    // A 75% network costs about 0.56 of native (pixels), measured +17% frame rate on Forza Horizon 6.
+    const weight = Math.round((({ 1: 14, 2: 9, 3: 7, 4: 5 } as Record<number, number>)[cadence] + (async || cadence === 1 ? 0 : 1)) * passes * (reduced ? 0.6 : 1));
+    stages.push({ label: 'DLSS', weight: 2 }, { label: `${cadence === 1 ? '神经渲染 每帧' : `神经渲染 每 ${cadence} 帧`} × ${passes} 遍${reduced ? ' · 75%' : ''}`, weight });
+    if (reduced) stages.push({ label: '边缘感知放大', weight: 1, prism: true });
     if (cadence > 1) stages.push({ label: '携带改动', weight: 1, prism: true });
     if (Number(plan.values['prism-core.guard'] ?? 100) > 0) stages.push({ label: '角色守护', weight: 1, prism: true });
     if (has('framegen') && plan.values['framegen.mode'] !== 'off') stages.push({ label: `帧生成 ${plan.values['framegen.mode']}`, weight: 0 });
@@ -407,16 +410,17 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
             <h2 className="block-title">档位</h2>
             <div className="presets" role="radiogroup" aria-label="档位">
               {PRESETS.map((p) => {
-                const fits = tier ? p.forTiers.includes(tier) : false;
+                const locked = tierLocked(p, system?.primary?.name);
+                const fits = !locked && (p.requiresGpu ? true : tier ? p.forTiers.includes(tier) : false);
                 const on = shownTier?.id === p.id;
                 return (
-                  <button key={p.id} role="radio" aria-checked={on} className={`preset ${on ? 'is-on' : ''}`} onClick={() => pickTier(p.id)}>
+                  <button key={p.id} role="radio" aria-checked={on} disabled={Boolean(locked)} className={`preset ${on ? 'is-on' : ''}`} onClick={() => pickTier(p.id)}>
                     <span className="preset-name">
                       {p.name}
-                      {fits && <span className="preset-fit">适合你的显卡</span>}
+                      {fits && <span className="preset-fit">{p.requiresGpu ? '谨慎开启' : '适合你的显卡'}</span>}
                     </span>
                     <span className="preset-gpu mono">{p.gpuLabel}</span>
-                    <span className="preset-sum">{p.summary}</span>
+                    <span className="preset-sum">{locked ?? p.summary}</span>
                   </button>
                 );
               })}
@@ -502,7 +506,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
 
 // ---------------------------------------------------------------------------
 
-const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard'];
+const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.netScale', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard'];
 
 function pickCore(values: CoreValues): CoreValues {
   return Object.fromEntries(Object.entries(values).filter(([k]) => CORE_KEYS.includes(k)));
@@ -540,6 +544,7 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cadence = Number(values['prism-core.cadence'] ?? 2);
   const passes = Number(values['prism-core.passes'] ?? 2);
+  const netScale = String(values['prism-core.netScale'] ?? '100');
   const async = values['prism-core.async'] !== false;
   const defaults = resolveValues(tier.id);
   const changed = CORE_KEYS.some((k) => String(values[k]) !== String(defaults[k]));
@@ -596,6 +601,24 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
           ))}
         </div>
         <p className={`block-note ${passes >= 3 ? 'tone-caution-text' : ''}`}>{PASSES_NOTE[passes]}</p>
+      </div>
+
+      <div className="core-field">
+        <span className="core-field-label" id="core-scale-label">网络分辨率</span>
+        <div className="segmented segmented-2" role="radiogroup" aria-labelledby="core-scale-label">
+          {['100', '75'].map((v) => (
+            <button key={v} role="radio" aria-checked={netScale === v} className={netScale === v ? 'is-on' : ''} onClick={() => set({ 'prism-core.netScale': v })}>
+              {v === '100' ? '原生' : '75%'}
+            </button>
+          ))}
+        </div>
+        <p className="block-note">
+          {cadence !== 1
+            ? '只在每帧跑网络时生效；隔帧时网络始终用原生分辨率。'
+            : netScale === '75'
+              ? '网络在 75% 分辨率上跑，改动按原生画面的边缘放大回来：地平线 6 实测帧率 +17%，没有拖影。'
+              : '网络在原生分辨率上跑，画面最好，开销最大。'}
+        </p>
       </div>
 
       <label className={`core-toggle ${cadence === 1 ? 'is-disabled' : ''}`}>

@@ -22,4 +22,4 @@ echo "built build/prism_nvngx.dll build/version.dll"
 # Runtime shaders: compile every entry point now, so errors show at build time.
 g++ -std=c++20 -O1 -o build/shader_check.exe tests/shader_check.cpp -static -static-libgcc -static-libstdc++ 2>&1
 node -e "const s=require('fs').readFileSync('src/pipeline.cpp','utf8');const m='const char* kShaders = R\"(';const a=s.indexOf(m);require('fs').writeFileSync('build/shaders.hlsl',s.slice(a+m.length,s.indexOf(')\";',a)))"
-./build/shader_check.exe build/shaders.hlsl Reduce1 Reduce2 Encode Compose Carry Fill Bake CopyGuides Fit
+./build/shader_check.exe build/shaders.hlsl Reduce1 Reduce2 Encode Compose Carry Fill Bake CopyGuides Fit Down

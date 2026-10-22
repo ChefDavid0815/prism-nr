@@ -1,4 +1,4 @@
-import type { LegacyPresetId } from './types';
+import type { LegacyPresetId, PresetId } from './types';
 
 export type ArtStyle = 'realistic' | 'stylized' | 'anime' | 'dark' | 'retro';
 
@@ -55,6 +55,8 @@ export interface GameProfile {
   coreNotes?: string[];
   /** Prism Core values this game always gets on top of its tier (a game-specific build). */
   coreValues?: Record<string, number | boolean | string>;
+  /** The Prism Core tier this game starts on (when the GPU may run it). */
+  coreTier?: PresetId;
   values: Record<string, number | boolean | string>;
   notes: string[];
   /**
@@ -78,10 +80,10 @@ export const PROFILES: GameProfile[] = [
   {
     key: 'fh6', title: '极限竞速：地平线 6', steamAppIds: ['2483190'], names: /forza horizon 6|地平线\s*6/i, style: 'realistic', preset: 'core', values: {}, notes: [],
     // Wet roads, reflections and spray stream past at 100-260 px a frame and don't follow the motion
-    // vectors, so any carried edit trails behind the car. The network runs on every frame here (the
-    // extreme tier: 2 passes, 210%): no carry, no trail; 1 pass looked washed out even at 280%.
-    coreValues: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 210, 'prism-core.guided': false },
-    coreNotes: ['地平线 6 专项：网络每帧跑 2 遍、不搬运旧结果，高速时车身周围不会拖影。建议在游戏里开 2× 帧生成补帧率。'],
+    // vectors, so any carried edit trails behind the car. It starts on the flagship tier (the network
+    // on every frame, 2 passes, 75%): no carry, no trail; 1 pass looked washed out even at 280%.
+    coreTier: 'flagship',
+    coreNotes: ['地平线 6 专项：默认旗舰档，网络每帧跑 2 遍、不复用旧结果，高速时车身周围不会拖影。建议在游戏里开 2× 帧生成。隔帧的档位（高画质及以下）在这款游戏里会有拖影。'],
   },
   { key: 'f1-25', title: 'F1 25', steamAppIds: ['3059520'], names: /^f1[^a-z0-9]*25\b/i, style: 'realistic', preset: 'flagship', values: {}, notes: [], antiCheatKnown: 'EA Javelin' },
   { key: 'fc26', title: 'EA SPORTS FC 26', steamAppIds: [], names: /\bfc\s*26\b/i, style: 'realistic', preset: 'flagship', values: {}, notes: [], antiCheatKnown: 'EA Javelin' },

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { pluginById, PLUGINS, PRESETS, resolveValues } from '../shared/catalog';
+import { pluginById, PLUGINS, PRESETS, resolveValues, tierLocked } from '../shared/catalog';
 import { matchProfile, styleById } from '../shared/profiles';
 import type {
   BackupRecord,
@@ -68,7 +68,8 @@ function conflictingAddons(exeDir: string): string[] {
 export function coreIni(values: Values): string {
   const pct = (k: string, d: number, max = 100) => (Math.max(0, Math.min(max, Number(values[k] ?? d))) / 100).toFixed(2);
   const cadence = Math.max(1, Math.min(4, Math.round(Number(values['prism-core.cadence'] ?? 2))));
-  const async = values['prism-core.async'] ?? true;
+  // Every frame runs synchronously (the app's async switch is off there): no carry, no trail.
+  const async = cadence === 1 ? false : values['prism-core.async'] ?? true;
   const passes = Math.max(1, Math.min(5, Math.round(Number(values['prism-core.passes'] ?? 2))));
   return [
     '; Written by Prism NR. Prism Core re-reads this file while the game runs.',
@@ -80,6 +81,7 @@ export function coreIni(values: Values): string {
     `Guard=${pct('prism-core.guard', 100)}`,
     `Passes=${passes}`,
     `Guided=${values['prism-core.guided'] === true || values['prism-core.guided'] === 1 || values['prism-core.guided'] === '1' ? 1 : 0}`,
+    `NetScale=${(Math.max(50, Math.min(100, Number(values['prism-core.netScale'] ?? 100))) / 100).toFixed(2)}`,
     'KeyToggle=F8',
     'KeyCadence=F2',
     'KeyAsync=F3',
@@ -97,6 +99,7 @@ export function coreIni(values: Values): string {
 function recommendedPreset(gpu: GpuInfo | null): PresetId {
   switch (gpu?.tier) {
     case 'flagship':
+      return 'flagship';
     case 'high':
       return 'high';
     case 'mainstream':
@@ -168,7 +171,8 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const savedStyle = store.settings().styles[game.id];
   const style = styleById(req.style ?? savedStyle ?? profile?.style ?? 'realistic');
   // Prism Core only (the add-on routes were removed in 1.2): a tier picks the Core values.
-  const preset: PresetId = req.preset && PRESETS.some((p) => p.id === req.preset) ? req.preset : recommendedPreset(gpu);
+  const fits = (id: PresetId | undefined) => Boolean(id) && PRESETS.some((p) => p.id === id && !tierLocked(p, gpu?.name));
+  const preset: PresetId = req.preset && PRESETS.some((p) => p.id === req.preset) ? req.preset : fits(profile?.coreTier) ? profile!.coreTier! : recommendedPreset(gpu);
   const route = chooseRoute(analysis);
   const plugins = pluginsForRoute('prism-core', req.plugins ?? ['nr-prism-core']);
   const values: Values = { ...resolveValues(preset), ...(profile?.coreValues ?? {}), ...(req.overrides ?? {}) };
@@ -181,6 +185,8 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   if (analysis.recommendedRoute === 'blocked') blockers.push(analysis.routeReason);
   else if (route === 'blocked') blockers.push('这个游戏用不了 Prism Core：它需要 DX12、64 位并且自带 DLSS 的游戏。');
   if (!analysis.exe) blockers.push('没有找到游戏主程序。');
+  const lock = tierLocked(PRESETS.find((p) => p.id === preset)!, gpu?.name);
+  if (lock) blockers.push(lock);
   if (Number(values['prism-core.passes'] ?? 2) >= 3) warnings.push('3 遍以上是实验性质的游乐场：开销成倍增加，画面容易过度，不建议实际游玩。');
   if (route === 'prism-core' && analysis.exe) {
     const exeDir = path.dirname(analysis.exe);

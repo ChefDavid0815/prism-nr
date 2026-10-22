@@ -28,6 +28,7 @@ export const PLUGINS: PluginDef[] = [
     params: [
       { key: 'prism-core.cadence', label: '网络节奏', help: '网络每几帧跑一次。每 2 帧是默认：和 1.1.1 的每 4 帧相比，运动中的误差少约三成、闪烁少约四成；每帧没有携带误差但开销最高。', type: 'choice', choices: [{ value: '1', label: '每帧' }, { value: '2', label: '每 2 帧' }, { value: '3', label: '每 3 帧' }, { value: '4', label: '每 4 帧' }], default: '2' },
       { key: 'prism-core.passes', label: '网络遍数', help: '每次运行网络跑几遍：第二遍在第一遍的结果上再跑一次，改动更明显，网络开销随遍数成倍增加。3 遍以上是实验性质的游乐场，不建议实际游玩。', type: 'choice', choices: [1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: `${n} 遍` })), default: '2' },
+      { key: 'prism-core.netScale', label: '网络分辨率', help: '网络在原生还是 75% 分辨率上跑。75% 的改动按原生画面的边缘放大回来，开销约降到一半多一点；只在每帧同步时生效。', type: 'choice', choices: [{ value: '100', label: '原生' }, { value: '75', label: '75%' }], default: '100' },
       { key: 'prism-core.async', label: '异步计算队列', help: '网络在独立队列上和下一帧并行跑。节奏 2 帧以上生效。', type: 'toggle', default: true },
       { key: 'prism-core.intensity', label: '改动强度', help: '100% 是网络的完整答案，高于 100% 把改动再放大，最高 300%。', type: 'range', min: 0, max: 300, step: 5, unit: '%', default: 200 },
       { key: 'prism-core.guard', label: '角色守护', help: '肤色和高饱和颜色上的色度改动被压住多少。0 等于不干预。', type: 'range', min: 0, max: 100, step: 5, unit: '%', default: 100 },
@@ -279,18 +280,31 @@ export const PLUGINS: PluginDef[] = [
 ];
 
 // Prism Core tiers. Frame rates: Forza Horizon 6 benchmark, RTX 5090 Laptop, 2560×1600, DLSS
-// Quality, 2× frame generation; Prism off 109 FPS. Intensity costs nothing; cadence and passes do.
+// Quality, 2× frame generation; Prism off 109 FPS. Intensity costs nothing; cadence, passes and
+// the network's resolution do. Every-frame tiers carry nothing, so they never trail.
 export const PRESETS: PresetDef[] = [
   {
     id: 'extreme',
     name: '极致',
-    forTiers: ['flagship'],
-    gpuLabel: '每帧 · 2 遍 · 210%',
-    summary: '网络每帧跑两遍，改动拉到 210%，配 Prism 调色。效果最强，开销也最大。',
+    forTiers: [],
+    gpuLabel: '每帧 · 2 遍 · 原生 · 210%',
+    summary: '网络每帧在原生分辨率跑两遍，不复用旧结果：完全没有拖影，画面表现最好，开销也最大。谨慎开启。',
     nativeRoutePreference: ['prism-core'],
     plugins: ['nr-prism-core'],
-    values: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 210, 'prism-core.guard': 100 },
-    expectation: '地平线 6 性能测试（RTX 5090 Laptop，2560×1600，DLSS 画质 + 2× 帧生成）：关闭 Prism 109 帧，极致档约 75 帧。',
+    values: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 210, 'prism-core.guard': 100, 'prism-core.netScale': '100' },
+    expectation: '地平线 6 性能测试（RTX 5090 Laptop，2560×1600，DLSS 画质 + 2× 帧生成）：关闭 Prism 109 帧，极致档 68 帧，零卡顿。',
+    requiresGpu: { pattern: '5090', reason: '极致档只在 RTX 5090 上开放：网络每帧在原生分辨率跑两遍，其他显卡的帧率会掉得太多。可以用旗舰档。' },
+  },
+  {
+    id: 'flagship',
+    name: '旗舰',
+    forTiers: ['flagship'],
+    gpuLabel: '每帧 · 2 遍 · 75% · 240%',
+    summary: '网络每帧在 75% 分辨率跑两遍，改动按原生画面的边缘放大回来：同样没有拖影，比极致快约 17%。',
+    nativeRoutePreference: ['prism-core'],
+    plugins: ['nr-prism-core'],
+    values: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 240, 'prism-core.guard': 100, 'prism-core.netScale': '75' },
+    expectation: '同一测试：极致档渲染 34–35 帧，旗舰档 40.8 帧（+17%），帧时间同样平稳。',
   },
   {
     id: 'high',
@@ -327,11 +341,20 @@ export const PRESETS: PresetDef[] = [
   },
 ];
 
-const CORE_TIER_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard'];
+const CORE_TIER_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard', 'prism-core.netScale'];
 
 /** The tier whose Core values these are, or undefined for a custom mix. */
 export function tierOf(values: Record<string, number | boolean | string>): PresetDef | undefined {
-  return PRESETS.find((p) => CORE_TIER_KEYS.every((k) => String(values[k] ?? resolveValues(p.id)[k]) === String(p.values[k])));
+  return PRESETS.find((p) => {
+    const ref = resolveValues(p.id);
+    return CORE_TIER_KEYS.every((k) => String(values[k] ?? ref[k]) === String(ref[k]));
+  });
+}
+
+/** Whether a tier may run on this GPU (by name); the reason when it may not. */
+export function tierLocked(p: PresetDef, gpuName: string | undefined): string | null {
+  if (!p.requiresGpu) return null;
+  return gpuName && new RegExp(p.requiresGpu.pattern, 'i').test(gpuName) ? null : p.requiresGpu.reason;
 }
 
 export const LEGACY_PRESET_NAMES: Record<string, string> = { core: 'Prism Core', flagship: '旗舰画质（旧版）', balanced: '均衡（旧版）', fluid: '流畅优先（旧版）', faithful: '原片优先（旧版）' };
