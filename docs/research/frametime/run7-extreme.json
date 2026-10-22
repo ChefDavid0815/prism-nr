@@ -1,0 +1,202 @@
+[
+  {
+    "label": "off",
+    "presentFps": 0,
+    "presentP99": 0,
+    "presentSd": 0,
+    "presents": 0,
+    "renderFps": 56.4,
+    "renderP99": 34.23,
+    "renderSd": 5.98,
+    "renders": 678,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "off",
+      "Enabled": 0
+    }
+  },
+  {
+    "label": "ext-sync",
+    "presentFps": 32.7,
+    "presentP99": 33.93,
+    "presentSd": 1.46,
+    "presents": 393,
+    "renderFps": 32.7,
+    "renderP99": 34.04,
+    "renderSd": 1.42,
+    "renders": 393,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "ext-sync",
+      "Async": 0
+    }
+  },
+  {
+    "label": "ext-async",
+    "presentFps": 38.4,
+    "presentP99": 32.68,
+    "presentSd": 5.18,
+    "presents": 462,
+    "renderFps": 38.5,
+    "renderP99": 32.03,
+    "renderSd": 4.73,
+    "renders": 462,
+    "launches": 265,
+    "lands": 265,
+    "ageAvg": 1.74,
+    "ageMax": 2,
+    "config": {
+      "Label": "ext-async",
+      "Async": 1,
+      "Stagger": 0
+    }
+  },
+  {
+    "label": "ext-async-stag",
+    "presentFps": 42.5,
+    "presentP99": 26.85,
+    "presentSd": 2.28,
+    "presents": 510,
+    "renderFps": 42.5,
+    "renderP99": 26.99,
+    "renderSd": 2.28,
+    "renders": 510,
+    "launches": 170,
+    "lands": 170,
+    "ageAvg": 3,
+    "ageMax": 3,
+    "config": {
+      "Label": "ext-async-stag",
+      "Async": 1,
+      "Stagger": 1
+    }
+  },
+  {
+    "label": "ext-sync-cap",
+    "presentFps": 31.3,
+    "presentP99": 34.44,
+    "presentSd": 1.47,
+    "presents": 376,
+    "renderFps": 31.3,
+    "renderP99": 34.3,
+    "renderSd": 1.44,
+    "renders": 376,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "ext-sync-cap",
+      "Async": 0,
+      "FpsCap": -1
+    }
+  },
+  {
+    "label": "ext-async-cap",
+    "presentFps": 31.8,
+    "presentP99": 34.03,
+    "presentSd": 0.92,
+    "presents": 382,
+    "renderFps": 31.8,
+    "renderP99": 33.96,
+    "renderSd": 0.89,
+    "renders": 382,
+    "launches": 382,
+    "lands": 382,
+    "ageAvg": 1,
+    "ageMax": 1,
+    "config": {
+      "Label": "ext-async-cap",
+      "Async": 1,
+      "Stagger": 0,
+      "FpsCap": -1
+    }
+  },
+  {
+    "label": "high-stag-cap",
+    "presentFps": 35.7,
+    "presentP99": 33.66,
+    "presentSd": 2.3,
+    "presents": 429,
+    "renderFps": 35.7,
+    "renderP99": 33.77,
+    "renderSd": 2.29,
+    "renders": 429,
+    "launches": 214,
+    "lands": 214,
+    "ageAvg": 2,
+    "ageMax": 2,
+    "config": {
+      "Label": "high-stag-cap",
+      "Cadence": 2,
+      "Async": 1,
+      "Stagger": 1,
+      "Intensity": "2.00",
+      "FpsCap": -1
+    }
+  },
+  {
+    "label": "ext-async-b",
+    "presentFps": 39.1,
+    "presentP99": 32.94,
+    "presentSd": 5.5,
+    "presents": 469,
+    "renderFps": 39.1,
+    "renderP99": 32.17,
+    "renderSd": 4.79,
+    "renders": 469,
+    "launches": 234,
+    "lands": 234,
+    "ageAvg": 2,
+    "ageMax": 2,
+    "config": {
+      "Label": "ext-async-b",
+      "Async": 1,
+      "Stagger": 0
+    }
+  },
+  {
+    "label": "ext-sync-b",
+    "presentFps": 32.1,
+    "presentP99": 34.64,
+    "presentSd": 1.54,
+    "presents": 386,
+    "renderFps": 32.1,
+    "renderP99": 34.47,
+    "renderSd": 1.51,
+    "renders": 386,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "ext-sync-b",
+      "Async": 0
+    }
+  },
+  {
+    "label": "off-b",
+    "presentFps": 60.6,
+    "presentP99": 33.58,
+    "presentSd": 4.13,
+    "presents": 728,
+    "renderFps": 60.6,
+    "renderP99": 33.59,
+    "renderSd": 4.11,
+    "renders": 728,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "off-b",
+      "Enabled": 0
+    }
+  }
+]

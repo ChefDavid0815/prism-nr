@@ -1,0 +1,14 @@
+{
+  "seconds": 12,
+  "base": { "Land": "poll", "Intensity": "2.00", "Passes": 2, "FrameLog": 1 },
+  "runs": [
+    { "Label": "off", "Enabled": 0 },
+    { "Label": "high-flat", "Cadence": 2, "Async": 1, "Stagger": 0 },
+    { "Label": "high-stagger", "Cadence": 2, "Async": 1, "Stagger": 1 },
+    { "Label": "extreme", "Cadence": 1, "Async": 0 },
+    { "Label": "std-1pass", "Cadence": 2, "Async": 1, "Passes": 1 },
+    { "Label": "high-stagger-b", "Cadence": 2, "Async": 1, "Stagger": 1 },
+    { "Label": "high-flat-b", "Cadence": 2, "Async": 1, "Stagger": 0 },
+    { "Label": "off-b", "Enabled": 0 }
+  ]
+}

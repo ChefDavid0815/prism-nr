@@ -1,0 +1,165 @@
+[
+  {
+    "label": "off",
+    "presentFps": 64.7,
+    "presentP99": 19.65,
+    "presentSd": 2.43,
+    "presents": 777,
+    "renderFps": 64.7,
+    "renderP99": 19.5,
+    "renderSd": 2.42,
+    "renders": 777,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "off",
+      "Enabled": 0
+    }
+  },
+  {
+    "label": "high-flat",
+    "presentFps": 39.6,
+    "presentP99": 33.64,
+    "presentSd": 5.21,
+    "presents": 476,
+    "renderFps": 39.6,
+    "renderP99": 32.93,
+    "renderSd": 4.57,
+    "renders": 476,
+    "launches": 238,
+    "lands": 238,
+    "ageAvg": 1.98,
+    "ageMax": 2,
+    "config": {
+      "Label": "high-flat",
+      "Cadence": 2,
+      "Async": 1,
+      "Stagger": 0
+    }
+  },
+  {
+    "label": "high-stagger",
+    "presentFps": 40.1,
+    "presentP99": 29.15,
+    "presentSd": 1.83,
+    "presents": 481,
+    "renderFps": 40.1,
+    "renderP99": 28.86,
+    "renderSd": 1.79,
+    "renders": 481,
+    "launches": 240,
+    "lands": 240,
+    "ageAvg": 2,
+    "ageMax": 2,
+    "config": {
+      "Label": "high-stagger",
+      "Cadence": 2,
+      "Async": 1,
+      "Stagger": 1
+    }
+  },
+  {
+    "label": "extreme",
+    "presentFps": 33.4,
+    "presentP99": 33.07,
+    "presentSd": 1.39,
+    "presents": 401,
+    "renderFps": 33.4,
+    "renderP99": 32.99,
+    "renderSd": 1.36,
+    "renders": 401,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "extreme",
+      "Cadence": 1,
+      "Async": 0
+    }
+  },
+  {
+    "label": "std-1pass",
+    "presentFps": 36.3,
+    "presentP99": 30.87,
+    "presentSd": 1.58,
+    "presents": 436,
+    "renderFps": 36.3,
+    "renderP99": 30.6,
+    "renderSd": 1.47,
+    "renders": 436,
+    "launches": 218,
+    "lands": 218,
+    "ageAvg": 1,
+    "ageMax": 1,
+    "config": {
+      "Label": "std-1pass",
+      "Cadence": 2,
+      "Async": 1,
+      "Passes": 1
+    }
+  },
+  {
+    "label": "high-stagger-b",
+    "presentFps": 46.9,
+    "presentP99": 24.62,
+    "presentSd": 1.88,
+    "presents": 564,
+    "renderFps": 46.9,
+    "renderP99": 24.53,
+    "renderSd": 1.91,
+    "renders": 564,
+    "launches": 188,
+    "lands": 188,
+    "ageAvg": 3,
+    "ageMax": 3,
+    "config": {
+      "Label": "high-stagger-b",
+      "Cadence": 2,
+      "Async": 1,
+      "Stagger": 1
+    }
+  },
+  {
+    "label": "high-flat-b",
+    "presentFps": 40,
+    "presentP99": 33.29,
+    "presentSd": 5.57,
+    "presents": 480,
+    "renderFps": 40,
+    "renderP99": 32.75,
+    "renderSd": 5.08,
+    "renders": 480,
+    "launches": 240,
+    "lands": 240,
+    "ageAvg": 2,
+    "ageMax": 2,
+    "config": {
+      "Label": "high-flat-b",
+      "Cadence": 2,
+      "Async": 1,
+      "Stagger": 0
+    }
+  },
+  {
+    "label": "off-b",
+    "presentFps": 63.8,
+    "presentP99": 19.79,
+    "presentSd": 2.49,
+    "presents": 767,
+    "renderFps": 63.8,
+    "renderP99": 19.6,
+    "renderSd": 2.43,
+    "renders": 767,
+    "launches": 0,
+    "lands": 0,
+    "ageAvg": 0,
+    "ageMax": 0,
+    "config": {
+      "Label": "off-b",
+      "Enabled": 0
+    }
+  }
+]

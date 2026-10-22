@@ -431,7 +431,21 @@ uint64_t netTsFreq = 0;
 // Asynchronous network (F3): its own compute queue, launched on frame t, landed on frame t+1.
 bool asyncMode = true;  // measured fastest with cadence 4 (CONTROL, RTX 5090 Laptop)
 ID3D12CommandQueue* computeQueue = nullptr;
-ID3D12CommandAllocator* computeAlloc[2] = {};
+// The state of one run of the network's passes; a run can span several command lists.
+struct PassRun { int n = 0, next = 0; bool reset = false; ID3D12Resource* in = nullptr; bool readable[2] = {}; };
+// Staggered passes (Stagger=1, the default): the passes of one launch go to the compute queue on
+// consecutive frames, one per frame, so no frame shares the GPU with more than one pass. Each
+// submitted compute list is a step; its allocator is reused once the step fence passed it.
+bool stagger = true;
+constexpr int kAllocs = 8;
+ID3D12CommandAllocator* computeAlloc[kAllocs] = {};
+uint64_t allocStep[kAllocs] = {};
+ID3D12Fence* fenceStep = nullptr;    // our queue signals: a step has run
+uint64_t stepId = 0;                 // the last step recorded
+uint64_t stepSubmitted = 0;          // the last step submitted to our queue
+ID3D12CommandList* stepList = nullptr;  // the game list the recorded step rides on
+bool stepFinal = false;              // that step finishes the launch
+PassRun asyncRun;                    // the passes of the launch in flight
 ID3D12GraphicsCommandList* computeList = nullptr;
 ID3D12Fence* fenceLaunch = nullptr;  // the game's queue signals: the launch frame's list has run
 ID3D12Fence* fenceDone = nullptr;    // our queue signals: the network has run
@@ -439,7 +453,6 @@ void* asyncHandle = nullptr;
 OwnedParams asyncParams;
 ID3D12Resource *motionCopy = nullptr, *depthCopy = nullptr;  // the launch frame's, kept to landing
 std::mutex asyncMutex;
-ID3D12CommandList* launchList = nullptr;  // waiting for the game to submit it
 ID3D12CommandList* landList = nullptr;    // must wait for the network before it runs
 uint64_t launchId = 0, submittedId = 0, landId = 0;
 bool inFlight = false;
@@ -447,25 +460,28 @@ using ExecuteFn = void (STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12Com
 ExecuteFn realExecute = nullptr;
 
 void STDMETHODCALLTYPE HookExecute(ID3D12CommandQueue* q, UINT n, ID3D12CommandList* const* lists) {
-  bool launch = false, land = false;
-  uint64_t lid = 0, did = 0;
+  bool step = false, final = false, land = false;
+  uint64_t sid = 0, lid = 0, did = 0;
   {
     std::lock_guard<std::mutex> lock(asyncMutex);
     for (UINT i = 0; i < n; ++i) {
       if (lists[i] == landList && landList) { land = true; did = landId; landList = nullptr; }
-      if (lists[i] == launchList && launchList) { launch = true; lid = launchId; launchList = nullptr; }
+      if (lists[i] == stepList && stepList) { step = true; sid = stepId; final = stepFinal; lid = launchId; stepList = nullptr; }
     }
   }
   if (land) q->Wait(fenceDone, did);  // the landing frame reads the network's output
   realExecute(q, n, lists);
-  if (launch) {
-    q->Signal(fenceLaunch, lid);
-    computeQueue->Wait(fenceLaunch, lid);
+  if (step) {
+    // The step starts once this frame's list (the proxy, copies or the step before) has run.
+    q->Signal(fenceLaunch, sid);
+    computeQueue->Wait(fenceLaunch, sid);
     ID3D12CommandList* cl[] = {computeList};
     computeQueue->ExecuteCommandLists(1, cl);
-    computeQueue->Signal(fenceDone, lid);
+    computeQueue->Signal(fenceStep, sid);
+    if (final) computeQueue->Signal(fenceDone, lid);
     std::lock_guard<std::mutex> lock(asyncMutex);
-    submittedId = lid;
+    stepSubmitted = sid;
+    if (final) submittedId = lid;
   }
 }
 void* nrHandle = nullptr;
@@ -658,7 +674,10 @@ bool SetupAsync(const UpscaleCall& c) {
     if (FAILED(hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, __uuidof(ID3D12CommandAllocator), (void**)&a))) return Fail("compute allocator", hr);
   if (FAILED(hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, computeAlloc[0], nullptr, __uuidof(ID3D12GraphicsCommandList), (void**)&computeList))) return Fail("compute list", hr);
   if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)&fenceLaunch)) ||
+      FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)&fenceStep)) ||
       FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)&fenceDone))) return Fail("fences");
+  stepId = stepSubmitted = 0;
+  for (uint64_t& s : allocStep) s = 0;
   // A feature built and evaluated on the compute queue (NGX keeps a feature to its queue).
   asyncParams.vtable = ownedVtable;
   asyncParams.values = nrParams.values;  // the same creation parameters
@@ -717,8 +736,9 @@ void ReleaseAsync() {
   for (void*& f : moreAsync.h) { BuryNgx(f); f = nullptr; }
   Bury(computeList);
   for (auto& a : computeAlloc) { Bury(a); a = nullptr; }
-  Bury(computeQueue); Bury(fenceLaunch); Bury(fenceDone);
-  computeList = nullptr; computeQueue = nullptr; fenceLaunch = nullptr; fenceDone = nullptr;
+  Bury(computeQueue); Bury(fenceLaunch); Bury(fenceStep); Bury(fenceDone);
+  computeList = nullptr; computeQueue = nullptr; fenceLaunch = nullptr; fenceStep = nullptr; fenceDone = nullptr;
+  stepList = nullptr; asyncRun = PassRun{};
 }
 
 // Everything that depends on the output or render size, for a rebuild at a new size. Nothing is
@@ -760,14 +780,30 @@ double NowMs() {
 
 // A frame cap on the rendered frames: sleep on a high-resolution timer to about 1 ms before the
 // target, then spin. Falling behind restarts the schedule instead of bursting to catch up.
+// FpsCap=-1 is automatic: the cap follows the frames' own work time (the interval minus the
+// limiter's sleep), its 85th percentile plus 2%, re-picked every 60 frames. The slow frames of a
+// cycle set the pace and the fast ones wait instead of running ahead: the saw-tooth goes flat.
+double autoPeriod = 0.0;
+
 void Pace() {
-  static double next = 0.0;
-  if (fpsCap <= 0) { next = 0.0; paceSleptMs = 0.0; return; }
+  static double next = 0.0, lastExit = 0.0;
+  static std::vector<float> work;
+  if (fpsCap == 0) { next = 0.0; lastExit = 0.0; autoPeriod = 0.0; work.clear(); paceSleptMs = 0.0; return; }
   static HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-  const double period = 1000.0 / fpsCap;
   double now = NowMs();
+  if (fpsCap < 0) {
+    if (lastExit > 0.0 && now - lastExit < 250.0) work.push_back(float(now - lastExit));
+    if (work.size() >= 60) {
+      std::nth_element(work.begin(), work.begin() + work.size() * 85 / 100, work.end());
+      const double p85 = work[work.size() * 85 / 100] * 1.02;
+      autoPeriod = autoPeriod == 0.0 ? p85 : autoPeriod * 0.7 + p85 * 0.3;
+      work.clear();
+    }
+  }
+  const double period = fpsCap > 0 ? 1000.0 / fpsCap : autoPeriod;
   paceSleptMs = 0.0;
-  if (next == 0.0 || now >= next) { next = now + period; return; }
+  if (period <= 0.0) { lastExit = NowMs(); return; }
+  if (next == 0.0 || now >= next) { next = now + period; lastExit = now; return; }
   paceSleptMs = next - now;
   while (now < next) {
     const double left = next - now;
@@ -782,6 +818,7 @@ void Pace() {
     now = NowMs();
   }
   next += period;
+  lastExit = now;
 }
 
 // Frame-time series: presents (every displayed frame, generated ones included) and rendered
@@ -832,9 +869,9 @@ void StatsTick() {
   if (statsEnd == 0.0) { clear(); statsEnd = t + statsSec * 1000.0; return; }
   if (t < statsEnd) return;
   const Summary p = Summarise(sPresent.v), r = Summarise(sRender.v);
-  Log("stats [%s] present %.1f fps p99 %.2f ms sd %.2f ms (%zu) | render %.1f fps p99 %.2f ms sd %.2f ms (%zu) | network %u launches, %u lands, age %.2f avg %u max | interval %.2f | network gpu %.2f ms",
+  Log("stats [%s] present %.1f fps p99 %.2f ms sd %.2f ms (%zu) | render %.1f fps p99 %.2f ms sd %.2f ms (%zu) | network %u launches, %u lands, age %.2f avg %u max | interval %.2f | network gpu %.2f ms | cap %.1f fps",
       label.c_str(), p.fps, p.p99, p.sd, p.n, r.fps, r.p99, r.sd, r.n, statLaunches, statLands, statLands ? double(statAgeSum) / statLands : 0.0, statAgeMax,
-      statLaunches ? double(r.n) / statLaunches : 0.0, netGpuMs);
+      statLaunches ? double(r.n) / statLaunches : 0.0, netGpuMs, fpsCap > 0 ? double(fpsCap) : autoPeriod > 0.0 ? 1000.0 / autoPeriod : 0.0);
   if (frameCsv) std::fflush(frameCsv);
   clear();
   statsEnd = t + statsSec * 1000.0;
@@ -906,11 +943,13 @@ void UavBarrier(ID3D12GraphicsCommandList* l) {
   l->ResourceBarrier(1, &br);
 }
 
-// The network's passes on one list: `first` runs on the proxy, later passes on the pass before,
-// the last one writes `neural`. A feature for a later pass is made on first use (and starts with a
-// reset); if it can't be made, the passes made so far are the result.
-ngx::Result EvaluatePasses(ID3D12GraphicsCommandList* l, void* first, PassFeatures& more, void* p, bool reset) {
-  const auto SRV = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, UAV = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+// One run of the network's passes (PassRun): `first` runs on the proxy, later passes on the pass
+// before, the last one writes `neural`. The passes in between ping-pong through two textures; one
+// read by the pass before goes back to UAV before it is written again.
+
+// Starts a run: makes the features of the later passes on first use (each starts with a reset); if
+// one can't be made, the passes made so far are the run.
+ngx::Result BeginPasses(ID3D12GraphicsCommandList* l, PassFeatures& more, void* p, bool reset, PassRun& run) {
   int n = passes;
   for (int i = 1; i < n; ++i) {
     if (more.h[i - 1]) continue;
@@ -918,24 +957,70 @@ ngx::Result EvaluatePasses(ID3D12GraphicsCommandList* l, void* first, PassFeatur
     if (cr != ngx::kSuccess || !more.h[i - 1]) { Log("pass %d feature 0x%08x: running %d pass(es)", i + 1, cr, i); more.h[i - 1] = nullptr; passes = n = i; break; }
     more.fresh[i - 1] = true;
   }
-  // The passes in between ping-pong through two textures; one read by the pass before goes back
-  // to UAV before it is written again.
-  ID3D12Resource* in = proxy;
-  bool readable[2] = {};
+  run = PassRun{};
+  run.n = n; run.reset = reset; run.in = proxy;
+  return ngx::kSuccess;
+}
+
+// Runs the run's passes up to `until` (exclusive) on this list; the last pass returns the
+// in-between textures to UAV.
+ngx::Result RunPasses(ID3D12GraphicsCommandList* l, void* first, PassFeatures& more, void* p, PassRun& run, int until) {
+  const auto SRV = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, UAV = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
   ngx::Result r = ngx::kSuccess;
-  for (int i = 0; i < n && r == ngx::kSuccess; ++i) {
-    const int m = i & 1;
-    ID3D12Resource* out = i == n - 1 ? neural : mids[m];
-    if (out == mids[m] && readable[m]) { Barrier(l, out, SRV, UAV); readable[m] = false; }
-    bool rs = reset;
+  for (; run.next < std::min(until, run.n) && r == ngx::kSuccess; ++run.next) {
+    const int i = run.next, m = i & 1;
+    ID3D12Resource* out = i == run.n - 1 ? neural : mids[m];
+    if (out == mids[m] && run.readable[m]) { Barrier(l, out, SRV, UAV); run.readable[m] = false; }
+    bool rs = run.reset;
     if (i > 0) { rs = rs || more.fresh[i - 1]; more.fresh[i - 1] = false; }
-    ngx::SetRes(p, "DLSSNR.Color", in); ngx::SetRes(p, "DLSSNR.Output", out);
+    ngx::SetRes(p, "DLSSNR.Color", run.in); ngx::SetRes(p, "DLSSNR.Output", out);
     ngx::SetI(p, "DLSSNR.Reset", rs ? 1 : 0);
     r = nrEvaluate(l, i == 0 ? first : more.h[i - 1], p, nullptr);
-    if (i < n - 1) { Barrier(l, out, UAV, SRV); readable[m] = true; }
-    in = out;
+    if (i < run.n - 1) { Barrier(l, out, UAV, SRV); run.readable[m] = true; }
+    run.in = out;
   }
-  for (int m = 0; m < 2; ++m) if (readable[m]) Barrier(l, mids[m], SRV, UAV);
+  if (run.next >= run.n)
+    for (int m = 0; m < 2; ++m) if (run.readable[m]) { Barrier(l, mids[m], SRV, UAV); run.readable[m] = false; }
+  return r;
+}
+
+// All passes on one list.
+ngx::Result EvaluatePasses(ID3D12GraphicsCommandList* l, void* first, PassFeatures& more, void* p, bool reset) {
+  PassRun run;
+  BeginPasses(l, more, p, reset, run);
+  return RunPasses(l, first, more, p, run, run.n);
+}
+
+// Opens the compute list for the next step, on an allocator whose last step has finished (eight
+// steps back; a wait here would mean the GPU is that far behind).
+void OpenStep() {
+  ++stepId;
+  const int a = int(stepId % kAllocs);
+  if (allocStep[a] && fenceStep->GetCompletedValue() < allocStep[a]) {
+    HANDLE ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    fenceStep->SetEventOnCompletion(allocStep[a], ev);
+    WaitForSingleObject(ev, 1000);
+    CloseHandle(ev);
+  }
+  allocStep[a] = stepId;
+  computeAlloc[a]->Reset();
+  computeList->Reset(computeAlloc[a], nullptr);
+}
+
+int lastStepPasses = 1;  // passes in the step whose time the network stamps hold
+
+// Records the launch's passes up to `until` on the open step, timed, and closes it.
+ngx::Result RunStep(int until) {
+  const UINT q0 = UINT(stepId & 1) * 2;
+  if (netQueries) computeList->EndQuery(netQueries, D3D12_QUERY_TYPE_TIMESTAMP, q0);
+  const int before = asyncRun.next;
+  const ngx::Result r = RunPasses(computeList, asyncHandle, moreAsync, &asyncParams, asyncRun, until);
+  if (netQueries && netStamps) {
+    computeList->EndQuery(netQueries, D3D12_QUERY_TYPE_TIMESTAMP, q0 + 1);
+    computeList->ResolveQueryData(netQueries, D3D12_QUERY_TYPE_TIMESTAMP, q0, 2, netStamps, UINT64(q0) * 8);
+  }
+  computeList->Close();
+  lastStepPasses = std::max(asyncRun.next - before, 1);
   return r;
 }
 
@@ -978,6 +1063,7 @@ void LoadConfig() {
   enabled = Num(L"Enabled", enabled ? 1 : 0, 0, 1) != 0;
   cadence = int(Num(L"Cadence", cadence, 0, 8));
   passes = int(Num(L"Passes", passes, 1, kMaxPasses));
+  stagger = Num(L"Stagger", stagger ? 1 : 0, 0, 1) != 0;
   {
     const std::wstring land = Get(L"Land");
     if (!land.empty()) landPoll = !lstrcmpiW(land.c_str(), L"poll");
@@ -988,7 +1074,7 @@ void LoadConfig() {
     const std::wstring lb = Get(L"Label");
     label.assign(lb.begin(), lb.end());  // ASCII labels
   }
-  fpsCap = int(Num(L"FpsCap", fpsCap, 0, 500));
+  fpsCap = int(Num(L"FpsCap", fpsCap, -1, 500));  // -1: automatic (see Pace)
   stability = float(Num(L"Stability", stability, 0, 0.9));
   {
     const int asked = int(Num(L"Record", 0, 0, 240));
@@ -1199,8 +1285,9 @@ bool PipelineRecord(const UpscaleCall& c) {
       bool busy = false;
       {
         std::lock_guard<std::mutex> lock(asyncMutex);
-        busy = inFlight && fenceDone && fenceDone->GetCompletedValue() < launchId && waited < 120;
-        if (!busy) { inFlight = false; launchList = nullptr; landList = nullptr; }
+        // Steps submitted to our queue must finish; steps not yet recorded are simply dropped.
+        busy = inFlight && fenceStep && fenceStep->GetCompletedValue() < stepSubmitted && waited < 120;
+        if (!busy) { inFlight = false; stepList = nullptr; landList = nullptr; asyncRun = PassRun{}; }
       }
       if (busy) { ++waited; return true; }
       Log("output %llux%u, render %ux%u (was %ux%u, %ux%u): rebuilding", (unsigned long long)nd.Width, nd.Height, c.renderWidth, c.renderHeight, w, h, builtRW, builtRH);
@@ -1230,7 +1317,9 @@ bool PipelineRecord(const UpscaleCall& c) {
     builtPriority = netPriority;
   }
   bool landNow = false, launchNow = false;
-  const bool async = asyncMode && historyValid && !c.reset && cadence != 1;
+  // Every frame can run asynchronous too: the network of frame t overlaps frame t+1 and lands a
+  // frame later (Cadence=1 with Async=1).
+  const bool async = asyncMode && historyValid && !c.reset;
   if (async) {
     std::lock_guard<std::mutex> lock(asyncMutex);
     // Land once the launch was submitted; in poll mode only once the network has also finished on
@@ -1239,8 +1328,8 @@ bool PipelineRecord(const UpscaleCall& c) {
     const int interval = cadence != 0 ? cadence : fpsCap > 0 ? adaptK : 1;  // uncapped adaptive: as soon as landed
     // A landing frame may launch again right away: the landed edit is baked apart first.
     launchNow = (!inFlight || landNow) && frame - lastLaunchFrame >= UINT64(interval) && !(cadence == 0 && adaptHold > 0);
-    // A network still running on the frame after its launch did not fit the idle time.
-    if (inFlight && !landNow && frame == lastLaunchFrame + 1) ++adaptLate;
+    // A network still running on the frame its last pass should have landed did not fit the idle time.
+    if (inFlight && !landNow && frame == lastLaunchFrame + UINT64(stagger ? std::max(asyncRun.n, 1) : 1)) ++adaptLate;
   }
   const bool refresh = async ? false : (!historyValid || c.reset || cadence <= 1 || frame % UINT64(cadence) == 0);
   {
@@ -1325,10 +1414,12 @@ bool PipelineRecord(const UpscaleCall& c) {
       inFlight = false;
     }
     if (netStampData && netTsFreq && landPoll) {
-      // Poll landing only lands after the fence passed, so this launch's stamps are in place.
-      const UINT q0 = UINT((launchId - 1) & 1) * 2;
+      // Poll landing only lands after the fence passed, so the last step's stamps are in place;
+      // scaled to the whole launch when its passes were staggered.
+      const UINT q0 = UINT(stepId & 1) * 2;
       const uint64_t a = netStampData[q0], b = netStampData[q0 + 1];
-      if (b > a) netGpuMs = netGpuMs * 0.8 + 0.2 * (double(b - a) * 1000.0 / double(netTsFreq));
+      const double perLaunch = double(b - a) * 1000.0 / double(netTsFreq) * asyncRun.n / lastStepPasses;
+      if (b > a) netGpuMs = netGpuMs * 0.8 + 0.2 * perLaunch;
     }
     {
       std::lock_guard<std::mutex> lock(statsMutex);
@@ -1369,8 +1460,7 @@ bool PipelineRecord(const UpscaleCall& c) {
       Barrier(l, motionCopy, UAV, SRV);
       Barrier(l, depthCopy, UAV, SRV);
       // Record the network on the compute list now; it is submitted when the game submits this list.
-      computeAlloc[launchId & 1]->Reset();
-      computeList->Reset(computeAlloc[launchId & 1], nullptr);
+      OpenStep();
       void* ap = &asyncParams;
       ngx::SetRes(ap, "DLSSNR.Color", proxy); ngx::SetRes(ap, "DLSSNR.Output", neural);
       ngx::SetRes(ap, "DLSSNR.MVec", motionCopy); ngx::SetRes(ap, "DLSSNR.Depth", depthCopy);
@@ -1391,19 +1481,15 @@ bool PipelineRecord(const UpscaleCall& c) {
       ngx::SetI(ap, "DLSSNR.DepthInverted", (gameCreateFlags & (1 << 3)) ? 1 : 0);
       ngx::SetI(ap, "DLSSNR.Enabled", 1);
       ngx::SetF(ap, "DLSSNR.Intensity", 1.f);
-      const UINT q0 = UINT(launchId & 1) * 2;
-      if (netQueries) computeList->EndQuery(netQueries, D3D12_QUERY_TYPE_TIMESTAMP, q0);
-      const ngx::Result ar = EvaluatePasses(computeList, asyncHandle, moreAsync, ap, launchId == 0);
-      if (netQueries && netStamps) {
-        computeList->EndQuery(netQueries, D3D12_QUERY_TYPE_TIMESTAMP, q0 + 1);
-        computeList->ResolveQueryData(netQueries, D3D12_QUERY_TYPE_TIMESTAMP, q0, 2, netStamps, UINT64(q0) * 8);
-      }
-      computeList->Close();
+      BeginPasses(computeList, moreAsync, ap, launchId == 0, asyncRun);
+      // Staggered: the first pass now, one more on each following frame; otherwise all of them.
+      const ngx::Result ar = RunStep(stagger ? 1 : asyncRun.n);
       if (ar != ngx::kSuccess) { Log("async NR evaluate 0x%08x", ar); return Fail("async NR evaluate"); }
       {
         std::lock_guard<std::mutex> lock(asyncMutex);
         ++launchId;
-        launchList = l;
+        stepList = l;
+        stepFinal = asyncRun.next >= asyncRun.n;
         inFlight = true;
       }
       lastLaunchFrame = frame;
@@ -1417,6 +1503,21 @@ bool PipelineRecord(const UpscaleCall& c) {
       l->SetComputeRootSignature(root);
       l->SetComputeRoot32BitConstants(0, 16, &k, 0);
       l->SetComputeRootDescriptorTable(1, Gpu(ring));
+    } else if (inFlight && asyncRun.next < asyncRun.n) {
+      // Staggered: the launch's next pass rides on this frame, once the step before was submitted.
+      bool ready = false;
+      {
+        std::lock_guard<std::mutex> lock(asyncMutex);
+        ready = stepList == nullptr && stepSubmitted == stepId;
+      }
+      if (ready) {
+        OpenStep();
+        const ngx::Result ar = RunStep(asyncRun.next + 1);
+        if (ar != ngx::kSuccess) { Log("async NR evaluate 0x%08x", ar); return Fail("async NR evaluate"); }
+        std::lock_guard<std::mutex> lock(asyncMutex);
+        stepList = l;
+        stepFinal = asyncRun.next >= asyncRun.n;
+      }
     }
     if (queries && stamps) {
       l->EndQuery(queries, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);

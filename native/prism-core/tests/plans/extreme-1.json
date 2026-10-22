@@ -1,0 +1,16 @@
+{
+  "seconds": 12,
+  "base": { "Land": "poll", "Intensity": "2.10", "Passes": 2, "Cadence": 1, "Async": 0, "Stagger": 1, "FpsCap": 0 },
+  "runs": [
+    { "Label": "off", "Enabled": 0 },
+    { "Label": "ext-sync", "Async": 0 },
+    { "Label": "ext-async", "Async": 1, "Stagger": 0 },
+    { "Label": "ext-async-stag", "Async": 1, "Stagger": 1 },
+    { "Label": "ext-sync-cap", "Async": 0, "FpsCap": -1 },
+    { "Label": "ext-async-cap", "Async": 1, "Stagger": 0, "FpsCap": -1 },
+    { "Label": "high-stag-cap", "Cadence": 2, "Async": 1, "Stagger": 1, "Intensity": "2.00", "FpsCap": -1 },
+    { "Label": "ext-async-b", "Async": 1, "Stagger": 0 },
+    { "Label": "ext-sync-b", "Async": 0 },
+    { "Label": "off-b", "Enabled": 0 }
+  ]
+}
