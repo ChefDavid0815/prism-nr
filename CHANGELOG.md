@@ -1,18 +1,29 @@
 # Changelog
 
-## 1.1.2 — 2026-10-22 · Prism Core only, tiers, passes; less ghosting, no freezes
+## 1.2.0 — 2026-10-22 · Prism Core only; no trails, flat frame times
+
+Forza Horizon 6 benchmark, RTX 5090 Laptop, 2560×1600, DLSS Quality, 2× frame generation, SDR:
+Prism off 118 FPS; Prism 旗舰 79 FPS; Prism 极致 67 FPS; RenoDX DLSS 5 8.5.0-rc10 at native
+resolution, 2 passes, intensity 2.0: 65 FPS. Prism tiers and RenoDX had 0 stutters.
 
 - Prism Core is the only route. The ReShade presets (旗舰 / 均衡 / 流畅 / 原片优先) and their
   community components (ReShade, RenoDX, OptiScaler, Feeder, LumeniteFX) are gone from the app and
   the installer, so nothing is downloaded any more (the "访问 RankFTW/rhi-repo 的发布页失败" error
   can no longer happen). Earlier add-on installs can still be rolled back from 还原记录.
-- Four tiers pick cadence, passes and intensity together: 极致 (every frame, 2 passes, 210%),
-  高画质 (every 2 frames, 2 passes, 200%, the default), 标准 (every 2 frames, 1 pass, 150%),
-  流畅 (every 4 frames, 1 pass, 120%). Any setting can still be tuned; the tier then shows as 自定义.
-  Core installs from earlier versions move to 高画质 unless their cadence was chosen by hand.
-- Network passes 1–5: each pass runs the network again on the previous pass's output, with its own
-  feature and history. 3 passes and up are marked as a playground, not for real play.
-- Intensity 0–300%: above 100% amplifies the network's edit.
+- Five tiers: 极致 (every frame, 2 passes, native, 210%; RTX 5090 only), 旗舰 (every frame,
+  2 passes, network at 75% with an edge-aware upsample, 240%; the default on RTX 5080/5090),
+  高画质 (every 2 frames, 2 passes, 200%), 标准 (every 2 frames, 1 pass, 150%), 流畅 (every 4
+  frames, 1 pass, 120%). Any setting can still be tuned; the tier then shows as 自定义.
+- No trails on every-frame tiers: the network answers the frame on screen, nothing is carried. In
+  Forza Horizon 6, wet roads, reflections and spray stream past at 100–260 px a frame and don't
+  follow the motion vectors, so a carried edit trailed behind fast cars; the game now starts on 旗舰.
+- Flat frame times: the passes of an asynchronous launch are staggered over consecutive frames
+  (CONTROL, every 2 frames, 2 passes: frame-time deviation 4.6–5.1 → 1.8–1.9 ms). Every-frame tiers
+  do the same work on every frame (deviation 0.6–0.9 ms).
+- Network passes 1–5 (3 and up marked as a playground) and intensity 0–300%.
+- Core's log names its real version.
+
+## 1.1.2 — 2026-10-22 · Less ghosting, no freezes, NVIDIA's new model built in
 
 - Ghosting under motion: a study on a recorded game sequence with the real network as reference
   (`docs/research/ghosting`) showed the error follows the age of the shown edit. Prism Core now
