@@ -7,8 +7,8 @@
   runs the network every 2 frames by default, lands and launches on the same frame, samples the
   network's landed answer directly through a warp to its launch frame, gives the network the true
   motion since its previous run, fills newly revealed surfaces from same-depth neighbours and keeps
-  30% of the previous edit where both agree. Offline: 42% less error on moving pixels and 34% less
-  flicker than 1.1.1.
+  30% of the previous edit where both agree. Offline, against 1.1.1 as it shipped: 29% less error on moving pixels,
+  38% less flicker.
 - No more freezes from a GPU wait: the network lands only after the CPU sees it finished; the
   game's queue never waits on the GPU (field reports tied the old wait to freezes in Crimson Desert
   and FF16).

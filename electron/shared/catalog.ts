@@ -26,7 +26,7 @@ export const PLUGINS: PluginDef[] = [
     requires: [],
     risk: '实验性预览，目前只在 CONTROL Resonant 上实测过。快速运动的人脸在每 4 帧时细节损失最大。',
     params: [
-      { key: 'prism-core.cadence', label: '网络节奏', help: '网络每几帧跑一次。每 2 帧是默认：运动中的鬼影比每 4 帧少约四成；每帧没有携带误差但开销最高。', type: 'choice', choices: [{ value: '1', label: '每帧' }, { value: '2', label: '每 2 帧' }, { value: '3', label: '每 3 帧' }, { value: '4', label: '每 4 帧' }], default: '2' },
+      { key: 'prism-core.cadence', label: '网络节奏', help: '网络每几帧跑一次。每 2 帧是默认：和 1.1.1 的每 4 帧相比，运动中的误差少约三成、闪烁少约四成；每帧没有携带误差但开销最高。', type: 'choice', choices: [{ value: '1', label: '每帧' }, { value: '2', label: '每 2 帧' }, { value: '3', label: '每 3 帧' }, { value: '4', label: '每 4 帧' }], default: '2' },
       { key: 'prism-core.async', label: '异步计算队列', help: '网络在独立队列上和下一帧并行跑。节奏 2 帧以上生效。', type: 'toggle', default: true },
       { key: 'prism-core.intensity', label: '改动强度', help: '网络改动保留多少。100% 是网络的完整答案。', type: 'range', min: 0, max: 100, step: 5, unit: '%', default: 100 },
       { key: 'prism-core.guard', label: '角色守护', help: '肤色和高饱和颜色上的色度改动被压住多少。0 等于不干预。', type: 'range', min: 0, max: 100, step: 5, unit: '%', default: 100 },
@@ -287,7 +287,7 @@ export const PRESETS: PresetDef[] = [
     nativeRoutePreference: ['prism-core'],
     plugins: ['nr-prism-core'],
     values: { 'framegen.mode': 'off' },
-    expectation: '1.1 在 CONTROL 实测比每帧全分辨率跑网络快 40%（旧模型）；1.1.2 换成 NVIDIA 新模型，网络本身再便宜 44%，运动中的鬼影比 1.1.1 少约四成（离线实测）。实验性预览，目前只在 CONTROL 上验证过。',
+    expectation: '1.1 在 CONTROL 实测比每帧全分辨率跑网络快 40%（旧模型）；1.1.2 换成 NVIDIA 新模型，网络本身再便宜 44%，运动中的误差比 1.1.1 少约三成、闪烁少约四成（离线实测）。实验性预览，目前只在 CONTROL 上验证过。',
   },
   {
     id: 'flagship',

@@ -564,7 +564,7 @@ function pickCore(values: CoreValues): CoreValues {
 /** What each cadence costs and keeps, from the CONTROL measurements and the offline comparison. */
 const CADENCE_NOTE: Record<number, string> = {
   1: '网络每帧跑一次，就是网络的完整答案，没有携带误差，开销最高（RTX 5090 Laptop、2560×1600、310.9 模型约 5 ms）。',
-  2: '默认。运动中最清楚的异步档：离线实测，运动区域的误差比每 4 帧低约四成，网络开销约为每帧的一半。',
+  2: '默认。运动中最清楚的异步档：离线实测，和 1.1.1 的每 4 帧相比运动区域误差低约三成、闪烁低约四成，网络开销约为每帧的一半。',
   3: '介于每 2 帧和每 4 帧之间。',
   4: '最省。快速运动时改动最旧，鬼影最明显，适合静态画面多的游戏。',
 };

@@ -28,10 +28,10 @@ for (let t = 0; t < N; t++) {
   frames.push({ P, Y, E, mv: rd(path.join(dir, 'ref', `m_${t}.f32`)), d: rd(path.join(dir, 'ref', `d_${t}.f32`)) });
 }
 // The network's edit at each launch frame, from a cadence run (launch k = frame k*CAD).
-function launchEdits(set) {
+function launchEdits(set, cad = CAD) {
   const out = [];
-  for (let k = 0; k * CAD < N; k++) {
-    const t = k * CAD, f = frames[t], o = rd(path.join(dir, set, `o_${k}.f32`)), E = new Float32Array(W * H * 3);
+  for (let k = 0; k * cad < N; k++) {
+    const t = k * cad, f = frames[t], o = rd(path.join(dir, set, `o_${k}.f32`)), E = new Float32Array(W * H * 3);
     for (let i = 0; i < W * H; i++) for (let ch = 0; ch < 3; ch++)
       E[i * 3 + ch] = Math.max(-3, Math.min(3, Math.log2(Math.max(dec(Math.max(0, o[i * 4 + ch])), 1 / 512) / Math.max(f.P[i * 3 + ch], 1 / 512))));
     out.push({ t, E, Y: f.Y, d: f.d });
@@ -121,8 +121,8 @@ function throughWarp(f, warp, L, i, x, y, sigma) {
 }
 
 // One scheme over the whole sequence; returns per-frame shown edits.
-function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride, fillHoles = false, blend = 1 }) {
-  const L = launchEdits(net), age = ageOverride ?? AGE;
+function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride, fillHoles = false, blend = 1, cad = CAD }) {
+  const L = launchEdits(net, cad), age = ageOverride ?? AGE;
   let hist = new Float32Array(W * H * 3), histD = new Float32Array(W * H), warpF = new Float32Array(W * H * 4), warpL = new Float32Array(W * H * 4);
   let landed = null, flight = null;
   const shown = [];
@@ -136,7 +136,7 @@ function run({ net, direct = false, dilateMv = false, sigma = 0, ageOverride, fi
     // Land first, then launch: a frame may do both (the landed edit is kept apart from the next launch).
     const landNow = flight && t === flight.t + age;
     if (landNow) { landed = flight; warpL = warpF.slice(); flight = null; }
-    if (t % CAD === 0) { flight = L[t / CAD]; for (let i = 0; i < W * H; i++) { warpF[i * 4] = 0; warpF[i * 4 + 1] = 0; warpF[i * 4 + 2] = f.d[i]; warpF[i * 4 + 3] = 1; } }
+    if (t % cad === 0) { flight = L[t / cad]; for (let i = 0; i < W * H; i++) { warpF[i * 4] = 0; warpF[i * 4 + 1] = 0; warpF[i * 4 + 2] = f.d[i]; warpF[i * 4 + 3] = 1; } }
     if (landNow || (direct && landed)) {
       const wp = warpL, out = new Float32Array(W * H * 3);
       for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -209,6 +209,50 @@ const schemes = process.env.QUICK ? {
   'S4 S3 + MV dilation': { net: ex, direct: true, dilateMv: true },
   'S5 S4 + consistency (sigma 0.25)': { net: ex, direct: true, dilateMv: true, sigma: 0.25 },
 };
+// Render mode (RENDER=<out dir>): per-frame PNGs of what each scheme shows, for the films.
+// off: the proxy itself; ref: the network on every frame; v111: 1.1.1 (every 4 frames, waited
+// landing next frame, chained carry, constant-velocity motion); v112: 1.1.2 (every 2 frames, poll
+// landing, direct sampling, exact motion, depth fill, smoothing 0.7). err-*: |shown - reference|.
+if (process.env.RENDER) {
+  const zlib = require('zlib');
+  const out = process.env.RENDER;
+  const crcT = new Int32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c; });
+  const crc = (b) => { let c = -1; for (const v of b) c = crcT[(c ^ v) & 255] ^ (c >>> 8); return (c ^ -1) >>> 0; };
+  const chunk = (t, d) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(t), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([l, td, c]); };
+  const png = (file, rgb) => {
+    const raw = Buffer.alloc((W * 3 + 1) * H);
+    for (let y = 0; y < H; y++) { raw[y * (W * 3 + 1)] = 0; rgb.copy(raw, y * (W * 3 + 1) + 1, y * W * 3, (y + 1) * W * 3); }
+    const ih = Buffer.alloc(13); ih.writeUInt32BE(W, 0); ih.writeUInt32BE(H, 4); ih[8] = 8; ih[9] = 2;
+    fs.writeFileSync(file, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ih), chunk('IDAT', zlib.deflateSync(raw, { level: 4 })), chunk('IEND', Buffer.alloc(0))]));
+  };
+  const enc = (v) => { v = Math.max(0, Math.min(1, v)); return Math.round(255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055)); };
+  const image = (t, e) => { const P = frames[t].P, b = Buffer.alloc(W * H * 3); for (let i = 0; i < W * H * 3; i++) b[i] = enc(e ? P[i] * 2 ** e[i] : P[i]); return b; };
+  // Error heat: 0 black, 0.1 stop deep red, 0.25 orange, 0.5+ white-yellow.
+  const heat = (t, e) => {
+    const r = frames[t].E, b = Buffer.alloc(W * H * 3);
+    for (let i = 0; i < W * H; i++) {
+      const d = (Math.abs(e[i * 3] - r[i * 3]) + Math.abs(e[i * 3 + 1] - r[i * 3 + 1]) + Math.abs(e[i * 3 + 2] - r[i * 3 + 2])) / 3;
+      const k = Math.min(1, d / 0.5);
+      b[i * 3] = Math.round(255 * Math.min(1, k * 2.2)); b[i * 3 + 1] = Math.round(255 * Math.max(0, Math.min(1, k * 2.2 - 0.9))); b[i * 3 + 2] = Math.round(255 * Math.max(0, k * 3 - 2.2));
+    }
+    return b;
+  };
+  const schemes = JSON.parse(process.env.RENDER_SCHEMES || '{}');
+  for (const k of ['off', 'ref', ...Object.keys(schemes), ...Object.keys(schemes).map((x) => 'err-' + x)]) fs.mkdirSync(path.join(out, k), { recursive: true });
+  const shownBy = {};
+  for (const [name, opt] of Object.entries(schemes)) { shownBy[name] = run(opt); console.log('ran', name, JSON.stringify(score(shownBy[name]))); }
+  for (let t = 0; t < N; t++) {
+    png(path.join(out, 'off', `f_${t}.png`), image(t, null));
+    png(path.join(out, 'ref', `f_${t}.png`), image(t, frames[t].E));
+    for (const name of Object.keys(schemes)) {
+      png(path.join(out, name, `f_${t}.png`), image(t, shownBy[name][t]));
+      png(path.join(out, 'err-' + name, `f_${t}.png`), heat(t, shownBy[name][t]));
+    }
+  }
+  fs.writeFileSync(path.join(out, 'meta.json'), JSON.stringify({ W, H, N, schemes: Object.keys(schemes) }));
+  console.log('rendered', N, 'frames to', out);
+  process.exit(0);
+}
 const results = {};
 // Without Prism the shown edit is zero: the size of the reference edit itself.
 results['no NR (edit 0)'] = score(frames.map(() => new Float32Array(W * H * 3)));
