@@ -2,17 +2,14 @@ import type { MotionLevel } from '../lib/motion';
 import { api } from '../api';
 
 const MOTION: { id: MotionLevel; name: string; text: string }[] = [
-  { id: 'max', name: '极致', text: '数据场持续流动，光标会点亮经过的竖条，应用方案时整屏条码扫描并反相一次。' },
+  { id: 'max', name: '极致', text: '数据场持续流动，光标会点亮经过的竖条，启用时整屏条码扫描并反相一次。' },
   { id: 'standard', name: '标准', text: '数据场缓慢流动，保留过场，去掉光标互动。' },
   { id: 'off', name: '关', text: '界面静止，只保留必要的状态变化。' },
 ];
 
 const CREDITS = [
-  { name: 'ReShade', url: 'https://reshade.me', license: 'BSD-3-Clause' },
-  { name: 'OptiScaler DLSS-NR', url: 'https://github.com/Dagherbou/OptiScaler_DLSSNR', license: 'GPL-3.0' },
-  { name: 'OptiScaler Pre-SR Multipass', url: 'https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass', license: 'GPL-3.0' },
-  { name: 'DLSS5-Feeder', url: 'https://github.com/jlrouzies-fr/DLSS5-Feeder', license: '见项目仓库' },
-  { name: 'RenoDX', url: 'https://github.com/RankFTW/rhi-repo', license: '见项目仓库' },
+  { name: 'MinHook（Prism Core 的函数挂钩）', url: 'https://github.com/TsudaKageyu/minhook', license: 'BSD-2-Clause' },
+  { name: 'RenoDX DLSS 5（Prism 早期版本的参考实现）', url: 'https://github.com/RankFTW/rhi-repo', license: '见项目仓库' },
 ];
 
 export function SettingsView({ motion, onMotion }: { motion: MotionLevel; onMotion: (m: MotionLevel) => void }) {

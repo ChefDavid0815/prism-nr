@@ -1,6 +1,6 @@
 import { PLUGINS, PRESETS, resolveValues } from '../electron/shared/catalog';
-import { matchProfile, styleById } from '../electron/shared/profiles';
-import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PrismApi, Route, SystemInfo } from '../electron/shared/types';
+import { matchProfile } from '../electron/shared/profiles';
+import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PresetId, PrismApi, Route, SystemInfo } from '../electron/shared/types';
 
 declare global {
   interface Window {
@@ -53,9 +53,9 @@ function createPreviewApi(): PrismApi {
   const analyses: Record<string, GameAnalysis> = {
     g1: a('g1', { exe: 'E:\\Steam\\steamapps\\common\\CONTROL Resonant\\CONTROLResonant.exe' }),
     g2: a('g2', { exe: 'D:\\Games\\Cyberpunk 2077\\bin\\x64\\Cyberpunk2077.exe', nativeDlss: { present: true, version: '310.4.0.0' } }),
-    g3: a('g3', { exe: 'D:\\GOG\\The Witcher 3\\bin\\x64_dx12\\witcher3.exe', warnings: ['这个游戏的原作风格容易被神经渲染改变，建议用“原片优先”方案。'] }),
+    g3: a('g3', { exe: 'D:\\GOG\\The Witcher 3\\bin\\x64_dx12\\witcher3.exe', warnings: ['这个游戏的原作风格容易被神经渲染改变，建议用流畅档或把强度调低。'] }),
     g4: a('g4', { exe: 'D:\\Games\\BlackMythWukong\\b1\\Binaries\\Win64\\b1-Win64-Shipping.exe' }),
-    g5: a('g5', { exe: 'D:\\Games\\Skyrim\\SkyrimSE.exe', apis: ['dx11'], nativeDlss: { present: false }, streamline: false, dlssFrameGen: false, routes: ['feeder'], recommendedRoute: 'feeder', routeReason: '游戏没有 DLSS，需要用 Feeder 从 ReShade 深度缓冲和估算的运动矢量补全输入。快速运动时可能拖影。' }),
+    g5: a('g5', { exe: 'D:\\Games\\Skyrim\\SkyrimSE.exe', apis: ['dx11'], nativeDlss: { present: false }, streamline: false, dlssFrameGen: false, routes: ['feeder'], recommendedRoute: 'feeder', routeReason: '游戏没有 DLSS，Prism Core 拿不到运动矢量和深度，暂时用不了。' }),
     g6: a('g6', { exe: 'D:\\Epic\\AlanWake2\\AlanWake2.exe' }),
     g7: a('g7', { exe: 'AceCombat8.exe', apis: ['dx12'], nativeDlss: { present: false }, antiCheat: [{ name: 'Easy Anti-Cheat', evidence: 'EasyAntiCheat' }], routes: [], recommendedRoute: 'blocked', routeReason: '检测到 Easy Anti-Cheat。注入 DLL 可能导致封号，Prism 不会在这个游戏里安装。' }),
     g9: a('g9', { exe: null, apis: [], nativeDlss: { present: false }, streamline: false, dlssFrameGen: false, routes: [], recommendedRoute: 'unknown', routeReason: '没有识别出图形 API。可能是启动器而不是游戏本体。' }),
@@ -89,49 +89,32 @@ function createPreviewApi(): PrismApi {
       const g = games.find((x) => x.id === req.gameId)!;
       const an = analyses[req.gameId];
       const profile = matchProfile(g.name, g.steamAppId);
-      const preset = req.preset ?? (an.routes.includes('prism-core') ? 'core' : profile?.preset ?? 'flagship');
-      const style = styleById(req.style ?? profile?.style ?? 'realistic');
-      const addonRoute: Route = an.recommendedRoute === 'prism-core' ? 'native-hook' : an.recommendedRoute;
-      const route: Route =
-        an.recommendedRoute === 'blocked' ? 'blocked'
-        : preset === 'core' ? (an.routes.includes('prism-core') ? 'prism-core' : an.recommendedRoute)
-        : preset === 'balanced' || preset === 'fluid' ? (an.routes.includes('optiscaler') ? 'optiscaler' : addonRoute)
-        : addonRoute;
-      const p = PRESETS.find((x) => x.id === preset)!;
-      let plugins = req.plugins ?? p.plugins;
-      const core = route === 'prism-core';
-      if (core) plugins = ['nr-prism-core', ...plugins.filter((x) => x === 'framegen')];
-      if (route === 'feeder') plugins = [...new Set([...plugins.filter((x) => x !== 'nr-optiscaler'), 'nr-renodx', 'feeder', 'motion-lumenite', 'prism-capture'])];
-      if (route !== 'feeder') plugins = plugins.filter((x) => x !== 'prism-guard');
+      const preset: PresetId = req.preset ?? 'high';
+      const core = an.recommendedRoute !== 'blocked' && an.routes.includes('prism-core');
+      const route: Route = core ? 'prism-core' : 'blocked';
+      const values = { ...resolveValues(preset), ...(req.overrides ?? {}) };
       const plan: InstallPlan = {
         gameId: g.id,
         gameName: g.name,
         route,
         preset,
-        style: style.id,
-        plugins,
-        values: { ...resolveValues(preset), ...style.values, ...(profile?.values ?? {}), ...(req.overrides ?? {}) },
-        needs: core ? [] : [{ id: 'reshade', name: 'ReShade（含插件支持）', status: 'auto' }],
-        steps: core
-          ? ['备份游戏目录里会被覆盖的文件', '部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini', '复制本机的 nvngx_dlssnr.dll', '写入安装清单，之后可以一键还原']
-          : ['下载并校验 ReShade、RenoDX DLSS 5 插件', '备份游戏目录里会被覆盖的文件', '部署 ReShade 和神经渲染插件', '复制本机的 nvngx_dlssnr.dll', '部署 Prism 原生插件，写好参数和顺序', '写入安装清单，之后可以一键还原'],
-        manualSteps: core
-          ? ['在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。', '游戏里按 F8 开关 Prism Core、F4 分屏对比原画。节奏和强度在这里调，游戏运行中约 1 秒内生效。']
-          : route === 'feeder' ? [] : ['在游戏设置里开启 DLSS 超分或 DLAA。'],
-        blockers: route === 'blocked' ? [an.routeReason] : preset === 'core' && !core ? ['这个游戏用不了 Prism Core：它需要 DX12、64 位并且自带 DLSS 的游戏。可以换用其他方案。'] : [],
-        warnings: core ? [...an.warnings, 'Prism Core 是实验性预览，目前只在 CONTROL Resonant 上实测过。'] : an.warnings,
-        profileNotes: profile?.notes ?? [],
+        style: profile?.style ?? 'realistic',
+        plugins: ['nr-prism-core'],
+        values,
+        needs: [],
+        steps: ['备份游戏目录里会被覆盖的文件', '部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini', '复制 Prism NR 自带的 NVIDIA 签名版 nvngx_dlssnr.dll（310.9.16.0）', '写入安装清单，之后可以一键还原'],
+        manualSteps: ['在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。', '游戏里按 F8 开关 Prism Core、F4 分屏对比原画。档位、遍数和强度在这里调，游戏运行中约 1 秒内生效。'],
+        blockers: an.recommendedRoute === 'blocked' ? [an.routeReason] : core ? [] : ['这个游戏用不了 Prism Core：它需要 DX12、64 位并且自带 DLSS 的游戏。'],
+        warnings: [...an.warnings, ...(Number(values['prism-core.passes']) >= 3 ? ['3 遍以上是实验性质的游乐场：开销成倍增加，画面容易过度，不建议实际游玩。'] : []), 'Prism Core 是实验性预览，目前在 CONTROL Resonant 和地平线 6 上实测过。'],
+        profileNotes: profile?.coreNotes ?? [],
         riskConsent: an.antiCheatOptIn ? { ...an.antiCheatOptIn, accepted: req.acceptRisk === true } : undefined,
       };
       return plan;
     },
     runInstall: async (plan) => {
       const stages: [InstallProgress['stage'], string][] = [
-        ['fetch', '查询 ReShade 最新版本'],
-        ['fetch', '下载 ReShade 6.8.2'],
-        ['fetch', '下载 RenoDX DLSS 5 插件'],
-        ['deploy', '备份 3 个文件'],
-        ['deploy', '写入 17 个文件'],
+        ['deploy', '备份 2 个文件'],
+        ['deploy', '写入 5 个文件'],
         ['verify', '校验写入结果'],
       ];
       for (let i = 0; i < stages.length; i++) {

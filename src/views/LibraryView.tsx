@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { pluginById, PRESETS, resolveValues } from '../../electron/shared/catalog';
-import { STYLES } from '../../electron/shared/profiles';
-import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PresetId, Route, SystemInfo } from '../../electron/shared/types';
+import { LEGACY_PRESET_NAMES, pluginById, PRESETS, resolveValues, tierOf } from '../../electron/shared/catalog';
+import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PresetDef, PresetId, Route, SystemInfo } from '../../electron/shared/types';
 import { api } from '../api';
 import { Barcode } from '../components/Barcode';
 import { DataField } from '../components/DataField';
@@ -33,14 +32,23 @@ interface Props {
   onAddManual: () => void;
 }
 
-function groupOf(a: GameAnalysis | undefined): 0 | 1 | 2 | 3 {
-  if (!a) return 3;
-  if (a.recommendedRoute === 'blocked') return 2;
-  if (a.recommendedRoute === 'unknown') return 3;
-  return a.recommendedRoute === 'feeder' ? 1 : 0;
+/** Prism Core is the only route: a game either runs it, or is blocked (anti-cheat, no DX12 DLSS). */
+export function coreRoute(a: GameAnalysis): Route {
+  if (a.recommendedRoute === 'blocked' || a.recommendedRoute === 'unknown') return a.recommendedRoute;
+  return a.routes.includes('prism-core') ? 'prism-core' : 'blocked';
 }
 
-const GROUPS = ['可以直接启用', '需要补全输入', '已阻止', '分析中或未识别'];
+function coreReason(a: GameAnalysis): string {
+  return coreRoute(a) === 'blocked' && a.recommendedRoute !== 'blocked' ? '这个游戏用不了 Prism Core：它需要 DX12、64 位并且自带 DLSS 的游戏。' : a.routeReason;
+}
+
+function groupOf(a: GameAnalysis | undefined): 0 | 1 | 2 {
+  if (!a) return 2;
+  const r = coreRoute(a);
+  return r === 'prism-core' ? 0 : r === 'blocked' ? 1 : 2;
+}
+
+const GROUPS = ['可以直接启用', '暂时用不了', '分析中或未识别'];
 
 export function LibraryView({ games, analyses, scanning, system, installs, onApplied, onRolledBack, onTuned, onRemoveManual, onAddManual }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
@@ -56,7 +64,7 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
   }, [games, analyses, selected]);
 
   const groups = useMemo(() => {
-    const out: GameEntry[][] = [[], [], [], []];
+    const out: GameEntry[][] = [[], [], []];
     for (const g of games) out[groupOf(analyses[g.id])].push(g);
     return out;
   }, [games, analyses]);
@@ -66,6 +74,7 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
   const bars = useMemo(() => (game ? fingerprint(game, analysis) : []), [game, analysis]);
   const isCore = plan?.route === 'prism-core';
   const intensity = plan ? Number(plan.values[isCore ? 'prism-core.intensity' : 'nr-renodx.intensity'] ?? 30) / 100 : 0.3;
+  const fieldIntensity = Math.min(1, intensity);
   const modelRes = plan ? Number(plan.values['nr-optiscaler.modelResolution'] ?? 100) : 100;
 
   const fieldLabels = {
@@ -73,12 +82,12 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
       `API   ${analysis?.apis.map((x) => x.toUpperCase()).join(' ') || '—'}`,
       `BIT   ${analysis?.bitness ?? '—'}`,
       `DLSS  ${analysis?.nativeDlss.version ?? (analysis ? '无' : '—')}`,
-      `ROUTE ${analysis ? ROUTE_LABEL[plan?.route ?? analysis.recommendedRoute] : '—'}`,
+      `ROUTE ${analysis ? ROUTE_LABEL[plan?.route ?? coreRoute(analysis)] : '—'}`,
     ],
     right: [
       `NR    ${Math.round(intensity * 100)}%`,
-      isCore ? `NET   1/${plan?.values['prism-core.cadence'] ?? 2}` : `MODEL ${plan?.route === 'optiscaler' ? modelRes + '%' : '100%'}`,
-      `PLUG  ${plan?.plugins.length ?? 0}`,
+      `NET   1/${plan?.values['prism-core.cadence'] ?? 2}`,
+      `PASS  ${plan?.values['prism-core.passes'] ?? 2}`,
       `SEED  ${game ? game.id.slice(0, 6).toUpperCase() : '—'}`,
     ],
   };
@@ -86,7 +95,7 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
   return (
     <div className="library">
       <section className="library-main">
-        <DataField bars={bars} intensity={intensity} busy={scanning || (progress != null && progress.stage !== 'done' && progress.stage !== 'error')} progress={progress && progress.stage !== 'done' && progress.stage !== 'error' ? progress.fraction : null} seed={game ? parseInt(game.id.slice(0, 8), 16) || 7 : 7} labels={fieldLabels} />
+        <DataField bars={bars} intensity={fieldIntensity} busy={scanning || (progress != null && progress.stage !== 'done' && progress.stage !== 'error')} progress={progress && progress.stage !== 'done' && progress.stage !== 'error' ? progress.fraction : null} seed={game ? parseInt(game.id.slice(0, 8), 16) || 7 : 7} labels={fieldLabels} />
 
         <div className="index" role="listbox" aria-label="游戏" aria-activedescendant={selected ? `row-${selected}` : undefined}>
           <div className="index-head" aria-hidden="true">
@@ -116,7 +125,7 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
                   const a = analyses[g.id];
                   const active = installs.some((r) => r.gameId === g.id && r.status === 'active');
                   const isSel = g.id === selected;
-                  const tone = a?.antiCheatOptIn ? 'caution' : routeTone(a?.recommendedRoute);
+                  const tone = a?.antiCheatOptIn ? 'caution' : routeTone(a ? coreRoute(a) : undefined);
                   return (
                     <div
                       key={g.id}
@@ -143,7 +152,7 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
                       <span className="mono">{a ? a.apis.map((x) => x.toUpperCase()).join(' ') || '—' : '···'}</span>
                       <span className="row-route">
                         <i style={{ background: TONE_COLOR[tone] }} />
-                        {a ? ROUTE_LABEL[a.recommendedRoute] : '分析中'}
+                        {a ? ROUTE_LABEL[coreRoute(a)] : '分析中'}
                       </span>
                       <Barcode bars={fingerprint(g, a)} inverted={isSel} hover={hovered === g.id} label={`${g.name} 的数据指纹`} />
                     </div>
@@ -207,8 +216,9 @@ function pipeline(plan: InstallPlan): Stage[] {
     const cadence = Number(plan.values['prism-core.cadence'] ?? 2);
     const async = plan.values['prism-core.async'] !== false && cadence >= 2;
     // From the CONTROL measurements: every frame 13.4 ms, every 2nd 61% of that, every 4th async 37%.
-    const weight = ({ 1: 14, 2: 9, 3: 7, 4: 5 } as Record<number, number>)[cadence] + (async || cadence === 1 ? 0 : 1);
-    stages.push({ label: 'DLSS', weight: 2 }, { label: cadence === 1 ? '神经渲染 每帧' : `神经渲染 每 ${cadence} 帧`, weight });
+    const passes = Math.max(1, Math.min(3, Number(plan.values['prism-core.passes'] ?? 2)));
+    const weight = (({ 1: 14, 2: 9, 3: 7, 4: 5 } as Record<number, number>)[cadence] + (async || cadence === 1 ? 0 : 1)) * passes;
+    stages.push({ label: 'DLSS', weight: 2 }, { label: `${cadence === 1 ? '神经渲染 每帧' : `神经渲染 每 ${cadence} 帧`} × ${passes} 遍`, weight });
     if (cadence > 1) stages.push({ label: '携带改动', weight: 1, prism: true });
     if (Number(plan.values['prism-core.guard'] ?? 100) > 0) stages.push({ label: '角色守护', weight: 1, prism: true });
     if (has('framegen') && plan.values['framegen.mode'] !== 'off') stages.push({ label: `帧生成 ${plan.values['framegen.mode']}`, weight: 0 });
@@ -241,46 +251,43 @@ interface DetailProps {
 type CoreValues = Record<string, number | boolean | string>;
 
 function Detail({ game, analysis, system, record, progress, onProgress, onPlan, onApplied, onRolledBack, onTuned, onRemoveManual }: DetailProps) {
-  const [preset, setPreset] = useState<PresetId | undefined>(undefined);
-  const [style, setStyle] = useState<string | undefined>(undefined);
-  const [disabled, setDisabled] = useState<Set<string>>(new Set());
+  const live = record?.route === 'prism-core' ? record : null;
+  const [preset, setPreset] = useState<PresetId | undefined>(() => (PRESETS.find((p) => p.id === live?.preset)?.id));
   const [plan, setPlan] = useState<InstallPlan | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justDone, setJustDone] = useState(false);
   const [nonce, setNonce] = useState(0);
-  const basePlugins = useRef<string[] | null>(null);
+  const [tierNonce, setTierNonce] = useState(0);
   // Prism Core settings: start from what is installed, so the panel shows the game's live values.
   const [acceptRisk, setAcceptRisk] = useState(false);
-  const [coreValues, setCoreValues] = useState<CoreValues>(() => (record?.route === 'prism-core' ? pickCore(record.values ?? {}) : {}));
+  const [coreValues, setCoreValues] = useState<CoreValues>(() => (live ? pickCore(live.values ?? {}) : {}));
 
   useEffect(() => {
     if (!analysis) return;
     let alive = true;
-    const plugins = basePlugins.current ? basePlugins.current.filter((p) => !disabled.has(p)) : undefined;
     api
-      .planInstall({ gameId: game.id, preset, style, plugins, overrides: coreValues, acceptRisk })
+      .planInstall({ gameId: game.id, preset, overrides: coreValues, acceptRisk })
       .then((p) => {
         if (!alive) return;
         setPlan(p);
         onPlan(p);
         setPreset((cur) => cur ?? p.preset);
-        setStyle((cur) => cur ?? p.style);
       })
       .catch((e) => alive && setError((e as Error).message));
     return () => {
       alive = false;
     };
-  }, [game.id, analysis, preset, style, disabled, onPlan, nonce, coreValues, acceptRisk]);
+  }, [game.id, analysis, preset, onPlan, nonce, coreValues, acceptRisk]);
 
-  // The preset defines the plugin baseline; toggles subtract from it.
-  useEffect(() => {
-    basePlugins.current = null;
-    setDisabled(new Set());
-  }, [preset]);
-  useEffect(() => {
-    if (plan && !basePlugins.current) basePlugins.current = PRESETS.find((p) => p.id === plan.preset)?.plugins ?? plan.plugins;
-  }, [plan]);
+  // A tier replaces the Core values; on an active install they are written to the game right away.
+  const pickTier = (id: PresetId) => {
+    const v = pickCore(resolveValues(id));
+    setPreset(id);
+    setCoreValues(v);
+    setTierNonce((n) => n + 1);
+    if (live) api.updateCoreConfig(live.id, v).then(onTuned).catch((e) => setError((e as Error).message));
+  };
 
   useEffect(() => api.onProgress((p) => p.gameId === game.id && onProgress(p)), [game.id, onProgress]);
 
@@ -321,15 +328,14 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
     if (c) setNonce((n) => n + 1);
   };
 
-  const coreAvailable = analysis?.routes.includes('prism-core') ?? false;
   const tier = system?.primary?.tier;
   const blocked = Boolean(plan?.blockers.length);
   const needsConsent = Boolean(plan?.riskConsent && !plan.riskConsent.accepted);
-  const tone = routeTone(plan?.route ?? analysis?.recommendedRoute);
+  const tone = routeTone(plan?.route ?? (analysis ? coreRoute(analysis) : undefined));
   const stages = plan ? pipeline(plan) : [];
   const exeName = analysis?.exe ? analysis.exe.split(/[\\/]/).pop() : '—';
-  const optional = plan ? plan.plugins.filter((id) => ['prism', 'nvidia'].includes(pluginById(id)?.origin ?? '') && id !== 'prism-capture') : [];
-  const optionalAll = basePlugins.current?.filter((id) => ['prism', 'nvidia'].includes(pluginById(id)?.origin ?? '') && id !== 'prism-capture' && (pluginById(id)?.routes.includes(plan?.route ?? 'native-hook') ?? false)) ?? optional;
+  const shownTier = plan ? tierOf(plan.values) : undefined;
+  const recordName = record ? (record.route === 'prism-core' ? tierOf(record.values ?? {})?.name ?? '自定义' : LEGACY_PRESET_NAMES[record.preset] ?? record.preset) : '';
 
   return (
     <aside className="detail" aria-label={`${game.name} 详情`}>
@@ -370,9 +376,9 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
         <section className="block">
           <h2 className="block-title">
             <i className="tone-bar" style={{ background: TONE_COLOR[tone] }} />
-            路线：{plan ? ROUTE_LABEL[plan.route] : analysis ? ROUTE_LABEL[analysis.recommendedRoute] : '分析中'}
+            路线：{plan ? ROUTE_LABEL[plan.route] : analysis ? ROUTE_LABEL[coreRoute(analysis)] : '分析中'}
           </h2>
-          <p className="block-text">{analysis?.routeReason ?? '正在读取游戏文件。'}</p>
+          <p className="block-text">{analysis ? coreReason(analysis) : '正在读取游戏文件。'}</p>
         </section>
 
         {plan && !blocked && (
@@ -396,90 +402,31 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
           </section>
         )}
 
-        {plan && !blocked && plan.route === 'prism-core' && (
-          <CoreSettings values={{ ...resolveValues('core'), ...coreValues }} live={record?.route === 'prism-core' ? record : null} onChange={setCoreValues} onTuned={onTuned} />
+        {plan && !blocked && (
+          <section className="block">
+            <h2 className="block-title">档位</h2>
+            <div className="presets" role="radiogroup" aria-label="档位">
+              {PRESETS.map((p) => {
+                const fits = tier ? p.forTiers.includes(tier) : false;
+                const on = shownTier?.id === p.id;
+                return (
+                  <button key={p.id} role="radio" aria-checked={on} className={`preset ${on ? 'is-on' : ''}`} onClick={() => pickTier(p.id)}>
+                    <span className="preset-name">
+                      {p.name}
+                      {fits && <span className="preset-fit">适合你的显卡</span>}
+                    </span>
+                    <span className="preset-gpu mono">{p.gpuLabel}</span>
+                    <span className="preset-sum">{p.summary}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="block-text">{shownTier ? shownTier.expectation : '自定义：下面的设置和任何档位都不一样。'}</p>
+          </section>
         )}
 
         {plan && !blocked && (
-          <>
-            {plan.route !== 'prism-core' && (
-            <section className="block">
-              <h2 className="block-title">画风</h2>
-              <div className="segmented" role="radiogroup" aria-label="画风">
-                {STYLES.map((s) => (
-                  <button key={s.id} role="radio" aria-checked={style === s.id} className={style === s.id ? 'is-on' : ''} onClick={() => setStyle(s.id)} title={s.summary}>
-                    {s.name}
-                  </button>
-                ))}
-              </div>
-              <p className="block-text">{STYLES.find((s) => s.id === style)?.summary}</p>
-            </section>
-            )}
-
-            <section className="block">
-              <h2 className="block-title">方案</h2>
-              <div className="presets" role="radiogroup" aria-label="方案">
-                {PRESETS.map((p) => {
-                  const unavailable = p.id === 'core' && !coreAvailable;
-                  const fits = !unavailable && tier ? p.forTiers.includes(tier) : false;
-                  return (
-                    <button key={p.id} role="radio" aria-checked={preset === p.id} disabled={unavailable} className={`preset ${preset === p.id ? 'is-on' : ''}`} onClick={() => setPreset(p.id)}>
-                      <span className="preset-name">
-                        {p.name}
-                        {fits && <span className="preset-fit">适合你的显卡</span>}
-                      </span>
-                      <span className="preset-gpu mono">{p.gpuLabel}</span>
-                      <span className="preset-sum">{unavailable ? '这个游戏用不了：Prism Core 需要 DX12、64 位并且自带 DLSS。' : p.summary}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="block-text">{PRESETS.find((p) => p.id === preset)?.expectation}</p>
-            </section>
-
-            <section className="block">
-              <h2 className="block-title">包含的插件</h2>
-              <ul className="plugin-list">
-                {plan.plugins
-                  .filter((id) => !optionalAll.includes(id))
-                  .map((id) => {
-                    const p = pluginById(id)!;
-                    return (
-                      <li key={id} className="plugin-row is-fixed">
-                        <span className="mono">{p.code}</span>
-                        <span>{p.name}</span>
-                        <span className="dim">必需</span>
-                      </li>
-                    );
-                  })}
-                {optionalAll.map((id) => {
-                  const p = pluginById(id)!;
-                  const on = !disabled.has(id);
-                  return (
-                    <li key={id} className="plugin-row">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={on}
-                          onChange={() =>
-                            setDisabled((d) => {
-                              const n = new Set(d);
-                              if (n.has(id)) n.delete(id);
-                              else n.add(id);
-                              return n;
-                            })
-                          }
-                        />
-                        <span className="mono">{p.code}</span>
-                        <span>{p.name}</span>
-                        <span className="dim">{p.cost.split('：')[0]}</span>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          </>
+          <CoreSettings key={tierNonce} values={pickCore(plan.values)} tier={PRESETS.find((p) => p.id === preset) ?? PRESETS[1]} live={record?.route === 'prism-core' ? record : null} onChange={setCoreValues} onTuned={onTuned} />
         )}
 
         {plan && (plan.profileNotes.length > 0 || plan.warnings.length > 0) && (
@@ -525,7 +472,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
           <div className="ready">
             <p className="ready-title">
               <i style={{ background: TONE_COLOR.ready }} />
-              已就绪{record ? `：${PRESETS.find((p) => p.id === record.preset)?.name}` : ''}
+              已就绪{record ? `：${recordName}` : ''}
             </p>
             {plan?.manualSteps.length ? (
               <ol className="ready-steps">
@@ -555,7 +502,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
 
 // ---------------------------------------------------------------------------
 
-const CORE_KEYS = ['prism-core.cadence', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard'];
+const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard'];
 
 function pickCore(values: CoreValues): CoreValues {
   return Object.fromEntries(Object.entries(values).filter(([k]) => CORE_KEYS.includes(k)));
@@ -564,26 +511,37 @@ function pickCore(values: CoreValues): CoreValues {
 /** What each cadence costs and keeps, from the CONTROL measurements and the offline comparison. */
 const CADENCE_NOTE: Record<number, string> = {
   1: '网络每帧跑一次，就是网络的完整答案，没有携带误差，开销最高（RTX 5090 Laptop、2560×1600、310.9 模型约 5 ms）。',
-  2: '默认。运动中最清楚的异步档：离线实测，和 1.1.1 的每 4 帧相比运动区域误差低约三成、闪烁低约四成，网络开销约为每帧的一半。',
+  2: '运动中最清楚的异步档：离线实测，和每 4 帧相比运动区域误差低约三成、闪烁低约四成，网络开销约为每帧的一半。',
   3: '介于每 2 帧和每 4 帧之间。',
   4: '最省。快速运动时改动最旧，鬼影最明显，适合静态画面多的游戏。',
 };
 
+const PASSES_NOTE: Record<number, string> = {
+  1: '网络跑一遍，改动最克制，开销最低。',
+  2: '推荐。第二遍在第一遍的结果上再跑一次，光影和质感的变化更明显，网络开销是 1 遍的两倍。',
+  3: '游乐场：网络开销是 1 遍的三倍，画面容易过度。只建议尝鲜，不建议实际游玩。',
+  4: '游乐场：网络开销是 1 遍的四倍，画面通常已经过度。只建议尝鲜，不建议实际游玩。',
+  5: '游乐场：网络开销是 1 遍的五倍，纯粹看看网络能走多远。不建议实际游玩。',
+};
+
 interface CoreSettingsProps {
   values: CoreValues;
+  /** The tier "恢复档位" goes back to. */
+  tier: PresetDef;
   /** The active Core install, when there is one: changes are written to it right away. */
   live: InstallRecord | null;
   onChange: (v: CoreValues) => void;
   onTuned: () => void;
 }
 
-function CoreSettings({ values, live, onChange, onTuned }: CoreSettingsProps) {
+function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsProps) {
   const [status, setStatus] = useState<'idle' | 'writing' | 'written' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cadence = Number(values['prism-core.cadence'] ?? 2);
+  const passes = Number(values['prism-core.passes'] ?? 2);
   const async = values['prism-core.async'] !== false;
-  const defaults = resolveValues('core');
+  const defaults = resolveValues(tier.id);
   const changed = CORE_KEYS.some((k) => String(values[k]) !== String(defaults[k]));
 
   useEffect(() => () => {
@@ -614,7 +572,7 @@ function CoreSettings({ values, live, onChange, onTuned }: CoreSettingsProps) {
 
   return (
     <section className="block">
-      <h2 className="block-title">Prism Core 设置</h2>
+      <h2 className="block-title">微调</h2>
 
       <div className="core-field">
         <span className="core-field-label" id="core-cadence-label">网络节奏</span>
@@ -628,6 +586,18 @@ function CoreSettings({ values, live, onChange, onTuned }: CoreSettingsProps) {
         <p className="block-note">{CADENCE_NOTE[cadence]}</p>
       </div>
 
+      <div className="core-field">
+        <span className="core-field-label" id="core-passes-label">网络遍数</span>
+        <div className="segmented" role="radiogroup" aria-labelledby="core-passes-label">
+          {[1, 2, 3, 4, 5].map((n) => (
+            <button key={n} role="radio" aria-checked={passes === n} className={`${passes === n ? 'is-on' : ''} ${n >= 3 ? 'is-playground' : ''}`} onClick={() => set({ 'prism-core.passes': String(n) })}>
+              {n} 遍
+            </button>
+          ))}
+        </div>
+        <p className={`block-note ${passes >= 3 ? 'tone-caution-text' : ''}`}>{PASSES_NOTE[passes]}</p>
+      </div>
+
       <label className={`core-toggle ${cadence === 1 ? 'is-disabled' : ''}`}>
         <input type="checkbox" checked={async && cadence > 1} disabled={cadence === 1} onChange={() => set({ 'prism-core.async': !async })} />
         <span>异步计算队列</span>
@@ -635,7 +605,7 @@ function CoreSettings({ values, live, onChange, onTuned }: CoreSettingsProps) {
       </label>
 
       <div className="core-field">
-        <TickRange label="改动强度" value={Number(values['prism-core.intensity'] ?? 100)} min={0} max={100} step={5} unit="%" help="保留网络改动的多少。100% 是网络的完整答案，调低画面更接近原画。" onChange={(v) => set({ 'prism-core.intensity': v })} />
+        <TickRange label="改动强度" value={Number(values['prism-core.intensity'] ?? 200)} min={0} max={300} step={5} unit="%" help="100% 是网络的完整答案；调低更接近原画，调高会把网络的改动再放大，最高 300%。档位用的是 120%～210%，250% 以上容易过度。" onChange={(v) => set({ 'prism-core.intensity': v })} />
         <TickRange label="角色守护" value={Number(values['prism-core.guard'] ?? 100)} min={0} max={100} step={5} unit="%" help="压住肤色和高饱和颜色上的色度改动。0% 等于不干预。" onChange={(v) => set({ 'prism-core.guard': v })} />
       </div>
 
@@ -653,7 +623,7 @@ function CoreSettings({ values, live, onChange, onTuned }: CoreSettingsProps) {
         </p>
         {changed && (
           <button className="btn btn-line btn-small" onClick={() => set({ ...pickCore(defaults) })}>
-            恢复默认
+            恢复{tier.name}档
           </button>
         )}
       </div>

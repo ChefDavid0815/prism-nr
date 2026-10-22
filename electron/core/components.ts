@@ -121,10 +121,62 @@ function saveComponent(id: string, version: string | null, contentDir: string): 
   return info;
 }
 
-async function download(url: string, dest: string, expectedSha256?: string): Promise<void> {
-  const res = await fetch(url, { headers: { 'User-Agent': 'PrismNR', Accept: 'application/octet-stream' }, redirect: 'follow' });
-  if (!res.ok) throw new Error(`下载失败 ${res.status}：${url}`);
-  const buf = Buffer.from(await res.arrayBuffer());
+// A request that gets no bytes for this long is dropped and retried; slow networks still finish,
+// a stalled connection no longer hangs the install forever.
+const IDLE_MS = 30000;
+const TRIES = 3;
+
+/** fetch with a deadline that restarts on every chunk received. */
+async function fetchWithIdle(url: string, init: RequestInit, onChunk?: (got: number, total: number) => void): Promise<Buffer> {
+  const ac = new AbortController();
+  let timer = setTimeout(() => ac.abort(), IDLE_MS);
+  const poke = () => { clearTimeout(timer); timer = setTimeout(() => ac.abort(), IDLE_MS); };
+  try {
+    const res = await fetch(url, { ...init, signal: ac.signal, redirect: 'follow' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const total = Number(res.headers.get('content-length')) || 0;
+    const parts: Buffer[] = [];
+    let got = 0;
+    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+      poke();
+      parts.push(Buffer.from(chunk));
+      got += chunk.length;
+      onChunk?.(got, total);
+    }
+    if (total && got < total) throw new Error(`连接中断（${got}/${total} 字节）`);
+    return Buffer.concat(parts);
+  } catch (e) {
+    throw ac.signal.aborted ? new Error(`${IDLE_MS / 1000} 秒没有收到数据`) : e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Retries a request; the last failure is reported with a hint to import by hand. */
+async function withRetry<T>(what: string, job: (attempt: number) => Promise<T>): Promise<T> {
+  let last: unknown;
+  for (let i = 1; i <= TRIES; i++) {
+    try {
+      return await job(i);
+    } catch (e) {
+      last = e;
+      log(`${what}: attempt ${i} failed: ${(e as Error).message}`);
+    }
+  }
+  throw new Error(`${what}失败（重试 ${TRIES} 次）：${(last as Error).message}。网络不稳定时可以换个网络再试，或者在"插件"页手动导入。`);
+}
+
+const mb = (n: number) => (n / 1048576).toFixed(1);
+
+async function download(url: string, dest: string, expectedSha256?: string, onProgress?: (msg: string) => void, label = path.basename(dest)): Promise<void> {
+  let shown = 0;
+  const buf = await withRetry(`下载 ${label} `, (attempt) =>
+    fetchWithIdle(url, { headers: { 'User-Agent': 'PrismNR', Accept: 'application/octet-stream' } }, (got, total) => {
+      if (!onProgress || Date.now() - shown < 400) return;
+      shown = Date.now();
+      onProgress(`下载 ${label}：${mb(got)}${total ? ` / ${mb(total)}` : ''} MB${attempt > 1 ? `（第 ${attempt} 次尝试）` : ''}`);
+    }),
+  );
   fs.writeFileSync(dest, buf);
   if (expectedSha256) {
     const got = sha256File(dest);
@@ -149,9 +201,10 @@ interface GhRelease {
 
 async function fetchGithub(src: ComponentSource, onProgress: (msg: string) => void): Promise<ComponentInfo> {
   onProgress(`查询 ${src.name} 的最新版本`);
-  const res = await fetch(`https://api.github.com/repos/${src.repo}/releases?per_page=100`, { headers: { 'User-Agent': 'PrismNR', Accept: 'application/vnd.github+json' } });
-  if (!res.ok) throw new Error(`无法访问 ${src.repo} 的发布页（${res.status}）`);
-  const releases = ((await res.json()) as GhRelease[]).filter((r) => !r.draft && (!src.tag || src.tag.test(r.tag_name)));
+  const body = await withRetry(`访问 ${src.repo} 的发布页`, () =>
+    fetchWithIdle(`https://api.github.com/repos/${src.repo}/releases?per_page=100`, { headers: { 'User-Agent': 'PrismNR', Accept: 'application/vnd.github+json' } }),
+  );
+  const releases = (JSON.parse(body.toString('utf8')) as GhRelease[]).filter((r) => !r.draft && (!src.tag || src.tag.test(r.tag_name)));
   const ordered = [...releases.filter((r) => !r.prerelease), ...releases.filter((r) => r.prerelease)];
   for (const rel of ordered) {
     const asset = rel.assets.find((a) => src.asset!.test(a.name));
@@ -159,7 +212,7 @@ async function fetchGithub(src: ComponentSource, onProgress: (msg: string) => vo
     const sha = asset.digest?.startsWith('sha256:') ? asset.digest.slice(7) : undefined;
     const dl = path.join(dirs.downloads, `${src.id}-${rel.tag_name}-${asset.name}`);
     onProgress(`下载 ${asset.name}`);
-    await download(asset.browser_download_url, dl, sha);
+    await download(asset.browser_download_url, dl, sha, onProgress, asset.name);
     if (!sha) log(`component ${src.id}: release has no digest, size check only`);
     const outDir = path.join(dirs.components, src.id, rel.tag_name);
     fs.rmSync(outDir, { recursive: true, force: true });
@@ -178,14 +231,14 @@ async function fetchGithub(src: ComponentSource, onProgress: (msg: string) => vo
 
 async function fetchReshade(onProgress: (msg: string) => void): Promise<ComponentInfo> {
   onProgress('查询 ReShade 最新版本');
-  const page = await (await fetch('https://reshade.me/', { headers: { 'User-Agent': 'PrismNR' } })).text();
+  const page = (await withRetry('访问 reshade.me ', () => fetchWithIdle('https://reshade.me/', { headers: { 'User-Agent': 'PrismNR' } }))).toString('utf8');
   const m = page.match(/href="([^"]*ReShade_Setup_([\d.]+)_Addon\.exe)"/i);
   if (!m) throw new Error('没有在 reshade.me 找到带插件支持的安装包链接。');
   const url = new URL(m[1], 'https://reshade.me/').toString();
   const version = m[2];
   const dl = path.join(dirs.downloads, `ReShade_Setup_${version}_Addon.exe`);
   onProgress(`下载 ReShade ${version}`);
-  await download(url, dl);
+  await download(url, dl, undefined, onProgress, `ReShade ${version}`);
   // The setup executable carries the DLLs as an embedded archive.
   const outDir = path.join(dirs.components, 'reshade', version);
   fs.rmSync(outDir, { recursive: true, force: true });
@@ -216,7 +269,9 @@ export async function ensureComponent(id: string, onProgress: (msg: string) => v
   const shipped = bundledSource(id);
   if (shipped) {
     onProgress(`安装 Prism NR 自带的 ${src.name}`);
-    const info = await importComponent(id, shipped);
+    let version: string | undefined;
+    try { version = fs.readFileSync(path.join(bundledDir, id, 'version.txt'), 'utf8').trim() || undefined; } catch { /* unversioned */ }
+    const info = await importComponent(id, shipped, version);
     log(`component ${id}: imported the bundled copy`);
     return info;
   }
@@ -226,14 +281,14 @@ export async function ensureComponent(id: string, onProgress: (msg: string) => v
 }
 
 /** Imports a user-provided archive or folder as a component. */
-export async function importComponent(id: string, source: string): Promise<ComponentInfo> {
+export async function importComponent(id: string, source: string, version = 'imported'): Promise<ComponentInfo> {
   const outDir = path.join(dirs.components, id, 'imported-' + Date.now());
   ensureDir(outDir);
   const stat = fs.statSync(source);
   if (stat.isDirectory()) fs.cpSync(source, outDir, { recursive: true });
   else if (/\.(zip|7z|rar|exe)$/i.test(source)) await extractArchive(source, outDir);
   else fs.copyFileSync(source, path.join(outDir, path.basename(source)));
-  return saveComponent(id, 'imported', outDir);
+  return saveComponent(id, version, outDir);
 }
 
 /** Finds the first file in a component whose relative path matches. */

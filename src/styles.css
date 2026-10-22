@@ -774,6 +774,13 @@ html.negative {
 .segmented-4 {
   grid-template-columns: repeat(4, 1fr);
 }
+.segmented-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+/* Passes 3 and up: the playground, marked in the caution colour until chosen. */
+.segmented button.is-playground:not(.is-on) {
+  color: var(--caution);
+}
 .core-field + .core-field,
 .core-toggle + .core-field {
   margin-top: 18px;
@@ -1104,6 +1111,17 @@ html.negative {
 .prow-main:hover .prow-name {
   text-decoration: underline;
   text-underline-offset: 4px;
+}
+/* Prism Core tiers: a reference table, not a list of things to open. */
+.ptable-tiers {
+  margin-bottom: 40px;
+}
+.ptable-tiers .ptable-head,
+.ptable-tiers .prow-main {
+  grid-template-columns: 72px 200px 1fr 150px;
+}
+.ptable-tiers .prow-main:hover .prow-name {
+  text-decoration: none;
 }
 .prow-name {
   font-weight: 700;

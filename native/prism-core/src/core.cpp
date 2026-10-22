@@ -216,7 +216,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
     DisableThreadLibraryCalls(self);
     const std::wstring dir = ModuleDir(self);
     logFile = _wfopen((dir + L"prism-core.log").c_str(), L"w");
-    Log("Prism Core 1.1.1 (F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded");
+    Log("Prism Core 1.1.2 (F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded");
     if (MH_Initialize() != MH_OK) { Log("MinHook init failed"); return TRUE; }
     CloseHandle(CreateThread(nullptr, 0, Watch, nullptr, 0, nullptr));
   }

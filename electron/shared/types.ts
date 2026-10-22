@@ -135,7 +135,10 @@ export interface PluginDef {
   params: PluginParam[];
 }
 
-export type PresetId = 'core' | 'flagship' | 'balanced' | 'fluid' | 'faithful';
+/** Prism Core tiers. */
+export type PresetId = 'extreme' | 'high' | 'standard' | 'light';
+/** Presets of earlier versions, still found in install records and history. */
+export type LegacyPresetId = 'core' | 'flagship' | 'balanced' | 'fluid' | 'faithful';
 
 export interface PresetDef {
   id: PresetId;
@@ -226,7 +229,7 @@ export interface InstallRecord {
   gameName: string;
   installDir: string;
   route: Route;
-  preset: PresetId;
+  preset: PresetId | LegacyPresetId;
   plugins: string[];
   /** Values written at install (and later tuning), so the app can show and edit them. */
   values?: Record<string, number | boolean | string>;

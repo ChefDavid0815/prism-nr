@@ -15,6 +15,7 @@ import type {
   NvidiaDll,
   PlanNeed,
   PlanRequest,
+  LegacyPresetId,
   PresetId,
   Route,
 } from '../shared/types';
@@ -65,17 +66,19 @@ function conflictingAddons(exeDir: string): string[] {
 
 /** prism-core.ini: Prism Core reads it at start and again whenever it changes. ASCII only. */
 export function coreIni(values: Values): string {
-  const pct = (k: string, d: number) => (Math.max(0, Math.min(100, Number(values[k] ?? d))) / 100).toFixed(2);
+  const pct = (k: string, d: number, max = 100) => (Math.max(0, Math.min(max, Number(values[k] ?? d))) / 100).toFixed(2);
   const cadence = Math.max(1, Math.min(4, Math.round(Number(values['prism-core.cadence'] ?? 2))));
   const async = values['prism-core.async'] ?? true;
+  const passes = Math.max(1, Math.min(5, Math.round(Number(values['prism-core.passes'] ?? 2))));
   return [
     '; Written by Prism NR. Prism Core re-reads this file while the game runs.',
     '[Prism Core]',
     'Enabled=1',
     `Cadence=${cadence}`,
     `Async=${async === true || async === '1' || async === 1 ? 1 : 0}`,
-    `Intensity=${pct('prism-core.intensity', 100)}`,
+    `Intensity=${pct('prism-core.intensity', 200, 300)}`,
     `Guard=${pct('prism-core.guard', 100)}`,
+    `Passes=${passes}`,
     'KeyToggle=F8',
     'KeyCadence=F2',
     'KeyAsync=F3',
@@ -89,23 +92,23 @@ export function coreIni(values: Values): string {
 // Planning
 // ---------------------------------------------------------------------------
 
+/** The Core tier for the GPU: high on flagship and high-end cards, lighter below. */
 function recommendedPreset(gpu: GpuInfo | null): PresetId {
   switch (gpu?.tier) {
     case 'flagship':
-      return 'flagship';
     case 'high':
-      return 'balanced';
+      return 'high';
+    case 'mainstream':
+      return 'standard';
     default:
-      return 'fluid';
+      return 'light';
   }
 }
 
-function chooseRoute(analysis: GameAnalysis, preset: PresetId, requested?: Route): Route {
+/** Prism Core is the only route: games it can't run on are blocked, with the reason. */
+function chooseRoute(analysis: GameAnalysis): Route {
   if (analysis.recommendedRoute === 'blocked') return 'blocked';
-  if (requested && analysis.routes.includes(requested)) return requested;
-  const pref = PRESETS.find((p) => p.id === preset)?.nativeRoutePreference ?? ['native-hook'];
-  for (const r of pref) if (analysis.routes.includes(r)) return r;
-  return analysis.recommendedRoute;
+  return analysis.routes.includes('prism-core') ? 'prism-core' : 'blocked';
 }
 
 /** Swaps plugins that do not fit the chosen route for ones that do. */
@@ -163,26 +166,21 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const profile = matchProfile(game.name, game.steamAppId);
   const savedStyle = store.settings().styles[game.id];
   const style = styleById(req.style ?? savedStyle ?? profile?.style ?? 'realistic');
-  // Prism Core is the default wherever it can run; profiles were written for the add-on routes.
-  const preset: PresetId = req.preset ?? (analysis.routes.includes('prism-core') ? 'core' : profile?.preset ?? recommendedPreset(gpu));
-  const route = chooseRoute(analysis, preset, req.route);
-  const presetDef = PRESETS.find((p) => p.id === preset)!;
-  const plugins = pluginsForRoute(route, req.plugins ?? presetDef.plugins);
-  const values: Values = { ...resolveValues(preset), ...style.values, ...(profile?.values ?? {}), ...(req.overrides ?? {}) };
+  // Prism Core only (the add-on routes were removed in 1.2): a tier picks the Core values.
+  const preset: PresetId = req.preset && PRESETS.some((p) => p.id === req.preset) ? req.preset : recommendedPreset(gpu);
+  const route = chooseRoute(analysis);
+  const plugins = pluginsForRoute('prism-core', req.plugins ?? ['nr-prism-core']);
+  const values: Values = { ...resolveValues(preset), ...(req.overrides ?? {}) };
 
   const blockers: string[] = [];
   const warnings = [...analysis.warnings];
   const manualSteps: string[] = [];
   const steps: string[] = [];
 
-  if (route === 'blocked') blockers.push(analysis.routeReason);
-  if (route === 'unknown') blockers.push(analysis.routeReason || '无法确定安装路线。');
+  if (analysis.recommendedRoute === 'blocked') blockers.push(analysis.routeReason);
+  else if (route === 'blocked') blockers.push('这个游戏用不了 Prism Core：它需要 DX12、64 位并且自带 DLSS 的游戏。');
   if (!analysis.exe) blockers.push('没有找到游戏主程序。');
-  if (route === 'feeder' && analysis.bitness === 'x86') blockers.push('32 位游戏需要辅助进程，暂不支持一键安装。');
-  if (analysis.apis.length === 1 && analysis.apis[0] === 'vulkan' && route !== 'optiscaler')
-    blockers.push('纯 Vulkan 游戏需要注册 ReShade 的 Vulkan 层，暂不支持一键安装。');
-  if (preset === 'core' && route !== 'prism-core' && route !== 'blocked')
-    blockers.push('这个游戏用不了 Prism Core：它需要 DX12、64 位并且自带 DLSS 的游戏。可以换用其他方案。');
+  if (Number(values['prism-core.passes'] ?? 2) >= 3) warnings.push('3 遍以上是实验性质的游乐场：开销成倍增加，画面容易过度，不建议实际游玩。');
   if (route === 'prism-core' && analysis.exe) {
     const exeDir = path.dirname(analysis.exe);
     const loader = path.join(exeDir, 'version.dll');
@@ -194,7 +192,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
     const ours = new Set(store.installs().filter((r) => r.gameId === game.id && r.status === 'active').flatMap((r) => r.files.map((x) => x.target.toLowerCase())));
     const addons = conflictingAddons(exeDir).filter((a) => !ours.has(a.toLowerCase()));
     if (addons.length) warnings.push(`检测到 ${addons.map((a) => path.basename(a)).join('、')}，它和 Prism Core 挂钩同一个 DLSS 调用。启用时会先移走，还原时放回。`);
-    warnings.push('Prism Core 是实验性预览，目前只在 CONTROL Resonant 上实测过。');
+    warnings.push('Prism Core 是实验性预览，目前在 CONTROL Resonant 和地平线 6 上实测过。');
   }
   if (gpu && gpu.nrSupport === 'none') blockers.push(gpu.expectation);
   if (gpu?.nrSupport === 'experimental') warnings.push(gpu.expectation);
@@ -202,38 +200,17 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const nr = bestDll(dlls, 'nvngx_dlssnr.dll', true);
   if (!nr) blockers.push('没有找到可用的神经渲染文件 nvngx_dlssnr.dll（安装包自带的副本缺失或签名无效）。请重新安装 Prism NR。');
   else if (!nr.signed) warnings.push(`将使用本机的未签名版 nvngx_dlssnr.dll（${nr.version ?? '未知版本'}，可能是社区修改版）。找到 NVIDIA 签名版后 Prism 会自动改用签名版。`);
-  if (route === 'feeder' && !analysis.nativeDlss.present && !bestDll(dlls, 'nvngx_dlss.dll'))
-    blockers.push('Feeder 路线还需要 nvngx_dlss.dll，本机没有找到 NVIDIA 签名的副本。');
-
-  const needs: PlanNeed[] = componentIdsFor(route, plugins).map((id) => {
-    const src = SOURCES.find((s) => s.id === id)!;
-    const have = getComponent(id);
-    // A component shipped with Prism NR installs itself, even one that would otherwise be imported by hand.
-    return { id, name: src.name, status: have ? 'ready' : src.kind === 'manual' && !isBundled(id) ? 'manual' : 'auto', hint: src.manualHint };
-  });
-  for (const n of needs) if (n.status === 'manual') blockers.push(`需要导入一次：${n.name}。${n.hint ?? ''}`);
-
-  if (needs.some((n) => n.status === 'auto')) steps.push(`下载并校验 ${needs.filter((n) => n.status === 'auto').map((n) => n.name).join('、')}`);
+  // Prism Core downloads nothing: the runtime and NVIDIA's model ship inside the installer.
+  const needs: PlanNeed[] = [];
   if (existsAnyPrevious(game.id)) steps.push('还原这个游戏上一次的 Prism 安装');
   steps.push('备份游戏目录里会被覆盖的文件');
-  if (route === 'optiscaler') steps.push('部署 OptiScaler 前置神经渲染，写入 OptiScaler.ini');
-  if (route === 'prism-core') steps.push('部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini');
-  else if (route !== 'optiscaler') steps.push('部署 ReShade 和神经渲染插件');
-  if (route === 'feeder') steps.push('部署 Feeder 与运动矢量，补全神经渲染输入');
+  steps.push('部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini');
   steps.push(`复制${nr?.bundled ? ' Prism NR 自带的' : '本机的'} NVIDIA 签名版 nvngx_dlssnr.dll${nr?.version ? `（${nr.version}）` : ''}`);
-  const prismCount = plugins.filter((p) => pluginById(p)?.origin === 'prism').length;
-  if (prismCount) steps.push(`部署 ${prismCount} 个 Prism 原生插件，写好参数和顺序`);
   steps.push('写入安装清单，之后可以一键还原');
 
-  if (route === 'prism-core') manualSteps.push('在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。');
-  else if (route !== 'feeder' && analysis.nativeDlss.present) manualSteps.push('在游戏设置里开启 DLSS 超分或 DLAA。');
+  manualSteps.push('在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。');
   if (plugins.includes('framegen') && values['framegen.mode'] !== 'off') manualSteps.push(`在游戏设置或 NVIDIA App 里开启 ${values['framegen.mode']} 帧生成。`);
-  if (plugins.includes('nr-renodx')) steps.push('写入神经渲染强度、遍数和工作分辨率，进游戏即生效');
-  if (route === 'native-hook' && (preset === 'balanced' || preset === 'fluid'))
-    manualSteps.push(`在游戏设置里把 DLSS 设为${Number(values['nr-optiscaler.modelResolution']) <= 50 ? '性能' : '质量'}档，神经渲染会跟随渲染分辨率，帧率明显提升。`);
-  if (route === 'prism-core') manualSteps.push('游戏里按 F8 开关 Prism Core、F4 分屏对比原画。节奏和强度在这里调，游戏运行中约 1 秒内生效。');
-  else if (route !== 'optiscaler') manualSteps.push('游戏里按 F6 开关神经渲染、F7 开关 Prism 插件，可以随时对比。');
-  if (route === 'optiscaler') manualSteps.push('第一次进游戏如果画面没有变化，按 Insert 打开 OptiScaler 菜单确认 Neural Rendering 已开启。');
+  manualSteps.push('游戏里按 F8 开关 Prism Core、F4 分屏对比原画。档位、遍数和强度在这里调，游戏运行中约 1 秒内生效。');
 
   const riskConsent = analysis.antiCheatOptIn ? { ...analysis.antiCheatOptIn, accepted: req.acceptRisk === true } : undefined;
   if (riskConsent) manualSteps.unshift(riskConsent.how);
@@ -251,7 +228,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
     manualSteps,
     blockers,
     warnings,
-    profileNotes: profile?.notes ?? [],
+    profileNotes: profile?.coreNotes ?? [],
   };
 }
 
@@ -279,7 +256,7 @@ function techniquesIn(file: string): string[] {
  * RenoDX DLSS 5 add-on settings, written as the [RenoDX.DLSS5] section the add-on reads from
  * ReShade.ini (keys observed from RenoDX DLSS5 Generic 6.5.3). Values are 0..1 except passes.
  */
-function renodxSection(values: Values, route: Route, preset: PresetId): string {
+function renodxSection(values: Values, route: Route, preset: PresetId | LegacyPresetId): string {
   const pct = (k: string, d: number) => Math.max(0, Math.min(1, Number(values[k] ?? d) / 100));
   const passes = Math.max(1, Math.min(4, Number(values['nr-renodx.passes'] ?? 1)));
   const modelRes = Number(values['nr-optiscaler.modelResolution'] ?? 100);
@@ -737,16 +714,19 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
         log(`upgrade ${r.gameName}: ${name} busy (${(e as Error).message}), next start`);
       }
     }
-    if (r.values && String(r.values['prism-core.cadence'] ?? '4') === '4' && !r.values['prism-core.cadenceChosen']) {
+    // Installs from before the tiers move to the recommended tier, unless the user tuned them.
+    if (r.preset === 'core') {
       const ini = r.files.find((f) => /prism-core\.ini$/i.test(f.target));
       if (ini && exists(ini.target)) {
-        const values = { ...r.values, 'prism-core.cadence': '2' };
+        const tuned = Boolean(r.values?.['prism-core.cadenceChosen']);
+        const values = tuned ? { ...resolveValues('high'), ...r.values } : { ...(r.values ?? {}), ...resolveValues('high') };
         const content = coreIni(values);
         try {
           fs.writeFileSync(ini.target, content, 'utf8');
           ini.sha256After = sha256Text(content);
           r.values = values;
-          notes.push('cadence 4 -> 2');
+          r.preset = 'high';
+          notes.push(tuned ? 'passes 2' : 'tier high');
         } catch (e) {
           log(`upgrade ${r.gameName}: prism-core.ini busy (${(e as Error).message})`);
         }

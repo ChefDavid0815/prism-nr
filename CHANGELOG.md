@@ -1,6 +1,18 @@
 # Changelog
 
-## 1.1.2 — 2026-10-22 · Less ghosting, no freezes, NVIDIA's new model built in
+## 1.1.2 — 2026-10-22 · Prism Core only, tiers, passes; less ghosting, no freezes
+
+- Prism Core is the only route. The ReShade presets (旗舰 / 均衡 / 流畅 / 原片优先) and their
+  community components (ReShade, RenoDX, OptiScaler, Feeder, LumeniteFX) are gone from the app and
+  the installer, so nothing is downloaded any more (the "访问 RankFTW/rhi-repo 的发布页失败" error
+  can no longer happen). Earlier add-on installs can still be rolled back from 还原记录.
+- Four tiers pick cadence, passes and intensity together: 极致 (every frame, 2 passes, 210%),
+  高画质 (every 2 frames, 2 passes, 200%, the default), 标准 (every 2 frames, 1 pass, 150%),
+  流畅 (every 4 frames, 1 pass, 120%). Any setting can still be tuned; the tier then shows as 自定义.
+  Core installs from earlier versions move to 高画质 unless their cadence was chosen by hand.
+- Network passes 1–5: each pass runs the network again on the previous pass's output, with its own
+  feature and history. 3 passes and up are marked as a playground, not for real play.
+- Intensity 0–300%: above 100% amplifies the network's edit.
 
 - Ghosting under motion: a study on a recorded game sequence with the real network as reference
   (`docs/research/ghosting`) showed the error follows the age of the shown edit. Prism Core now
@@ -20,7 +32,8 @@
   installed after the user accepts the risk; every other anti-cheat game stays blocked, and known
   online titles (F1 25, FC 26, Apex Legends) are blocked even when their anti-cheat files are gone.
 - A manually added folder can be removed from the list (files are untouched).
-- Third-party components can ship in the installer and import themselves on first use.
+- Component downloads (kept for the code paths that still use them) show their progress, give up
+  on a connection that sends nothing for 30 seconds and retry up to 3 times.
 - Core records frame sequences (`Record=N`) for offline studies, and has frame-time statistics and
   an experimental frame cap for the 1.2 frame-pacing work.
 

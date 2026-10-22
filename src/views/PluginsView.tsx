@@ -1,55 +1,39 @@
-import { useEffect, useState } from 'react';
-import { CATEGORY_LABEL, PLUGINS } from '../../electron/shared/catalog';
-import type { ComponentInfo, PluginCategory } from '../../electron/shared/types';
+import { useState } from 'react';
+import { PLUGINS, PRESETS } from '../../electron/shared/catalog';
 import { api } from '../api';
 
 const ORIGIN_LABEL = { prism: 'Prism 原生', community: '社区组件', nvidia: 'NVIDIA' };
-const CATS: (PluginCategory | 'all')[] = ['all', 'core', 'performance', 'quality', 'deai', 'stability'];
-
-// Which component a community plugin installs from.
-const COMPONENT_OF: Record<string, string> = { 'nr-renodx': 'renodx-dlss5', 'nr-dfc': 'dfc', feeder: 'feeder', 'motion-lumenite': 'lumenite', 'nr-optiscaler': 'optiscaler-presr', mgpu: 'mgpu' };
-const MANUAL = new Set(['dfc', 'lumenite', 'mgpu']);
 
 export function PluginsView() {
-  const [cat, setCat] = useState<PluginCategory | 'all'>('all');
-  const [open, setOpen] = useState<string | null>('prism-guard');
-  const [components, setComponents] = useState<ComponentInfo[]>([]);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  const refresh = () => api.listComponents().then(setComponents).catch(() => {});
-  useEffect(() => {
-    void refresh();
-  }, []);
-
-  const list = PLUGINS.filter((p) => cat === 'all' || p.category === cat);
-
-  const importFor = async (componentId: string) => {
-    try {
-      const c = await api.importComponent(componentId);
-      if (c) {
-        setMsg(`已导入 ${c.name}`);
-        void refresh();
-      }
-    } catch (e) {
-      setMsg((e as Error).message);
-    }
-  };
+  const [open, setOpen] = useState<string | null>('nr-prism-core');
+  // Prism Core is the only route since 1.2; the add-on plugins are gone from the app.
+  const list = PLUGINS.filter((p) => p.routes.includes('prism-core'));
 
   return (
     <div className="page">
       <header className="page-head">
         <h1>插件</h1>
-        <p>Prism 把每个插件的用途、开销和适用显卡写清楚。一键启用时会按游戏和方案自动挑选，这里可以查看细节。</p>
+        <p>Prism NR 现在只用自己的 Prism Core：不需要 ReShade，也不用下载任何社区组件。档位、遍数和强度在游戏详情里调。</p>
       </header>
-      <div className="tabs" role="tablist" aria-label="插件分类">
-        {CATS.map((c) => (
-          <button key={c} role="tab" aria-selected={cat === c} className={cat === c ? 'is-on' : ''} onClick={() => setCat(c)}>
-            {c === 'all' ? '全部' : CATEGORY_LABEL[c]}
-            <span className="mono">{String(PLUGINS.filter((p) => c === 'all' || p.category === c).length).padStart(2, '0')}</span>
-          </button>
+
+      <div className="ptable ptable-tiers" role="table" aria-label="Prism Core 档位">
+        <div className="ptable-head" role="row">
+          <span role="columnheader">档位</span>
+          <span role="columnheader">节奏 · 遍数 · 强度</span>
+          <span role="columnheader">说明</span>
+          <span role="columnheader">适合</span>
+        </div>
+        {PRESETS.map((p) => (
+          <div key={p.id} className="prow" role="row">
+            <div className="prow-main">
+              <span role="cell" className="prow-name">{p.name}</span>
+              <span role="cell" className="mono">{p.gpuLabel}</span>
+              <span role="cell" className="prow-sum">{p.summary}</span>
+              <span role="cell" className="mono dim">{p.forTiers.includes('flagship') ? 'RTX 5080 / 5090' : p.forTiers.includes('high') ? 'RTX 5070 Ti / 5080' : 'RTX 5060 / 5070'}</span>
+            </div>
+          </div>
         ))}
       </div>
-      {msg && <p className="banner" role="status">{msg}</p>}
 
       <div className="ptable" role="table" aria-label="插件列表">
         <div className="ptable-head" role="row">
@@ -61,8 +45,6 @@ export function PluginsView() {
         </div>
         {list.map((p) => {
           const isOpen = open === p.id;
-          const compId = COMPONENT_OF[p.id];
-          const have = compId ? components.some((c) => c.id === compId) : true;
           return (
             <div key={p.id} className={`prow ${isOpen ? 'is-open' : ''}`} role="row">
               <button className="prow-main" onClick={() => setOpen(isOpen ? null : p.id)} aria-expanded={isOpen}>
@@ -125,17 +107,6 @@ export function PluginsView() {
                           {p.source.license ? `（${p.source.license}）` : ''}
                         </p>
                         {p.source.note && <p className="dim">{p.source.note}</p>}
-                        {compId && (
-                          <p className="comp-state">
-                            <i className={have ? 'dot-ready' : MANUAL.has(compId) ? 'dot-caution' : 'dot-info'} />
-                            {have ? '已在组件仓库' : MANUAL.has(compId) ? '需要导入一次' : '启用时自动下载'}
-                            {!have && MANUAL.has(compId) && (
-                              <button className="btn btn-line btn-small" onClick={() => void importFor(compId)}>
-                                导入
-                              </button>
-                            )}
-                          </p>
-                        )}
                       </>
                     )}
                   </div>

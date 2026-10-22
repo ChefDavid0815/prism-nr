@@ -470,6 +470,12 @@ void STDMETHODCALLTYPE HookExecute(ID3D12CommandQueue* q, UINT n, ID3D12CommandL
 }
 void* nrHandle = nullptr;
 OwnedParams nrParams;
+// Passes (Passes=1..5): each pass after the first runs the network again on the previous pass's
+// output, with a feature of its own so every pass keeps its own history. proxy -> mids -> neural.
+constexpr int kMaxPasses = 5;
+int passes = 2;
+ID3D12Resource* mids[2] = {};
+struct PassFeatures { void* h[kMaxPasses - 1] = {}; bool fresh[kMaxPasses - 1] = {}; } morePasses, moreAsync;
 uint64_t frame = 0;
 ID3D12QueryHeap* queries = nullptr;
 ID3D12Resource* stamps = nullptr;
@@ -572,7 +578,10 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   warpsL[1] = Tex(DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
   landedEdit = Tex(DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, true);  // .a holds depth
   scratch = Tex(DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);  // .a holds depth (or a hole mark)
+  mids[0] = Tex(DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+  mids[1] = Tex(DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
   haveLanded = false;
+  if (!mids[0] || !mids[1]) return Fail("pass resources");
   if (!origCopy || !proxy || !neural || !tiles || !exposure || !edits[0] || !edits[1] || !warps[0] || !warps[1] || !warpsL[0] || !warpsL[1] || !landedEdit || !scratch) return Fail("resources");
   // Descriptors: kRing blocks of kBlock (see kBlock).
   D3D12_DESCRIPTOR_HEAP_DESC hd = {}; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = kBlock * kRing;
@@ -705,6 +714,7 @@ bool SetupAsync(const UpscaleCall& c) {
 void ReleaseAsync() {
   BuryNgx(asyncHandle);
   asyncHandle = nullptr;
+  for (void*& f : moreAsync.h) { BuryNgx(f); f = nullptr; }
   Bury(computeList);
   for (auto& a : computeAlloc) { Bury(a); a = nullptr; }
   Bury(computeQueue); Bury(fenceLaunch); Bury(fenceDone);
@@ -715,7 +725,7 @@ void ReleaseAsync() {
 // released while the GPU might still use it: it waits in the graveyard for a few frames.
 void Teardown() {
   ID3D12Resource** slots[] = {&origCopy, &proxy, &neural, &tiles, &exposure, &edits[0], &edits[1], &warps[0], &warps[1], &warpsL[0], &warpsL[1], &landedEdit, &scratch,
-                              &motionCopy, &depthCopy, &recMotion, &recDepth};
+                              &motionCopy, &depthCopy, &recMotion, &recDepth, &mids[0], &mids[1]};
   for (ID3D12Resource** r : slots) {
     Bury(*r);
     *r = nullptr;
@@ -724,6 +734,7 @@ void Teardown() {
   heap = nullptr;
   BuryNgx(nrHandle);
   nrHandle = nullptr;
+  for (void*& f : morePasses.h) { BuryNgx(f); f = nullptr; }
   if (computeQueue) ReleaseAsync();
   for (RecFrame& rf : recFrames) { Bury(rf.color); Bury(rf.motion); Bury(rf.depth); }
   recFrames.clear(); recordLeft = 0; recordDoneAt = 0;
@@ -895,6 +906,39 @@ void UavBarrier(ID3D12GraphicsCommandList* l) {
   l->ResourceBarrier(1, &br);
 }
 
+// The network's passes on one list: `first` runs on the proxy, later passes on the pass before,
+// the last one writes `neural`. A feature for a later pass is made on first use (and starts with a
+// reset); if it can't be made, the passes made so far are the result.
+ngx::Result EvaluatePasses(ID3D12GraphicsCommandList* l, void* first, PassFeatures& more, void* p, bool reset) {
+  const auto SRV = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, UAV = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  int n = passes;
+  for (int i = 1; i < n; ++i) {
+    if (more.h[i - 1]) continue;
+    const ngx::Result cr = nrCreate(l, ngx::kFeatureNeuralRendering, p, &more.h[i - 1]);
+    if (cr != ngx::kSuccess || !more.h[i - 1]) { Log("pass %d feature 0x%08x: running %d pass(es)", i + 1, cr, i); more.h[i - 1] = nullptr; passes = n = i; break; }
+    more.fresh[i - 1] = true;
+  }
+  // The passes in between ping-pong through two textures; one read by the pass before goes back
+  // to UAV before it is written again.
+  ID3D12Resource* in = proxy;
+  bool readable[2] = {};
+  ngx::Result r = ngx::kSuccess;
+  for (int i = 0; i < n && r == ngx::kSuccess; ++i) {
+    const int m = i & 1;
+    ID3D12Resource* out = i == n - 1 ? neural : mids[m];
+    if (out == mids[m] && readable[m]) { Barrier(l, out, SRV, UAV); readable[m] = false; }
+    bool rs = reset;
+    if (i > 0) { rs = rs || more.fresh[i - 1]; more.fresh[i - 1] = false; }
+    ngx::SetRes(p, "DLSSNR.Color", in); ngx::SetRes(p, "DLSSNR.Output", out);
+    ngx::SetI(p, "DLSSNR.Reset", rs ? 1 : 0);
+    r = nrEvaluate(l, i == 0 ? first : more.h[i - 1], p, nullptr);
+    if (i < n - 1) { Barrier(l, out, UAV, SRV); readable[m] = true; }
+    in = out;
+  }
+  for (int m = 0; m < 2; ++m) if (readable[m]) Barrier(l, mids[m], SRV, UAV);
+  return r;
+}
+
 // prism-core.ini beside the game: defaults and hotkeys, written by the Prism NR app. It is
 // re-read whenever it changes, so the app can tune a running game.
 struct Keys { int toggle = VK_F8, cadence = VK_F2, async = VK_F3, split = VK_F4, capture = VK_F11; } keys;
@@ -929,10 +973,11 @@ void LoadConfig() {
     const double x = v.empty() ? fallback : _wtof(v.c_str());
     return x < lo ? lo : x > hi ? hi : x;
   };
-  const int oldCadence = cadence;
+  const int oldCadence = cadence, oldPasses = passes;
   const bool oldAsync = asyncMode, oldEnabled = enabled;
   enabled = Num(L"Enabled", enabled ? 1 : 0, 0, 1) != 0;
   cadence = int(Num(L"Cadence", cadence, 0, 8));
+  passes = int(Num(L"Passes", passes, 1, kMaxPasses));
   {
     const std::wstring land = Get(L"Land");
     if (!land.empty()) landPoll = !lstrcmpiW(land.c_str(), L"poll");
@@ -961,7 +1006,7 @@ void LoadConfig() {
     statsEnd = 0.0;
   }
   asyncMode = Num(L"Async", asyncMode ? 1 : 0, 0, 1) != 0;
-  intensity = float(Num(L"Intensity", intensity, 0, 1));
+  intensity = float(Num(L"Intensity", intensity, 0, 3));  // above 1 amplifies the network's edit
   guardStrength = float(Num(L"Guard", guardStrength, 0, 1));
   split = Num(L"Split", split ? 1 : 0, 0, 1) != 0;
   keys.toggle = ParseKey(Get(L"KeyToggle"), keys.toggle);
@@ -969,8 +1014,8 @@ void LoadConfig() {
   keys.async = ParseKey(Get(L"KeyAsync"), keys.async);
   keys.split = ParseKey(Get(L"KeySplit"), keys.split);
   keys.capture = ParseKey(Get(L"KeyCapture"), keys.capture);
-  if (cadence != oldCadence || asyncMode != oldAsync || enabled != oldEnabled) historyValid = false;
-  if (Log) Log("prism-core.ini: %s, network every %d frame(s), async %s, land %s, %s priority, cap %d fps, intensity %.2f, guard %.2f [%s]", enabled ? "on" : "off", cadence, asyncMode ? "on" : "off", landPoll ? "poll" : "wait", netPriority ? "high" : "normal", fpsCap, intensity, guardStrength, label.c_str());
+  if (cadence != oldCadence || passes != oldPasses || asyncMode != oldAsync || enabled != oldEnabled) historyValid = false;
+  if (Log) Log("prism-core.ini: %s, network every %d frame(s) x%d pass(es), async %s, land %s, %s priority, cap %d fps, intensity %.2f, guard %.2f [%s]", enabled ? "on" : "off", cadence, passes, asyncMode ? "on" : "off", landPoll ? "poll" : "wait", netPriority ? "high" : "normal", fpsCap, intensity, guardStrength, label.c_str());
 }
 
 ID3D12Resource* Readback(ID3D12Resource* src, D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp) {
@@ -1345,11 +1390,10 @@ bool PipelineRecord(const UpscaleCall& c) {
       ngx::SetF(ap, "DLSSNR.MVecScaleX", c.motionScaleX * ms); ngx::SetF(ap, "DLSSNR.MVecScaleY", c.motionScaleY * ms);
       ngx::SetI(ap, "DLSSNR.DepthInverted", (gameCreateFlags & (1 << 3)) ? 1 : 0);
       ngx::SetI(ap, "DLSSNR.Enabled", 1);
-      ngx::SetI(ap, "DLSSNR.Reset", launchId == 0 ? 1 : 0);
       ngx::SetF(ap, "DLSSNR.Intensity", 1.f);
       const UINT q0 = UINT(launchId & 1) * 2;
       if (netQueries) computeList->EndQuery(netQueries, D3D12_QUERY_TYPE_TIMESTAMP, q0);
-      const ngx::Result ar = nrEvaluate(computeList, asyncHandle, ap, nullptr);
+      const ngx::Result ar = EvaluatePasses(computeList, asyncHandle, moreAsync, ap, launchId == 0);
       if (netQueries && netStamps) {
         computeList->EndQuery(netQueries, D3D12_QUERY_TYPE_TIMESTAMP, q0 + 1);
         computeList->ResolveQueryData(netQueries, D3D12_QUERY_TYPE_TIMESTAMP, q0, 2, netStamps, UINT64(q0) * 8);
@@ -1405,9 +1449,8 @@ bool PipelineRecord(const UpscaleCall& c) {
   ngx::SetF(p, "DLSSNR.MVecScaleX", c.motionScaleX); ngx::SetF(p, "DLSSNR.MVecScaleY", c.motionScaleY);
   ngx::SetI(p, "DLSSNR.DepthInverted", (gameCreateFlags & (1 << 3)) ? 1 : 0);
   ngx::SetI(p, "DLSSNR.Enabled", 1);
-  ngx::SetI(p, "DLSSNR.Reset", (c.reset || frame == 0) ? 1 : 0);
   ngx::SetF(p, "DLSSNR.Intensity", 1.f);
-  const ngx::Result r = nrEvaluate(l, nrHandle, p, nullptr);
+  const ngx::Result r = EvaluatePasses(l, nrHandle, morePasses, p, c.reset || frame == 0);
   if (r != ngx::kSuccess) { Log("NR evaluate 0x%08x", r); return Fail("NR evaluate"); }
   // 5. Compose onto the game's frame. NGX changed the bindings: set ours again.
   Barrier(l, neural, UAV, SRV);

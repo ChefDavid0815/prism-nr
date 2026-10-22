@@ -6,6 +6,7 @@ import { parseVdf } from '../core/scanner';
 import { PrismService } from '../core/service';
 import { initStore } from '../core/store';
 import { setIniValue } from '../core/installer';
+import { resolveValues, tierOf } from '../shared/catalog';
 import { nrCostFor, planNr } from '../shared/nrplan';
 
 function assert(cond: boolean, msg: string): void {
@@ -24,9 +25,14 @@ async function main(): Promise<void> {
   assert(/\[Plugins\]\r\nLoadReshade=true/.test(setIniValue('[A]\r\nx=1', 'Plugins', 'LoadReshade', 'true')), 'INI writer adds a missing section');
 
   const ini0 = coreIni({});
-  assert(/\[Prism Core\]\r\nEnabled=1\r\nCadence=2\r\nAsync=1\r\nIntensity=1\.00\r\nGuard=1\.00/.test(ini0), 'Core INI: defaults are cadence 2, async, full intensity and guard');
+  assert(/\[Prism Core\]\r\nEnabled=1\r\nCadence=2\r\nAsync=1\r\nIntensity=2\.00\r\nGuard=1\.00\r\nPasses=2/.test(ini0), 'Core INI: defaults are the high tier (every 2 frames, async, 200%, 2 passes)');
   const ini1 = coreIni({ 'prism-core.cadence': '2', 'prism-core.async': false, 'prism-core.intensity': 60, 'prism-core.guard': 150 });
   assert(/Cadence=2/.test(ini1) && /Async=0/.test(ini1) && /Intensity=0\.60/.test(ini1) && /Guard=1\.00/.test(ini1), 'Core INI: values are written and clamped');
+  const ini2 = coreIni({ 'prism-core.intensity': 400, 'prism-core.passes': '9' });
+  assert(/Intensity=3\.00/.test(ini2) && /Passes=5/.test(ini2), 'Core INI: intensity goes up to 300%, passes up to 5');
+  const extreme = coreIni(resolveValues('extreme'));
+  assert(/Cadence=1/.test(extreme) && /Async=0/.test(extreme) && /Intensity=2\.10/.test(extreme) && /Passes=2/.test(extreme), 'Core INI: the extreme tier is every frame, 2 passes, 210%');
+  assert(tierOf(resolveValues('high'))?.id === 'high' && tierOf({ ...resolveValues('high'), 'prism-core.intensity': 205 }) === undefined, 'Tiers: values name their tier, a tweak makes them custom');
   assert(/^[\x00-\x7f]*$/.test(ini0), 'Core INI: ASCII only (GetPrivateProfileString reads it as ANSI)');
 
   const c5060 = nrCostFor('NVIDIA GeForce RTX 5060', false);

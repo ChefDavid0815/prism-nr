@@ -61,6 +61,7 @@ about once a second), so it can be tuned while the game runs. The app writes it;
 [Prism Core]
 Enabled=1        ; 0 starts with Core off (the toggle key still works)
 Cadence=2        ; the network every 1-4 frames
+Passes=2         ; network passes per run, 1-3: each pass refines the one before (own feature, own history)
 Async=1          ; the network on its own compute queue (cadence 2 and up)
 Stability=0.3    ; how much of the previous edit stays where a landed edit is sampled, 0-0.9
 NetMotion=exact  ; exact: the network gets the true motion since its last run; approx: x span

@@ -19,16 +19,17 @@ export const PLUGINS: PluginDef[] = [
       '角色守护：限制改动里的色度，肤色和发色不被改掉',
       '设置写在游戏目录的 prism-core.ini，游戏运行中改动约 1 秒内生效',
     ],
-    cost: '中：网络单次 5.1 ms（310.9.16 模型，RTX 5090 Laptop，2560×1600），每 2 帧一次；1.1 在 CONTROL 实测每帧 +5.0 ms，每帧全分辨率是 +13.4 ms（旧模型、每 4 帧）',
+    cost: '中到高：网络单遍约 5.4 ms（310.9.16 模型，RTX 5090 Laptop，2560×1600），开销 = 单遍 × 遍数 ÷ 节奏；地平线 6 实测关闭 109 帧，高画质档 92 帧，极致档 75 帧',
     gpu: 'RTX 50 系，DX12 且自带 DLSS 的游戏',
     routes: ['prism-core'],
     conflicts: ['nr-renodx', 'nr-dfc', 'nr-optiscaler'],
     requires: [],
-    risk: '实验性预览，目前只在 CONTROL Resonant 上实测过。快速运动的人脸在每 4 帧时细节损失最大。',
+    risk: '实验性预览，目前在 CONTROL Resonant 和地平线 6 上实测过。3 遍以上、强度 250% 以上容易过度，只建议尝鲜。',
     params: [
       { key: 'prism-core.cadence', label: '网络节奏', help: '网络每几帧跑一次。每 2 帧是默认：和 1.1.1 的每 4 帧相比，运动中的误差少约三成、闪烁少约四成；每帧没有携带误差但开销最高。', type: 'choice', choices: [{ value: '1', label: '每帧' }, { value: '2', label: '每 2 帧' }, { value: '3', label: '每 3 帧' }, { value: '4', label: '每 4 帧' }], default: '2' },
+      { key: 'prism-core.passes', label: '网络遍数', help: '每次运行网络跑几遍：第二遍在第一遍的结果上再跑一次，改动更明显，网络开销随遍数成倍增加。3 遍以上是实验性质的游乐场，不建议实际游玩。', type: 'choice', choices: [1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: `${n} 遍` })), default: '2' },
       { key: 'prism-core.async', label: '异步计算队列', help: '网络在独立队列上和下一帧并行跑。节奏 2 帧以上生效。', type: 'toggle', default: true },
-      { key: 'prism-core.intensity', label: '改动强度', help: '网络改动保留多少。100% 是网络的完整答案。', type: 'range', min: 0, max: 100, step: 5, unit: '%', default: 100 },
+      { key: 'prism-core.intensity', label: '改动强度', help: '100% 是网络的完整答案，高于 100% 把改动再放大，最高 300%。', type: 'range', min: 0, max: 300, step: 5, unit: '%', default: 200 },
       { key: 'prism-core.guard', label: '角色守护', help: '肤色和高饱和颜色上的色度改动被压住多少。0 等于不干预。', type: 'range', min: 0, max: 100, step: 5, unit: '%', default: 100 },
     ],
   },
@@ -277,18 +278,66 @@ export const PLUGINS: PluginDef[] = [
   },
 ];
 
+// Prism Core tiers. Frame rates: Forza Horizon 6 benchmark, RTX 5090 Laptop, 2560×1600, DLSS
+// Quality, 2× frame generation; Prism off 109 FPS. Intensity costs nothing; cadence and passes do.
 export const PRESETS: PresetDef[] = [
   {
-    id: 'core',
-    name: 'Prism Core',
-    forTiers: ['flagship', 'high', 'mainstream', 'entry'],
-    gpuLabel: '任意 RTX 50 · DX12 + DLSS 游戏',
-    summary: '我们自己的运行时：网络每 2 帧跑一次全分辨率，其余帧从网络的答案直接取样，异步运行，带角色守护。不需要 ReShade。',
+    id: 'extreme',
+    name: '极致',
+    forTiers: ['flagship'],
+    gpuLabel: '每帧 · 2 遍 · 210%',
+    summary: '网络每帧跑两遍，改动拉到 210%，配 Prism 调色。效果最强，开销也最大。',
     nativeRoutePreference: ['prism-core'],
     plugins: ['nr-prism-core'],
-    values: { 'framegen.mode': 'off' },
-    expectation: '1.1 在 CONTROL 实测比每帧全分辨率跑网络快 40%（旧模型）；1.1.2 换成 NVIDIA 新模型，网络本身再便宜 44%，运动中的误差比 1.1.1 少约三成、闪烁少约四成（离线实测）。实验性预览，目前只在 CONTROL 上验证过。',
+    values: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 210, 'prism-core.guard': 100 },
+    expectation: '地平线 6 性能测试（RTX 5090 Laptop，2560×1600，DLSS 画质 + 2× 帧生成）：关闭 Prism 109 帧，极致档约 75 帧。',
   },
+  {
+    id: 'high',
+    name: '高画质',
+    forTiers: ['flagship', 'high'],
+    gpuLabel: '每 2 帧 · 2 遍 · 200%',
+    summary: '网络每 2 帧跑两遍，异步运行，中间的帧从网络的答案取样。效果接近极致，帧率高很多。默认档位。',
+    nativeRoutePreference: ['prism-core'],
+    plugins: ['nr-prism-core'],
+    values: { 'prism-core.cadence': '2', 'prism-core.async': true, 'prism-core.passes': '2', 'prism-core.intensity': 200, 'prism-core.guard': 100 },
+    expectation: '同一测试：关闭 Prism 109 帧，高画质档约 92 帧。',
+  },
+  {
+    id: 'standard',
+    name: '标准',
+    forTiers: ['high', 'mainstream'],
+    gpuLabel: '每 2 帧 · 1 遍 · 150%',
+    summary: '网络每 2 帧跑一遍，开销约为高画质的一半，改动更克制。',
+    nativeRoutePreference: ['prism-core'],
+    plugins: ['nr-prism-core'],
+    values: { 'prism-core.cadence': '2', 'prism-core.async': true, 'prism-core.passes': '1', 'prism-core.intensity': 150, 'prism-core.guard': 100 },
+    expectation: '网络开销约为高画质档的一半，适合 RTX 5070 Ti / 5080 这一级。',
+  },
+  {
+    id: 'light',
+    name: '流畅',
+    forTiers: ['mainstream', 'entry'],
+    gpuLabel: '每 4 帧 · 1 遍 · 120%',
+    summary: '网络每 4 帧跑一遍，开销最低；快速运动时改动最旧，静态画面多的游戏最合适。',
+    nativeRoutePreference: ['prism-core'],
+    plugins: ['nr-prism-core'],
+    values: { 'prism-core.cadence': '4', 'prism-core.async': true, 'prism-core.passes': '1', 'prism-core.intensity': 120, 'prism-core.guard': 100 },
+    expectation: '网络开销约为标准档的一半，适合 RTX 5060 / 5070 和笔记本中端显卡。',
+  },
+];
+
+const CORE_TIER_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard'];
+
+/** The tier whose Core values these are, or undefined for a custom mix. */
+export function tierOf(values: Record<string, number | boolean | string>): PresetDef | undefined {
+  return PRESETS.find((p) => CORE_TIER_KEYS.every((k) => String(values[k] ?? resolveValues(p.id)[k]) === String(p.values[k])));
+}
+
+export const LEGACY_PRESET_NAMES: Record<string, string> = { core: 'Prism Core', flagship: '旗舰画质（旧版）', balanced: '均衡（旧版）', fluid: '流畅优先（旧版）', faithful: '原片优先（旧版）' };
+
+// The add-on presets of 1.1.2 and earlier: kept so their install records still resolve.
+const OLD_PRESETS: (Record<string, unknown> & { id: string; values: Record<string, number | boolean | string> })[] = [
   {
     id: 'flagship',
     name: '旗舰画质',
@@ -343,7 +392,7 @@ export function pluginById(id: string): PluginDef | undefined {
 export function resolveValues(presetId: string, overrides: Record<string, number | boolean | string> = {}): Record<string, number | boolean | string> {
   const out: Record<string, number | boolean | string> = {};
   for (const p of PLUGINS) for (const param of p.params) out[param.key] = param.default;
-  const preset = PRESETS.find((p) => p.id === presetId);
+  const preset = PRESETS.find((p) => p.id === presetId) ?? OLD_PRESETS.find((p) => p.id === presetId);
   Object.assign(out, preset?.values ?? {}, overrides);
   return out;
 }

@@ -8,7 +8,7 @@ import { Sweep } from './components/Sweep';
 import { MotionContext, type MotionLevel } from './lib/motion';
 import { DiagnosticsView } from './views/DiagnosticsView';
 import { HistoryView } from './views/HistoryView';
-import { LibraryView } from './views/LibraryView';
+import { coreRoute, LibraryView } from './views/LibraryView';
 import { PluginsView } from './views/PluginsView';
 import { SettingsView } from './views/SettingsView';
 
@@ -67,11 +67,11 @@ export function App() {
 
   const activeCount = installs.filter((r) => r.status === 'active').length;
   const gpu = system?.primary;
-  const readyCount = useMemo(() => Object.values(analyses).filter((a) => a.recommendedRoute !== 'blocked' && a.recommendedRoute !== 'unknown').length, [analyses]);
+  const readyCount = useMemo(() => Object.values(analyses).filter((a) => coreRoute(a) === 'prism-core').length, [analyses]);
 
   const nav: { id: View; label: string; count?: string }[] = [
     { id: 'library', label: '游戏库', count: String(games.length).padStart(2, '0') },
-    { id: 'plugins', label: '插件', count: String(PLUGINS.length).padStart(2, '0') },
+    { id: 'plugins', label: '插件', count: String(PLUGINS.filter((p) => p.routes.includes('prism-core')).length).padStart(2, '0') },
     { id: 'history', label: '还原记录', count: String(activeCount).padStart(2, '0') },
     { id: 'diagnostics', label: '诊断' },
     { id: 'settings', label: '设置' },

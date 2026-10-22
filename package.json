@@ -57,13 +57,6 @@
     ],
     "extraResources": [
       {
-        "from": "plugins/prism-shaders",
-        "to": "prism-shaders",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
         "from": "native/prism-core/build",
         "to": "prism-core",
         "filter": [
@@ -76,13 +69,6 @@
         "to": "nvidia",
         "filter": [
           "*.dll"
-        ]
-      },
-      {
-        "from": "vendor-components",
-        "to": "components",
-        "filter": [
-          "**/*"
         ]
       }
     ],

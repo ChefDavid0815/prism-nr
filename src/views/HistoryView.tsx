@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PRESETS } from '../../electron/shared/catalog';
+import { LEGACY_PRESET_NAMES, tierOf } from '../../electron/shared/catalog';
 import type { InstallRecord } from '../../electron/shared/types';
 import { api } from '../api';
 import { ROUTE_LABEL } from './LibraryView';
@@ -40,7 +40,7 @@ export function HistoryView({ installs, onChange }: { installs: InstallRecord[];
         <div className="htable" role="table" aria-label="安装记录">
           <div className="htable-head" role="row">
             <span role="columnheader">游戏</span>
-            <span role="columnheader">方案</span>
+            <span role="columnheader">档位</span>
             <span role="columnheader">路线</span>
             <span role="columnheader">文件</span>
             <span role="columnheader">安装时间</span>
@@ -50,7 +50,7 @@ export function HistoryView({ installs, onChange }: { installs: InstallRecord[];
           {installs.map((r) => (
             <div key={r.id} role="row" className={`hrow status-${r.status}`}>
               <span role="cell">{r.gameName}</span>
-              <span role="cell">{PRESETS.find((p) => p.id === r.preset)?.name}</span>
+              <span role="cell">{r.route === 'prism-core' ? tierOf(r.values ?? {})?.name ?? '自定义' : LEGACY_PRESET_NAMES[r.preset] ?? r.preset}</span>
               <span role="cell">{ROUTE_LABEL[r.route]}</span>
               <span role="cell" className="mono">
                 {r.files.length} / 备份 {r.files.filter((f) => f.backup).length}
