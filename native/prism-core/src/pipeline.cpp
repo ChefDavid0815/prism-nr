@@ -102,8 +102,10 @@ ngx::Result ScalingRatio(void* p) { ngx::SetF(p, "DLSSNR.ScalingRatio", 1.f); re
 const char* kShaders = R"(
 cbuffer C : register(b0) {
   uint2 Size; uint TileCount; uint TilesX; float Intensity; float Guard; float Adapt; uint Split;
-  uint2 RenderSize; float2 MotionScale; float DepthTolerance; uint Flags; uint2 Pad1;
+  uint2 RenderSize; float2 MotionScale; float DepthTolerance; uint Flags; float Span; uint Pad2;
 };
+// Flags: 1 launch frame (the in-flight warp starts here), 2 landing frame (the in-flight warp
+// becomes the landed one), 4 a landed edit exists, 8 the network gets motion from the landed warp.
 Texture2D<float4> Orig : register(t0);
 Texture2D<float4> Proxy : register(t1);
 Texture2D<float4> Neural : register(t2);
@@ -114,11 +116,15 @@ Texture2D<float4> History : register(t5);  // last frame's edit (rgb) and depth 
 // depth on the launch frame (z) and whether the chain is unbroken (w).
 Texture2D<float4> WarpHist : register(t6);
 Texture2D<float> LaunchDepth : register(t7);  // the launch frame's depth, render resolution
+Texture2D<float4> WarpLHist : register(t8);   // last frame's warp to the landed launch frame
+Texture2D<float4> LandedEdit : register(t9);  // the landed network edit (rgb) and its depth (a), launch space
+Texture2D<float4> WarpLNow : register(t10);   // this frame's warp to the landed launch frame
 RWTexture2D<float4> Out0 : register(u0);
 RWStructuredBuffer<float> Tiles : register(u1);
 RWStructuredBuffer<float> Exposure : register(u2);
 RWTexture2D<float4> NewEdit : register(u3);
 RWTexture2D<float4> NewWarp : register(u4);
+RWTexture2D<float4> NewWarpL : register(u5);
 
 uint2 RenderPixel(uint2 p) { return min(uint2((float2(p) + 0.5) * float2(RenderSize) / float2(Size)), RenderSize - 1); }
 float DepthAt(uint2 p) { return Depth.Load(int3(RenderPixel(p), 0)); }
@@ -188,6 +194,7 @@ void Compose(uint3 id : SV_DispatchThreadID) {
   e = y + kept + (clamp(kept, -0.08, 0.08) - kept) * w;
   NewEdit[id.xy] = float4(e, DepthAt(id.xy));
   NewWarp[id.xy] = 0.0;  // a synchronous result: no launch in flight to reach
+  NewWarpL[id.xy] = 0.0;
   // Split view (F4): the original on the left half, a thin line at the split.
   if (Split != 0u && id.x < Size.x / 2u) e = 0.0;
   float3 result = o * exp2(e);
@@ -200,7 +207,7 @@ void Compose(uint3 id : SV_DispatchThreadID) {
 // to the launch frame. Each of the four bilinear taps counts only where its stored depth matches
 // this pixel's (a surface that was hidden last frame gets nothing borrowed). Only the edit and the
 // warp travel, never the picture.
-void Follow(uint2 p, out float3 e, out float4 warp) {
+void Follow(uint2 p, out float3 e, out float4 warp, out float4 warpL) {
   const float2 toOut = float2(Size) / float2(RenderSize);
   const float2 mv = Motion.Load(int3(RenderPixel(p), 0)) * MotionScale * toOut;
   const float2 pos = float2(p) + mv;  // previous position, pixel-centre space minus 0.5
@@ -210,8 +217,8 @@ void Follow(uint2 p, out float3 e, out float4 warp) {
   const float d = DepthAt(p);
   const float tol = DepthTolerance * max(abs(d), 1e-4);
   e = 0.0;
-  float wsum = 0.0, qsum = 0.0;
-  float3 q = 0.0;
+  float wsum = 0.0, qsum = 0.0, lsum = 0.0;
+  float3 q = 0.0, ql = 0.0;
   [unroll] for (int j = 0; j <= 1; ++j) {
     [unroll] for (int i = 0; i <= 1; ++i) {
       const int2 tap = clamp(b + int2(i, j), int2(0, 0), last);
@@ -223,25 +230,63 @@ void Follow(uint2 p, out float3 e, out float4 warp) {
       const float wq = wt * wp.w;
       q += float3(float2(tap) + wp.xy, wp.z) * wq;
       qsum += wq;
+      const float4 wl = WarpLHist.Load(int3(tap, 0));
+      const float wlq = wt * wl.w;
+      ql += float3(float2(tap) + wl.xy, wl.z) * wlq;
+      lsum += wlq;
     }
   }
   const bool inside = all(pos >= -0.5) && all(pos <= float2(last) + 0.5);
   e = (inside && wsum > 1e-3) ? e / wsum : 0.0;
   warp = (inside && qsum > 1e-3) ? float4(q.xy / qsum - float2(p), q.z / qsum, 1.0) : 0.0;
+  warpL = (inside && lsum > 1e-3) ? float4(ql.xy / lsum - float2(p), ql.z / lsum, 1.0) : 0.0;
 }
 
-// A frame the network skips: the edit follows along, and so does the warp to the launch frame in
-// flight. On the launch frame itself (Flags bit 0) the warp starts here: offset zero, this depth.
+// The landed network edit reached through a warp: the four bilinear taps around where this
+// surface was on the launch frame, each admitted where the launch depth matches the surface's.
+bool Sample(uint2 p, float4 warp, out float3 e) {
+  e = 0.0;
+  if (warp.w < 0.5) return false;
+  const float2 pos = float2(p) + warp.xy;
+  const int2 b = int2(floor(pos));
+  const float2 f = pos - float2(b);
+  const int2 last = int2(Size) - 1;
+  const float tol = DepthTolerance * max(abs(warp.z), 1e-4);
+  float nsum = 0.0;
+  [unroll] for (int j = 0; j <= 1; ++j) {
+    [unroll] for (int i = 0; i <= 1; ++i) {
+      const int2 tap = clamp(b + int2(i, j), int2(0, 0), last);
+      const float4 le = LandedEdit.Load(int3(tap, 0));
+      const float wt = (i ? f.x : 1.0 - f.x) * (j ? f.y : 1.0 - f.y) * (abs(le.a - warp.z) <= tol ? 1.0 : 0.0);
+      e += le.rgb * wt;
+      nsum += wt;
+    }
+  }
+  const bool inside = all(pos >= -0.5) && all(pos <= float2(last) + 0.5);
+  if (!inside || nsum <= 1e-3) return false;
+  e /= nsum;
+  return true;
+}
+
+// Every asynchronous frame: the shown edit is sampled straight from the landed network edit through
+// the warp to its launch frame (one resample from the network's own answer, however old, instead of
+// a resample of a resample each frame). The carried chain fills only where that warp is broken.
+// On a landing frame the in-flight warp becomes the landed one; on a launch frame the in-flight
+// warp starts here (offset zero, this depth).
 [numthreads(16, 16, 1)]
 void Carry(uint3 id : SV_DispatchThreadID) {
   if (any(id.xy >= Size)) return;
   float3 e;
-  float4 warp;
-  Follow(id.xy, e, warp);
+  float4 warp, warpL;
+  Follow(id.xy, e, warp, warpL);
   const float d = DepthAt(id.xy);
+  if (Flags & 2u) warpL = warp;
+  float3 n = 0.0;
+  if ((Flags & 4u) && Sample(id.xy, warpL, n)) e = n;
   if (Flags & 1u) warp = float4(0.0, 0.0, d, 1.0);
   NewEdit[id.xy] = float4(e, d);
   NewWarp[id.xy] = warp;
+  NewWarpL[id.xy] = warpL;
   if (Split != 0u && id.x < Size.x / 2u) e = 0.0;
   float3 result = Orig[id.xy].rgb * exp2(e);
   if (Split != 0u && (id.x == Size.x / 2u || id.x + 1u == Size.x / 2u)) result = 2.0;
@@ -271,74 +316,58 @@ float3 EditAt(int2 p) {
 [numthreads(16, 16, 1)]
 void CopyGuides(uint3 id : SV_DispatchThreadID) {
   if (any(id.xy >= RenderSize)) return;
-  Out0[id.xy] = float4(Motion.Load(int3(id.xy, 0)), 0.0, 0.0);
+  float2 mv = Motion.Load(int3(id.xy, 0));
+  if (Flags & 8u) {
+    // Motion since the network's previous run: where this surface was on that launch frame (the
+    // landed warp), in the game's motion-vector units; constant velocity where the warp is broken.
+    const float2 toOut = float2(Size) / float2(RenderSize);
+    const uint2 op = min(uint2((float2(id.xy) + 0.5) * toOut), Size - 1);
+    const float4 wl = WarpLNow.Load(int3(op, 0));
+    mv = wl.w > 0.5 ? wl.xy / (MotionScale * toOut) : mv * Span;
+  }
+  Out0[id.xy] = float4(mv, 0.0, 0.0);
   NewEdit[id.xy] = float4(Depth.Load(int3(id.xy, 0)), 0.0, 0.0, 0.0);
 }
 
-// The landing frame of an asynchronous launch, however many frames after it: the network's edit from
-// the launch frame, reached through the carried warp, each tap admitted where the launch frame's
-// depth matches the depth this surface had on the launch frame. Where the chain broke (a surface
-// that was not visible then) the carried older edit stays, so nothing drops to zero.
+// The landing frame: the network's edit over the whole launch frame (guarded like Compose), with
+// the launch frame's depth, kept apart so the next launch can reuse the proxy and copies at once.
 [numthreads(16, 16, 1)]
-void Land(uint3 id : SV_DispatchThreadID) {
+void Bake(uint3 id : SV_DispatchThreadID) {
   if (any(id.xy >= Size)) return;
-  float3 e;
-  float4 warp;
-  Follow(id.xy, e, warp);
-  if (warp.w > 0.5) {
-    const float2 pos = float2(id.xy) + warp.xy;
-    const int2 b = int2(floor(pos));
-    const float2 f = pos - float2(b);
-    const int2 last = int2(Size) - 1;
-    const float tol = DepthTolerance * max(abs(warp.z), 1e-4);
-    float3 n = 0.0;
-    float nsum = 0.0;
-    [unroll] for (int j = 0; j <= 1; ++j) {
-      [unroll] for (int i = 0; i <= 1; ++i) {
-        const int2 tap = clamp(b + int2(i, j), int2(0, 0), last);
-        const float dp = LaunchDepth.Load(int3(RenderPixel(uint2(tap)), 0));
-        const float wt = (i ? f.x : 1.0 - f.x) * (j ? f.y : 1.0 - f.y) * (abs(dp - warp.z) <= tol ? 1.0 : 0.0);
-        n += EditAt(tap) * wt;
-        nsum += wt;
-      }
-    }
-    const bool inside = all(pos >= -0.5) && all(pos <= float2(last) + 0.5);
-    if (inside && nsum > 1e-3) e = n / nsum;
-  }
-  NewEdit[id.xy] = float4(e, DepthAt(id.xy));
-  NewWarp[id.xy] = 0.0;
-  if (Split != 0u && id.x < Size.x / 2u) e = 0.0;
-  float3 result = Orig[id.xy].rgb * exp2(e);
-  if (Split != 0u && (id.x == Size.x / 2u || id.x + 1u == Size.x / 2u)) result = 2.0;
-  Out0[id.xy] = float4(result, 1.0);
+  Out0[id.xy] = float4(EditAt(int2(id.xy)), LaunchDepth.Load(int3(RenderPixel(id.xy), 0)));
 }
 )";
 
 struct Constants {
   uint32_t w, h, tileCount, tilesX; float intensity, guard, adapt; uint32_t split;
-  uint32_t renderW, renderH; float mvScaleX, mvScaleY, depthTolerance; uint32_t flags; uint32_t pad[2];
+  uint32_t renderW, renderH; float mvScaleX, mvScaleY, depthTolerance; uint32_t flags; float span; uint32_t pad;
 };
 static_assert(sizeof(Constants) == 64, "16 root constants");
 
 // ------------------------------------------------------------------ GPU state
 ID3D12Device* device = nullptr;
 ID3D12RootSignature* root = nullptr;
-ID3D12PipelineState *psoReduce1 = nullptr, *psoReduce2 = nullptr, *psoEncode = nullptr, *psoCompose = nullptr, *psoCarry = nullptr, *psoLand = nullptr, *psoCopyGuides = nullptr;
+ID3D12PipelineState *psoReduce1 = nullptr, *psoReduce2 = nullptr, *psoEncode = nullptr, *psoCompose = nullptr, *psoCarry = nullptr, *psoBake = nullptr, *psoCopyGuides = nullptr;
 ID3D12DescriptorHeap* heap = nullptr;
 UINT inc = 0;
 constexpr UINT kRing = 8;
-// Per ring slot: SRVs t0..t7 at [0..7], then three UAV sets of u0..u4:
-// [8..12] proxy, tiles, exposure, next edit, next warp; [13..17] output, tiles, exposure, next edit,
-// next warp; [18..22] the launch copies: motion, tiles, exposure, depth, next warp; [23..27] the
-// recorder's copies: motion, tiles, exposure, depth, next warp.
-constexpr UINT kBlock = 28;
+// Per ring slot: SRVs t0..t10 at [0..10], then five UAV sets of u0..u5 (u1 tiles, u2 exposure,
+// u4 next warp, u5 next landed warp in all of them):
+// [11..16] proxy, -, -, next edit; [17..22] output, -, -, next edit; [23..28] the launch copies:
+// motion, -, -, depth; [29..34] the recorder's copies: motion, -, -, depth; [35..40] the landed edit.
+constexpr UINT kBlock = 41;
+constexpr UINT kSetP = 11, kSetO = 17, kSetG = 23, kSetR = 29, kSetB = 35;
 uint32_t w = 0, h = 0, tilesX = 0, tilesY = 0;
 ID3D12Resource *origCopy = nullptr, *proxy = nullptr, *neural = nullptr, *tiles = nullptr, *exposure = nullptr;
 ID3D12Resource* edits[2] = {};  // ping-pong: last frame's edit and this frame's
 ID3D12Resource* warps[2] = {};  // ping-pong: the warp back to the launch frame in flight
+ID3D12Resource* warpsL[2] = {};  // ping-pong: the warp back to the landed launch frame
+ID3D12Resource* landedEdit = nullptr;  // the landed network edit and its depth, launch space
+bool haveLanded = false;
+bool exactMotion = true;  // the network gets its motion from the landed warp (NetMotion=exact)
 int current = 0;
 bool historyValid = false;
-int cadence = 4;  // the network every N frames (F2 cycles 1-4); 0: adaptive (see Adapt)
+int cadence = 2;  // the network every N frames (F2 cycles 1-4); 0: adaptive (see Adapt)
 // Landing: "wait" makes the game's queue wait for the network on the frame after the launch (1.1);
 // "poll" lands only once the network has finished and carries one more frame otherwise.
 bool landPoll = true;  // the default: no GPU wait on the game's queue (fixes freezes, see notes)
@@ -467,8 +496,8 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   auto compile = (CompileFn)(void*)GetProcAddress(LoadLibraryW(L"d3dcompiler_47.dll"), "D3DCompile");
   if (!compile) return Fail("no d3dcompiler_47");
   D3D12_DESCRIPTOR_RANGE ranges[2] = {};
-  ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors = 8;
-  ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors = 5;
+  ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors = 11;
+  ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors = 6;
   D3D12_ROOT_PARAMETER rp[3] = {};
   rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[0].Constants.Num32BitValues = 16;
   rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; rp[1].DescriptorTable = {1, &ranges[0]};
@@ -478,7 +507,7 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   hr = D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
   if (FAILED(hr) || FAILED(hr = device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), __uuidof(ID3D12RootSignature), (void**)&root)))
     return Fail("root signature", hr);
-  for (auto [entry, pso] : {std::pair{"Reduce1", &psoReduce1}, std::pair{"Reduce2", &psoReduce2}, std::pair{"Encode", &psoEncode}, std::pair{"Compose", &psoCompose}, std::pair{"Carry", &psoCarry}, std::pair{"Land", &psoLand}, std::pair{"CopyGuides", &psoCopyGuides}}) {
+  for (auto [entry, pso] : {std::pair{"Reduce1", &psoReduce1}, std::pair{"Reduce2", &psoReduce2}, std::pair{"Encode", &psoEncode}, std::pair{"Compose", &psoCompose}, std::pair{"Carry", &psoCarry}, std::pair{"Bake", &psoBake}, std::pair{"CopyGuides", &psoCopyGuides}}) {
     ID3DBlob *cs = nullptr, *e = nullptr;
     if (FAILED(hr = compile(kShaders, std::strlen(kShaders), "prism", nullptr, nullptr, entry, "cs_5_1", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &cs, &e))) {
       Log("shader %s: %s", entry, e ? (const char*)e->GetBufferPointer() : "?");
@@ -500,7 +529,11 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   edits[1] = Tex(DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
   warps[0] = Tex(DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
   warps[1] = Tex(DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
-  if (!origCopy || !proxy || !neural || !tiles || !exposure || !edits[0] || !edits[1] || !warps[0] || !warps[1]) return Fail("resources");
+  warpsL[0] = Tex(DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+  warpsL[1] = Tex(DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+  landedEdit = Tex(DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, true);  // .a holds depth
+  haveLanded = false;
+  if (!origCopy || !proxy || !neural || !tiles || !exposure || !edits[0] || !edits[1] || !warps[0] || !warps[1] || !warpsL[0] || !warpsL[1] || !landedEdit) return Fail("resources");
   // Descriptors: kRing blocks of kBlock (see kBlock).
   D3D12_DESCRIPTOR_HEAP_DESC hd = {}; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = kBlock * kRing;
   hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
@@ -512,8 +545,10 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
     const UINT b = k * kBlock;
     sv.Format = od.Format; device->CreateShaderResourceView(origCopy, &sv, Cpu(b + 0));
     sv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; device->CreateShaderResourceView(proxy, &sv, Cpu(b + 1)); device->CreateShaderResourceView(neural, &sv, Cpu(b + 2));
-    device->CreateUnorderedAccessView(proxy, nullptr, nullptr, Cpu(b + 8));
-    for (UINT set : {8u, 13u, 18u, 23u}) { BufferUav(tiles, tilesX * tilesY, b + set + 1); BufferUav(exposure, 4, b + set + 2); }
+    device->CreateUnorderedAccessView(proxy, nullptr, nullptr, Cpu(b + kSetP));
+    device->CreateUnorderedAccessView(landedEdit, nullptr, nullptr, Cpu(b + kSetB));
+    sv.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; device->CreateShaderResourceView(landedEdit, &sv, Cpu(b + 9));
+    for (UINT set : {kSetP, kSetO, kSetG, kSetR, kSetB}) { BufferUav(tiles, tilesX * tilesY, b + set + 1); BufferUav(exposure, 4, b + set + 2); }
   }
 
   // The network: the signed runtime from the game folder, initialised on the game's device (once).
@@ -637,7 +672,8 @@ void ReleaseAsync() {
 // Everything that depends on the output or render size, for a rebuild at a new size. Nothing is
 // released while the GPU might still use it: it waits in the graveyard for a few frames.
 void Teardown() {
-  ID3D12Resource** slots[] = {&origCopy, &proxy, &neural, &tiles, &exposure, &edits[0], &edits[1], &warps[0], &warps[1], &motionCopy, &depthCopy, &recMotion, &recDepth};
+  ID3D12Resource** slots[] = {&origCopy, &proxy, &neural, &tiles, &exposure, &edits[0], &edits[1], &warps[0], &warps[1], &warpsL[0], &warpsL[1], &landedEdit,
+                              &motionCopy, &depthCopy, &recMotion, &recDepth};
   for (ID3D12Resource** r : slots) {
     Bury(*r);
     *r = nullptr;
@@ -650,6 +686,7 @@ void Teardown() {
   for (RecFrame& rf : recFrames) { Bury(rf.color); Bury(rf.motion); Bury(rf.depth); }
   recFrames.clear(); recordLeft = 0; recordDoneAt = 0;
   historyValid = false;
+  haveLanded = false;
   current = 0;
   w = h = 0;
 }
@@ -859,6 +896,8 @@ void LoadConfig() {
     if (!land.empty()) landPoll = !lstrcmpiW(land.c_str(), L"poll");
     const std::wstring prio = Get(L"NetPriority");
     if (!prio.empty()) netPriority = !lstrcmpiW(prio.c_str(), L"high") ? 1 : 0;
+    const std::wstring nm = Get(L"NetMotion");
+    if (!nm.empty()) exactMotion = lstrcmpiW(nm.c_str(), L"approx") != 0;
     const std::wstring lb = Get(L"Label");
     label.assign(lb.begin(), lb.end());  // ASCII labels
   }
@@ -932,15 +971,15 @@ void RecordFrame(const UpscaleCall& c, ID3D12GraphicsCommandList* l, UINT ring) 
   rf.depth = Readback(recDepth, rf.fd);
   if (!rf.color || !rf.motion || !rf.depth) { Log("record: out of readback memory after %zu frames", recFrames.size()); recordLeft = 0; return; }
   rf.mvx = c.motionScaleX; rf.mvy = c.motionScaleY; rf.reset = c.reset; rf.rw = c.renderWidth; rf.rh = c.renderHeight;
-  device->CreateUnorderedAccessView(recMotion, nullptr, nullptr, Cpu(ring + 23));
-  device->CreateUnorderedAccessView(recDepth, nullptr, nullptr, Cpu(ring + 26));
+  device->CreateUnorderedAccessView(recMotion, nullptr, nullptr, Cpu(ring + kSetR));
+  device->CreateUnorderedAccessView(recDepth, nullptr, nullptr, Cpu(ring + kSetR + 3));
   ID3D12DescriptorHeap* heaps[] = {heap};
   l->SetDescriptorHeaps(1, heaps);
   l->SetComputeRootSignature(root);
-  const Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, 0u, c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f, 0u, {0, 0}};
+  const Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, 0u, c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f, 0u, 1.0f, 0u};
   l->SetComputeRoot32BitConstants(0, 16, &k, 0);
   l->SetComputeRootDescriptorTable(1, Gpu(ring));
-  l->SetComputeRootDescriptorTable(2, Gpu(ring + 23));
+  l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetR));
   l->SetPipelineState(psoCopyGuides); l->Dispatch((c.renderWidth + 15) / 16, (c.renderHeight + 15) / 16, 1);
   UavBarrier(l);
   Barrier(l, recMotion, UAV, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -1093,6 +1132,8 @@ bool PipelineRecord(const UpscaleCall& c) {
   ID3D12Resource* next = edits[current];
   ID3D12Resource* warpHistory = warps[current ^ 1];
   ID3D12Resource* warpNext = warps[current];
+  ID3D12Resource* warpLHistory = warpsL[current ^ 1];
+  ID3D12Resource* warpLNext = warpsL[current];
   // A new network priority: rebuild the compute queue between launches.
   static int builtPriority = -1;
   if (computeQueue && builtPriority != netPriority && !inFlight) ReleaseAsync();
@@ -1108,7 +1149,8 @@ bool PipelineRecord(const UpscaleCall& c) {
     // the GPU (otherwise carry one more frame: about 0.2 ms instead of a stall).
     if (inFlight && submittedId == launchId) landNow = !landPoll || fenceDone->GetCompletedValue() >= launchId;
     const int interval = cadence != 0 ? cadence : fpsCap > 0 ? adaptK : 1;  // uncapped adaptive: as soon as landed
-    launchNow = !inFlight && frame - lastLaunchFrame >= UINT64(interval) && !(cadence == 0 && adaptHold > 0);
+    // A landing frame may launch again right away: the landed edit is baked apart first.
+    launchNow = (!inFlight || landNow) && frame - lastLaunchFrame >= UINT64(interval) && !(cadence == 0 && adaptHold > 0);
     // A network still running on the frame after its launch did not fit the idle time.
     if (inFlight && !landNow && frame == lastLaunchFrame + 1) ++adaptLate;
   }
@@ -1125,15 +1167,23 @@ bool PipelineRecord(const UpscaleCall& c) {
     sv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     device->CreateShaderResourceView(history, &sv, Cpu(ring + 5));
     device->CreateShaderResourceView(warpHistory, &sv, Cpu(ring + 6));
+    device->CreateShaderResourceView(warpLHistory, &sv, Cpu(ring + 8));
+    device->CreateShaderResourceView(warpLNext, &sv, Cpu(ring + 10));
     sv.Format = DXGI_FORMAT_R32_FLOAT;
     device->CreateShaderResourceView(depthCopy, &sv, Cpu(ring + 7));  // null before the first async setup: unused then
-    device->CreateUnorderedAccessView(next, nullptr, nullptr, Cpu(ring + 11));
-    device->CreateUnorderedAccessView(c.output, nullptr, nullptr, Cpu(ring + 13));
-    device->CreateUnorderedAccessView(next, nullptr, nullptr, Cpu(ring + 16));
-    for (UINT set : {8u, 13u, 18u, 23u}) device->CreateUnorderedAccessView(warpNext, nullptr, nullptr, Cpu(ring + set + 4));
+    device->CreateUnorderedAccessView(c.output, nullptr, nullptr, Cpu(ring + kSetO));
+    for (UINT set : {kSetP, kSetO, kSetB}) device->CreateUnorderedAccessView(next, nullptr, nullptr, Cpu(ring + set + 3));
+    for (UINT set : {kSetP, kSetO, kSetG, kSetR, kSetB}) {
+      device->CreateUnorderedAccessView(warpNext, nullptr, nullptr, Cpu(ring + set + 4));
+      device->CreateUnorderedAccessView(warpLNext, nullptr, nullptr, Cpu(ring + set + 5));
+    }
   }
-  const Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, paint ? 2u : (split ? 1u : 0u),
-                       c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f, launchNow ? 1u : 0u, {0, 0}};
+  // The frames since the network's previous run (cadence 0 or poll landing make it vary).
+  const float span = launchId == 0 ? float(std::max(cadence, 1)) : float(std::min<uint64_t>(frame - lastLaunchFrame, 8));
+  const bool landedBefore = haveLanded || landNow;
+  Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, paint ? 2u : (split ? 1u : 0u),
+                 c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f,
+                 (launchNow ? 1u : 0u) | (landNow ? 2u : 0u) | (landedBefore ? 4u : 0u), span, 0u};
 
   const UINT slot = UINT(frame % kRing);
   // The slot written kRing frames ago is long finished: read it before reusing it.
@@ -1159,17 +1209,22 @@ bool PipelineRecord(const UpscaleCall& c) {
   Barrier(l, origCopy, D3D12_RESOURCE_STATE_COPY_DEST, SRV);
   Barrier(l, history, UAV, SRV);
   Barrier(l, warpHistory, UAV, SRV);
+  Barrier(l, warpLHistory, UAV, SRV);
   ID3D12DescriptorHeap* heaps[] = {heap};
   l->SetDescriptorHeaps(1, heaps);
   l->SetComputeRootSignature(root);
   l->SetComputeRoot32BitConstants(0, 16, &k, 0);
   l->SetComputeRootDescriptorTable(1, Gpu(ring));
+  if (!refresh) {
   if (landNow) {
-    // Land: the network ran on our queue since the launch frame; the game's queue waits for it.
+    // Land: bake the network's edit over the launch frame (the network ran on our queue since the
+    // launch), then the proxy and copies are free for the next launch.
     Barrier(l, neural, UAV, SRV);
-    l->SetComputeRootDescriptorTable(2, Gpu(ring + 13));
-    l->SetPipelineState(psoLand); l->Dispatch(tilesX, tilesY, 1);
+    Barrier(l, landedEdit, SRV, UAV);
+    l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetB));
+    l->SetPipelineState(psoBake); l->Dispatch(tilesX, tilesY, 1);
     UavBarrier(l);
+    Barrier(l, landedEdit, UAV, SRV);
     Barrier(l, neural, SRV, UAV);
     Barrier(l, proxy, SRV, UAV);
     Barrier(l, motionCopy, SRV, UAV);
@@ -1192,23 +1247,30 @@ bool PipelineRecord(const UpscaleCall& c) {
       ++statLands; statAgeSum += age; statAgeMax = std::max(statAgeMax, age);
       if (frameCsv) std::fprintf(frameCsv, "%.3f,L,%u\n", NowMs(), age);
     }
-    if (queries && stamps) {
-      l->EndQuery(queries, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);
-      l->ResolveQueryData(queries, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2, 2, stamps, UINT64(slot) * 16);
-    }
-  } else if (!refresh) {
+    haveLanded = true;
+  }
+  // Carry: the landed edit through its warp, the chain where that breaks; the warps follow along.
+  l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetO));
+  l->SetPipelineState(psoCarry); l->Dispatch(tilesX, tilesY, 1);
+  UavBarrier(l);
     if (launchNow) {
       // Launch: proxy and copies on the game's list; the network itself on our queue.
-      l->SetComputeRootDescriptorTable(2, Gpu(ring + 8));
+      l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetP));
       l->SetPipelineState(psoReduce1); l->Dispatch(tilesX, tilesY, 1); UavBarrier(l);
       l->SetPipelineState(psoReduce2); l->Dispatch(1, 1, 1); UavBarrier(l);
       l->SetPipelineState(psoEncode); l->Dispatch(tilesX, tilesY, 1);
       Barrier(l, proxy, UAV, SRV);
-      device->CreateUnorderedAccessView(motionCopy, nullptr, nullptr, Cpu(ring + 18));
-      device->CreateUnorderedAccessView(depthCopy, nullptr, nullptr, Cpu(ring + 21));
-      l->SetComputeRootDescriptorTable(2, Gpu(ring + 18));
+      device->CreateUnorderedAccessView(motionCopy, nullptr, nullptr, Cpu(ring + kSetG));
+      device->CreateUnorderedAccessView(depthCopy, nullptr, nullptr, Cpu(ring + kSetG + 3));
+      const bool exactNow = exactMotion && landedBefore;
+      Constants kg = k;
+      kg.flags = exactNow ? 8u : 0u;
+      l->SetComputeRoot32BitConstants(0, 16, &kg, 0);
+      Barrier(l, warpLNext, UAV, SRV);
+      l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetG));
       l->SetPipelineState(psoCopyGuides); l->Dispatch((c.renderWidth + 15) / 16, (c.renderHeight + 15) / 16, 1);
       UavBarrier(l);
+      Barrier(l, warpLNext, SRV, UAV);
       Barrier(l, motionCopy, UAV, SRV);
       Barrier(l, depthCopy, UAV, SRV);
       // Record the network on the compute list now; it is submitted when the game submits this list.
@@ -1227,11 +1289,10 @@ bool PipelineRecord(const UpscaleCall& c) {
         ngx::SetUI(ap, (s2 + "BaseX").c_str(), 0); ngx::SetUI(ap, (s2 + "BaseY").c_str(), 0);
         ngx::SetUI(ap, (s2 + "Width").c_str(), c.renderWidth); ngx::SetUI(ap, (s2 + "Height").c_str(), c.renderHeight);
       }
-      // Motion since the network's previous run: the launch frame's own vectors scaled by the
-      // cadence (constant velocity), so its temporal state lands about where the scene went.
-      // The frames since the network's previous run (cadence 0 or poll landing make it vary).
-      const float span = launchId == 0 ? float(std::max(cadence, 1)) : float(std::min<uint64_t>(frame - lastLaunchFrame, 8));
-      ngx::SetF(ap, "DLSSNR.MVecScaleX", c.motionScaleX * span); ngx::SetF(ap, "DLSSNR.MVecScaleY", c.motionScaleY * span);
+      // Motion since the network's previous run: followed through the landed warp (the vectors
+      // already span it), or the launch frame's own vectors scaled by the span (constant velocity).
+      const float ms = exactNow ? 1.0f : span;
+      ngx::SetF(ap, "DLSSNR.MVecScaleX", c.motionScaleX * ms); ngx::SetF(ap, "DLSSNR.MVecScaleY", c.motionScaleY * ms);
       ngx::SetI(ap, "DLSSNR.DepthInverted", (gameCreateFlags & (1 << 3)) ? 1 : 0);
       ngx::SetI(ap, "DLSSNR.Enabled", 1);
       ngx::SetI(ap, "DLSSNR.Reset", launchId == 0 ? 1 : 0);
@@ -1263,17 +1324,14 @@ bool PipelineRecord(const UpscaleCall& c) {
       l->SetComputeRoot32BitConstants(0, 16, &k, 0);
       l->SetComputeRootDescriptorTable(1, Gpu(ring));
     }
-    // Carry: no network result this frame.
-    l->SetComputeRootDescriptorTable(2, Gpu(ring + 13));
-    l->SetPipelineState(psoCarry); l->Dispatch(tilesX, tilesY, 1);
-    UavBarrier(l);
     if (queries && stamps) {
       l->EndQuery(queries, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);
       l->ResolveQueryData(queries, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2, 2, stamps, UINT64(slot) * 16);
     }
   } else {
+  haveLanded = false;
   // 2-3. Exposure and the proxy.
-  l->SetComputeRootDescriptorTable(2, Gpu(ring + 8));
+  l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetP));
   l->SetPipelineState(psoReduce1); l->Dispatch(tilesX, tilesY, 1); UavBarrier(l);
   l->SetPipelineState(psoReduce2); l->Dispatch(1, 1, 1); UavBarrier(l);
   l->SetPipelineState(psoEncode); l->Dispatch(tilesX, tilesY, 1);
@@ -1307,7 +1365,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   l->SetComputeRootSignature(root);
   l->SetComputeRoot32BitConstants(0, 16, &k, 0);
   l->SetComputeRootDescriptorTable(1, Gpu(ring));
-  l->SetComputeRootDescriptorTable(2, Gpu(ring + 13));
+  l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetO));
   l->SetPipelineState(psoCompose); l->Dispatch(tilesX, tilesY, 1);
   UavBarrier(l);
   historyValid = true;
@@ -1361,6 +1419,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   if (recordDoneAt && frame >= recordDoneAt) WriteRecording();
   Barrier(l, history, SRV, UAV);
   Barrier(l, warpHistory, SRV, UAV);
+  Barrier(l, warpLHistory, SRV, UAV);
   Barrier(l, origCopy, SRV, D3D12_RESOURCE_STATE_COPY_DEST);
   current ^= 1;
   if (++frame == 1 || frame % 600 == 0) {

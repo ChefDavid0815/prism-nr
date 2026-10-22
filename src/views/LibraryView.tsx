@@ -77,7 +77,7 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
     ],
     right: [
       `NR    ${Math.round(intensity * 100)}%`,
-      isCore ? `NET   1/${plan?.values['prism-core.cadence'] ?? 4}` : `MODEL ${plan?.route === 'optiscaler' ? modelRes + '%' : '100%'}`,
+      isCore ? `NET   1/${plan?.values['prism-core.cadence'] ?? 2}` : `MODEL ${plan?.route === 'optiscaler' ? modelRes + '%' : '100%'}`,
       `PLUG  ${plan?.plugins.length ?? 0}`,
       `SEED  ${game ? game.id.slice(0, 6).toUpperCase() : '—'}`,
     ],
@@ -204,7 +204,7 @@ function pipeline(plan: InstallPlan): Stage[] {
   const nrWeight = plan.route === 'optiscaler' ? Math.max(3, Math.round(14 * (Number(plan.values['nr-optiscaler.modelResolution'] ?? 67) / 100) ** 2)) : 14;
   const stages: Stage[] = [{ label: '游戏渲染', weight: 0 }];
   if (plan.route === 'prism-core') {
-    const cadence = Number(plan.values['prism-core.cadence'] ?? 4);
+    const cadence = Number(plan.values['prism-core.cadence'] ?? 2);
     const async = plan.values['prism-core.async'] !== false && cadence >= 2;
     // From the CONTROL measurements: every frame 13.4 ms, every 2nd 61% of that, every 4th async 37%.
     const weight = ({ 1: 14, 2: 9, 3: 7, 4: 5 } as Record<number, number>)[cadence] + (async || cadence === 1 ? 0 : 1);
@@ -563,10 +563,10 @@ function pickCore(values: CoreValues): CoreValues {
 
 /** What each cadence costs and keeps, from the CONTROL measurements and the offline comparison. */
 const CADENCE_NOTE: Record<number, string> = {
-  1: '网络每帧跑一次，就是网络的完整答案，成本最高：CONTROL 实测每帧 +13.4 ms。',
-  2: '和每帧的答案相比误差约 0.03 档，成本约为每帧的六成：CONTROL 实测 +7.4 ms。',
-  3: '介于每 2 帧和每 4 帧之间，还没有单独实测。',
-  4: '成本最低：CONTROL 实测每帧 +5.0 ms，误差 0.06–0.09 档。快速运动的人脸细节损失最大。',
+  1: '网络每帧跑一次，就是网络的完整答案，没有携带误差，开销最高（RTX 5090 Laptop、2560×1600、310.9 模型约 5 ms）。',
+  2: '默认。运动中最清楚的异步档：离线实测，运动区域的误差比每 4 帧低约四成，网络开销约为每帧的一半。',
+  3: '介于每 2 帧和每 4 帧之间。',
+  4: '最省。快速运动时改动最旧，鬼影最明显，适合静态画面多的游戏。',
 };
 
 interface CoreSettingsProps {
@@ -581,7 +581,7 @@ function CoreSettings({ values, live, onChange, onTuned }: CoreSettingsProps) {
   const [status, setStatus] = useState<'idle' | 'writing' | 'written' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const cadence = Number(values['prism-core.cadence'] ?? 4);
+  const cadence = Number(values['prism-core.cadence'] ?? 2);
   const async = values['prism-core.async'] !== false;
   const defaults = resolveValues('core');
   const changed = CORE_KEYS.some((k) => String(values[k]) !== String(defaults[k]));

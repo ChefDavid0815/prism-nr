@@ -66,7 +66,7 @@ function conflictingAddons(exeDir: string): string[] {
 /** prism-core.ini: Prism Core reads it at start and again whenever it changes. ASCII only. */
 export function coreIni(values: Values): string {
   const pct = (k: string, d: number) => (Math.max(0, Math.min(100, Number(values[k] ?? d))) / 100).toFixed(2);
-  const cadence = Math.max(1, Math.min(4, Math.round(Number(values['prism-core.cadence'] ?? 4))));
+  const cadence = Math.max(1, Math.min(4, Math.round(Number(values['prism-core.cadence'] ?? 2))));
   const async = values['prism-core.async'] ?? true;
   return [
     '; Written by Prism NR. Prism Core re-reads this file while the game runs.',

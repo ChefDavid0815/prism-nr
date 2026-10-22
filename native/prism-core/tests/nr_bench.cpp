@@ -6,7 +6,8 @@
 //   prism_nvngx.dll.exe <nvngx_dlssnr.dll> seq <dir>
 //       runs a frame sequence: <dir>/meta.txt holds "width height count"; each frame i has
 //       c_i.f32 (RGBA float, display-encoded 0..1) and m_i.f32 (RG float, previous position
-//       minus current, pixels); writes o_i.f32 (RGBA float) and times.txt.
+//       minus current, pixels), optionally d_i.f32 (R float depth; a fourth meta value 1 marks
+//       inverted depth); writes o_i.f32 (RGBA float) and times.txt.
 //
 // The executable's name contains "nvngx.dll" on purpose: NGX only lets modules whose path
 // contains it create features (found by neural-upstream).
@@ -330,6 +331,7 @@ struct Feature {
   void* handle = nullptr;
   ID3D12Resource *color = nullptr, *output = nullptr, *motion = nullptr, *depth = nullptr;
   bool first = true;
+  int depthInverted = 0;
 };
 
 const auto kSrv = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -385,7 +387,7 @@ void RecordEvaluateOn(ID3D12GraphicsCommandList* list, Ngx& ngx, Feature& f) {
   }
   SetF(p, "DLSSNR.MVecScaleX", 1.f);
   SetF(p, "DLSSNR.MVecScaleY", 1.f);
-  SetI(p, "DLSSNR.DepthInverted", 0);
+  SetI(p, "DLSSNR.DepthInverted", f.depthInverted);
   SetI(p, "DLSSNR.Enabled", 1);
   SetI(p, "DLSSNR.Reset", f.first ? 1 : 0);
   SetF(p, "DLSSNR.Intensity", 1.f);
@@ -479,13 +481,16 @@ std::vector<float> ReadF32(const std::string& file, size_t count) {
 
 int Sequence(Gpu& g, Ngx& ngx, const std::string& dir) {
   uint32_t w = 0, h = 0, count = 0;
+  int inverted = 0;
   {
     std::ifstream m(dir + "/meta.txt");
     m >> w >> h >> count;
+    if (!(m >> inverted)) inverted = 0;
   }
   if (!w || !h || !count) { std::fprintf(stderr, "bad %s/meta.txt\n", dir.c_str()); return 1; }
   Feature f;
   CreateFeature(g, ngx, f, w, h);
+  f.depthInverted = inverted;
   Timer t;
   t.Init(g);
   std::ofstream times(dir + "/times.txt");
@@ -498,6 +503,11 @@ int Sequence(Gpu& g, Ngx& ngx, const std::string& dir) {
     for (size_t k = 0; k < px * 2; ++k) mh[k] = ToHalf(mv[k]);
     UploadTexture(g, f.color, ch.data(), w, h, 8, kSrv, kSrv);
     UploadTexture(g, f.motion, mh.data(), w, h, 4, kSrv, kSrv);
+    const std::string dp = dir + "/d_" + std::to_string(i) + ".f32";
+    if (std::ifstream(dp).good()) {
+      const auto d = ReadF32(dp, px);
+      UploadTexture(g, f.depth, d.data(), w, h, 4, kSrv, kSrv);
+    }
     const double ms = TimedEvaluate(g, ngx, f, t);
     times << ms << "\n";
     const auto out = ReadTexture(g, f.output, w, h, kUav);

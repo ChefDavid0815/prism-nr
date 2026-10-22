@@ -12,7 +12,7 @@ export const PLUGINS: PluginDef[] = [
     name: '神经渲染核心 · Prism Core',
     category: 'core',
     origin: 'prism',
-    summary: 'Prism 自己的神经渲染运行时：网络隔几帧跑一次全分辨率，中间的帧沿运动矢量携带它的改动。',
+    summary: 'Prism 自己的神经渲染运行时：网络隔帧跑一次全分辨率，中间的帧沿运动矢量从网络的答案直接取样。',
     does: [
       '拦截游戏自己的 DX12 DLSS 调用，直接运行本机的签名版神经网络，不需要 ReShade',
       '网络放在独立计算队列上异步运行，和后面的帧并行',
@@ -26,7 +26,7 @@ export const PLUGINS: PluginDef[] = [
     requires: [],
     risk: '实验性预览，目前只在 CONTROL Resonant 上实测过。快速运动的人脸在每 4 帧时细节损失最大。',
     params: [
-      { key: 'prism-core.cadence', label: '网络节奏', help: '网络每几帧跑一次。每 4 帧最快，每 2 帧误差约减半，每帧等于不做时域复用。', type: 'choice', choices: [{ value: '1', label: '每帧' }, { value: '2', label: '每 2 帧' }, { value: '3', label: '每 3 帧' }, { value: '4', label: '每 4 帧' }], default: '4' },
+      { key: 'prism-core.cadence', label: '网络节奏', help: '网络每几帧跑一次。每 2 帧是默认：运动中的鬼影比每 4 帧少约四成；每帧没有携带误差但开销最高。', type: 'choice', choices: [{ value: '1', label: '每帧' }, { value: '2', label: '每 2 帧' }, { value: '3', label: '每 3 帧' }, { value: '4', label: '每 4 帧' }], default: '2' },
       { key: 'prism-core.async', label: '异步计算队列', help: '网络在独立队列上和下一帧并行跑。节奏 2 帧以上生效。', type: 'toggle', default: true },
       { key: 'prism-core.intensity', label: '改动强度', help: '网络改动保留多少。100% 是网络的完整答案。', type: 'range', min: 0, max: 100, step: 5, unit: '%', default: 100 },
       { key: 'prism-core.guard', label: '角色守护', help: '肤色和高饱和颜色上的色度改动被压住多少。0 等于不干预。', type: 'range', min: 0, max: 100, step: 5, unit: '%', default: 100 },
@@ -283,7 +283,7 @@ export const PRESETS: PresetDef[] = [
     name: 'Prism Core',
     forTiers: ['flagship', 'high', 'mainstream', 'entry'],
     gpuLabel: '任意 RTX 50 · DX12 + DLSS 游戏',
-    summary: '我们自己的运行时：网络每 4 帧跑一次全分辨率，其余帧携带改动，异步运行，带角色守护。不需要 ReShade。',
+    summary: '我们自己的运行时：网络每 2 帧跑一次全分辨率，其余帧从网络的答案直接取样，异步运行，带角色守护。不需要 ReShade。',
     nativeRoutePreference: ['prism-core'],
     plugins: ['nr-prism-core'],
     values: { 'framegen.mode': 'off' },
