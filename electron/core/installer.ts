@@ -398,6 +398,42 @@ function reshadeDllName(analysis: GameAnalysis): string {
   return 'dxgi.dll';
 }
 
+/**
+ * Where a component's shader file goes: its path under the component's own Shaders folder is kept
+ * (LumeniteFX includes "./include/..."), anything outside a Shaders folder lands at the top.
+ */
+export function shaderTarget(c: ComponentInfo, file: string, shadersDir: string): string {
+  const parts = path.relative(c.path, file).split(/[\\/]/);
+  const i = parts.map((p) => p.toLowerCase()).lastIndexOf('shaders');
+  return i >= 0 && i < parts.length - 1 ? path.join(shadersDir, ...parts.slice(i + 1)) : path.join(shadersDir, path.basename(file));
+}
+
+/**
+ * LumeniteFX as Feeder's motion source: all its shader files are copied (paths kept), but only the
+ * motion technique is enabled (Kernel, provider 3; QuantMotion, provider 4, if Kernel is missing).
+ * Its AO, bloom, reflection and AA effects stay off.
+ */
+export function lumeniteOps(lum: ComponentInfo, shadersDir: string, texturesDir: string): { ops: FileOp[]; chain: ChainItem[]; provider: number } {
+  const ops: FileOp[] = [];
+  const chain: ChainItem[] = [];
+  let provider = 0;
+  for (const fx of componentFiles(lum, /\.(fx|fxh)$/i)) {
+    const to = shaderTarget(lum, fx, shadersDir);
+    ops.push({ kind: 'copy', from: fx, to, label: `LumeniteFX ${path.relative(shadersDir, to)}` });
+  }
+  for (const [file, re, id] of [[/(^|[\\/])lumenite_Kernel\.fx$/i, /kernel/i, 3], [/(^|[\\/])lumenite_QuantMotion\.fx$/i, /quant/i, 4]] as const) {
+    if (provider) break;
+    const fx = componentFiles(lum, file)[0];
+    const t = fx ? techniquesIn(fx).find((x) => re.test(x)) : undefined;
+    if (fx && t) {
+      chain.push({ technique: t, file: path.relative(shadersDir, shaderTarget(lum, fx, shadersDir)).replace(/\\/g, '/'), order: 5, enabled: true });
+      provider = id;
+    }
+  }
+  for (const tex of componentFiles(lum, /\.(png|dds|jpg)$/i)) ops.push({ kind: 'copy', from: tex, to: path.join(texturesDir, path.basename(tex)), label: `LumeniteFX 纹理 ${path.basename(tex)}` });
+  return { ops, chain, provider };
+}
+
 interface Components {
   [id: string]: ComponentInfo;
 }
@@ -488,17 +524,11 @@ function buildOps(plan: InstallPlan, analysis: GameAnalysis, comps: Components, 
       ops.push({ kind: 'copy', from: fx, to: path.join(shadersDir, path.basename(fx)), label: `Feeder 着色器 ${path.basename(fx)}` });
       if (/\.fx$/i.test(fx)) for (const t of techniquesIn(fx)) chain.push({ technique: t, file: path.basename(fx), order: 10, enabled: true });
     }
-    const lum = comps.lumenite;
-    for (const fx of componentFiles(lum, /\.(fx|fxh)$/i)) {
-      ops.push({ kind: 'copy', from: fx, to: path.join(shadersDir, path.basename(fx)), label: `LumeniteFX ${path.basename(fx)}` });
-      if (/\.fx$/i.test(fx)) {
-        const techs = techniquesIn(fx);
-        const kernel = techs.filter((t) => /kernel/i.test(t));
-        for (const t of kernel.length ? kernel : techs.slice(0, 1)) chain.push({ technique: t, file: path.basename(fx), order: 5, enabled: true });
-      }
-    }
-    for (const tex of componentFiles(lum, /\.(png|dds|jpg)$/i)) ops.push({ kind: 'copy', from: tex, to: path.join(texturesDir, path.basename(tex)), label: `LumeniteFX 纹理 ${path.basename(tex)}` });
-    defines.push('DLSS5_MV_PROVIDER=3');
+    const lum = lumeniteOps(comps.lumenite, shadersDir, texturesDir);
+    if (!lum.provider) throw new Error('LumeniteFX 组件里没有 lumenite_Kernel.fx 或 lumenite_QuantMotion.fx。');
+    ops.push(...lum.ops);
+    chain.push(...lum.chain);
+    defines.push(`DLSS5_MV_PROVIDER=${lum.provider}`);
     if (!analysis.nativeDlss.present) {
       const dlss = bestDll(dlls, 'nvngx_dlss.dll')!;
       ops.push({ kind: 'copy', from: dlss.path, to: path.join(exeDir, 'nvngx_dlss.dll'), label: 'NVIDIA DLSS 运行库' });
@@ -672,6 +702,72 @@ export function rollback(recordId: string): InstallRecord {
   return r;
 }
 
+/**
+ * Brings Prism Core installs made by an older Prism NR up to the shipped version, in place: Core's
+ * two DLLs, the NVIDIA runtime when the shipped one is newer, and the cadence when it is still the
+ * old default (every 4 frames, 1.1.1) now that every 2 frames is the default. A file the running
+ * game holds is left for the next start. Backups stay as they were, so rollback still returns the
+ * folder to how it was before Prism.
+ */
+export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
+  const done: string[] = [];
+  const records = store.installs();
+  const nr = bestDll(dlls, 'nvngx_dlssnr.dll', true);
+  let changed = false;
+  for (const r of records.filter((x) => x.status === 'active' && x.route === 'prism-core')) {
+    const notes: string[] = [];
+    for (const f of r.files) {
+      const name = path.basename(f.target).toLowerCase();
+      const from = CORE_FILES.includes(name) ? path.join(coreDir, name) : name === 'nvngx_dlssnr.dll' && nr ? nr.path : null;
+      if (!from || !exists(from) || !exists(f.target)) continue;
+      const want = sha256File(from);
+      if (want === sha256File(f.target)) continue;
+      if (name === 'nvngx_dlssnr.dll') {
+        // Only ever move the network forward, and only to an NVIDIA-signed copy.
+        const cur = dlls.find((d) => d.path.toLowerCase() === f.target.toLowerCase());
+        if (!nr?.signed || (cur?.version && versionNewer(cur.version, nr.version ?? '0'))) continue;
+      }
+      try {
+        fs.chmodSync(f.target, 0o666);
+        fs.copyFileSync(from, f.target);
+        fs.chmodSync(f.target, 0o666);
+        f.sha256After = want;
+        notes.push(name);
+      } catch (e) {
+        log(`upgrade ${r.gameName}: ${name} busy (${(e as Error).message}), next start`);
+      }
+    }
+    if (r.values && String(r.values['prism-core.cadence'] ?? '4') === '4' && !r.values['prism-core.cadenceChosen']) {
+      const ini = r.files.find((f) => /prism-core\.ini$/i.test(f.target));
+      if (ini && exists(ini.target)) {
+        const values = { ...r.values, 'prism-core.cadence': '2' };
+        const content = coreIni(values);
+        try {
+          fs.writeFileSync(ini.target, content, 'utf8');
+          ini.sha256After = sha256Text(content);
+          r.values = values;
+          notes.push('cadence 4 -> 2');
+        } catch (e) {
+          log(`upgrade ${r.gameName}: prism-core.ini busy (${(e as Error).message})`);
+        }
+      }
+    }
+    if (notes.length) {
+      changed = true;
+      done.push(`${r.gameName}：${notes.join('、')}`);
+      log(`upgrade ${r.gameName}: ${notes.join(', ')}`);
+    }
+  }
+  if (changed) store.saveInstalls(records);
+  return done;
+}
+
+function versionNewer(a: string, b: string): boolean {
+  const pa = a.split('.').map((n) => Number(n) || 0), pb = b.split('.').map((n) => Number(n) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0);
+  return false;
+}
+
 /** Rewrites prism-core.ini of an active Core install; the running game re-reads it within a second. */
 export function updateCoreConfig(recordId: string, values: Values): InstallRecord {
   const records = store.installs();
@@ -679,7 +775,7 @@ export function updateCoreConfig(recordId: string, values: Values): InstallRecor
   if (!r || r.status !== 'active' || r.route !== 'prism-core') throw new Error('这个游戏当前没有启用 Prism Core。');
   const file = r.files.find((f) => /prism-core\.ini$/i.test(f.target));
   if (!file) throw new Error('安装记录里没有 prism-core.ini，请重新应用一次。');
-  const merged = { ...resolveValues('core'), ...(r.values ?? {}), ...values };
+  const merged = { ...resolveValues('core'), ...(r.values ?? {}), ...values, ...('prism-core.cadence' in values ? { 'prism-core.cadenceChosen': true } : {}) };
   const content = coreIni(merged);
   fs.writeFileSync(file.target, content, 'utf8');
   // Keep rollback's change check quiet: this edit is Prism's own.

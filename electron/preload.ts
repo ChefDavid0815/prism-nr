@@ -13,6 +13,7 @@ const api: PrismApi = {
   analyzeGame: (id) => call('analyze', id),
   addManualGame: () => call('addManual'),
   removeManualGame: (id) => call('removeManual', id),
+  coreUpgrades: () => call('coreUpgrades'),
   getCatalog: () => call('catalog'),
   listComponents: () => call('components'),
   importComponent: (id) => call('importComponent', id),

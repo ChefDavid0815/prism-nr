@@ -268,6 +268,8 @@ export interface PrismApi {
   scanGames(): Promise<GameEntry[]>;
   analyzeGame(id: string): Promise<GameAnalysis>;
   addManualGame(): Promise<GameEntry | null>;
+  /** Games whose Prism Core install was brought up to date in place on this start. */
+  coreUpgrades(): Promise<string[]>;
   /** Takes a manually added folder off the list (files are untouched). */
   removeManualGame(id: string): Promise<void>;
   getCatalog(): Promise<{ plugins: PluginDef[]; presets: PresetDef[] }>;

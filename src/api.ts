@@ -75,6 +75,7 @@ function createPreviewApi(): PrismApi {
     },
     analyzeGame: async (id) => analyses[id],
     addManualGame: async () => null,
+    coreUpgrades: async () => [],
     removeManualGame: async (id) => {
       if (installs.some((r) => r.gameId === id && r.status === 'active')) throw new Error('这个目录里还有 Prism 的安装，请先还原，再移除。');
       const i = games.findIndex((g) => g.id === id);

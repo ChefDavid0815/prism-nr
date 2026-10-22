@@ -1416,3 +1416,10 @@ html[data-motion='standard'] .stage {
 .risk-accept input {
   margin-top: 3px;
 }
+.banner-ready {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-color: var(--ready);
+}

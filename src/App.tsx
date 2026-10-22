@@ -26,6 +26,7 @@ export function App() {
   const [motion, setMotionState] = useState<MotionLevel>('max');
   const [sweep, setSweep] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [upgrades, setUpgrades] = useState<string[]>([]);
 
   const refreshInstalls = useCallback(() => api.listInstalls().then(setInstalls).catch(() => {}), []);
 
@@ -35,6 +36,7 @@ export function App() {
     try {
       const list = await api.scanGames();
       setGames(list);
+      api.coreUpgrades().then(setUpgrades).catch(() => {});
       // Analyse one at a time so rows light up as results arrive.
       for (const g of list) {
         const a = await api.analyzeGame(g.id).catch(() => null);
@@ -135,6 +137,12 @@ export function App() {
         </nav>
 
         <main className="stage" key={view}>
+          {upgrades.length > 0 && (
+            <div className="banner banner-ready" role="status">
+              <span>已把 {upgrades.length} 个游戏里的 Prism Core 原地升级到 v{__APP_VERSION__}，不用重新安装：{upgrades.map((u) => u.split('：')[0]).join('、')}。</span>
+              <button className="btn btn-line btn-small" onClick={() => setUpgrades([])}>知道了</button>
+            </div>
+          )}
           {error && (
             <div className="banner banner-blocked" role="alert">
               {error}

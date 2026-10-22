@@ -121,4 +121,4 @@ npm run test:core  # 只读自测：显卡、扫描、分析、安装方案
 
 ## 致谢与许可证
 
-Prism NR 是 MIT 协议的开源软件。它不是 NVIDIA 产品，与 NVIDIA 没有关联；DLSS 是 NVIDIA 的商标。它依赖 [ReShade](https://reshade.me)（BSD-3-Clause）、[OptiScaler DLSS-NR](https://github.com/Dagherbou/OptiScaler_DLSSNR) 和 [Pre-SR Multipass](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass)（GPL-3.0）、[DLSS5-Feeder](https://github.com/jlrouzies-fr/DLSS5-Feeder)、[RenoDX](https://github.com/RankFTW/rhi-repo)，各自遵循自己的许可证。不要在网络游戏中使用注入类 Mod。
+Prism NR 是 MIT 协议的开源软件。它不是 NVIDIA 产品，与 NVIDIA 没有关联；DLSS 是 NVIDIA 的商标。它依赖 [ReShade](https://reshade.me)（BSD-3-Clause）、[OptiScaler DLSS-NR](https://github.com/Dagherbou/OptiScaler_DLSSNR) 和 [Pre-SR Multipass](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass)（GPL-3.0）、[DLSS5-Feeder](https://github.com/jlrouzies-fr/DLSS5-Feeder)、[RenoDX](https://github.com/RankFTW/rhi-repo)，各自遵循自己的许可证。[LumeniteFX](https://github.com/umar-afzaal/LumeniteFX)（作者 Afzaal / Kaidō）经作者授权随安装包分发，许可证（AGNYA License）随组件附带。安装包还附带未经修改的 NVIDIA 签名版 DLSS 神经渲染运行库（`nvngx_dlssnr.dll`），它仍是 NVIDIA 的软件，遵循 NVIDIA 的条款。不要在网络游戏中使用注入类 Mod。

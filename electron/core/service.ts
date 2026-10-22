@@ -2,7 +2,7 @@ import { PLUGINS, PRESETS } from '../shared/catalog';
 import type { DiagnosticsReport, GameAnalysis, GameEntry, InstallPlan, InstallProgress, NvidiaDll, PlanRequest, SystemInfo } from '../shared/types';
 import { ANALYSIS_SCHEMA, analyzeGame } from './analyzer';
 import { importComponent, listComponents } from './components';
-import { buildPlan, learnAddonSettings, rollback, runInstall, updateCoreConfig } from './installer';
+import { buildPlan, learnAddonSettings, rollback, runInstall, updateCoreConfig, upgradeCoreInstalls } from './installer';
 import { locateNvidiaDlls } from './nvidia';
 import { leftoverDirs, manualEntry, scanAllGames } from './scanner';
 import { store } from './store';
@@ -25,8 +25,16 @@ export class PrismService {
   async scanGames(): Promise<GameEntry[]> {
     this.games = await scanAllGames(store.manualGames());
     learnAddonSettings();
+    // Core installs from an older Prism NR are brought up to date in place, once per start.
+    if (!this.upgraded) {
+      this.upgraded = true;
+      this.upgrades = upgradeCoreInstalls(await this.nvidiaDlls());
+    }
     return this.games;
   }
+
+  private upgraded = false;
+  upgrades: string[] = [];
 
   private game(id: string): GameEntry {
     const g = this.games.find((x) => x.id === id);

@@ -149,4 +149,8 @@ affiliated with NVIDIA; DLSS is an NVIDIA trademark. It builds on
 [Pre-SR Multipass](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass) (GPL-3.0),
 [DLSS5-Feeder](https://github.com/jlrouzies-fr/DLSS5-Feeder) and
 [RenoDX](https://github.com/RankFTW/rhi-repo), each under its own license.
+[LumeniteFX](https://github.com/umar-afzaal/LumeniteFX) by Afzaal (Kaidō) ships inside the
+installer with the author's permission (AGNYA License, included with the component).
+The installer also ships NVIDIA's signed DLSS neural rendering runtime (`nvngx_dlssnr.dll`),
+unmodified; it remains NVIDIA's software under NVIDIA's terms.
 Do not use injection mods in online games.

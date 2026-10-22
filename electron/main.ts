@@ -71,6 +71,7 @@ app.whenReady().then(() => {
     return r.canceled || !r.filePaths[0] ? null : service.addManual(r.filePaths[0]);
   });
   handle('removeManual', (id: string) => service.removeManual(id));
+  handle('coreUpgrades', () => service.upgrades);
   handle('catalog', () => service.catalog());
   handle('components', () => service.listComponents());
   handle('importComponent', async (id: string) => {

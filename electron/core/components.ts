@@ -29,7 +29,7 @@ export const SOURCES: ComponentSource[] = [
   { id: 'renodx-dlss5', name: 'RenoDX DLSS 5 插件', kind: 'github', repo: 'RankFTW/rhi-repo', tag: /^renodx-dlss5-[\d.]+$/i, asset: /^renodx-dlss5_[\d.]+\.zip$/i, homepage: 'https://github.com/RankFTW/rhi-repo', license: '见项目仓库', manualHint: '如果自动获取失败，从 RenoDX 官方 Discord 下载 .addon64 文件后导入。' },
   { id: 'optiscaler-nr', name: 'OptiScaler DLSS-NR（稳定版）', kind: 'github', repo: 'Dagherbou/OptiScaler_DLSSNR', asset: /\.(7z|zip)$/i, homepage: 'https://github.com/Dagherbou/OptiScaler_DLSSNR', license: 'GPL-3.0' },
   { id: 'optiscaler-presr', name: 'OptiScaler DLSS-NR Pre-SR', kind: 'github', repo: 'wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass', asset: /\.(7z|zip)$/i, homepage: 'https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass', license: 'GPL-3.0' },
-  { id: 'lumenite', name: 'LumeniteFX 运动矢量', kind: 'manual', homepage: 'https://www.nexusmods.com/fallout4/mods/108067', license: '见作者说明', manualHint: '在 Nexus 下载 LumeniteFX 压缩包后导入，所有游戏共用这一份。' },
+  { id: 'lumenite', name: 'LumeniteFX 运动矢量', kind: 'manual', homepage: 'https://github.com/umar-afzaal/LumeniteFX', license: 'AGNYA License（作者授权随 Prism NR 分发）', manualHint: 'Prism NR 安装包自带，一般不用手动导入；需要换版本时从作者的官方链接下载后导入。' },
   { id: 'dfc', name: 'Deep Fried Chicken', kind: 'manual', homepage: 'https://github.com/jlrouzies-fr/DLSS5-Feeder', license: '见作者说明', manualHint: '下载后导入。Prism 默认用 RenoDX 插件，不装也可以。' },
   { id: 'mgpu', name: 'MGPU Bridge', kind: 'manual', homepage: 'https://github.com/maohgad-web/Neural-coprocessor', license: '见项目仓库', manualHint: '双卡用户下载后导入。' },
 ];
@@ -69,6 +69,13 @@ const SEVEN_ZIP = (() => {
 
 export async function extractArchive(archive: string, outDir: string): Promise<void> {
   ensureDir(outDir);
+  // The bundled 7za has no RAR support; Windows' own tar (libarchive) reads RAR.
+  if (/\.rar$/i.test(archive)) {
+    const tar = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
+    const t = await run(tar, ['-xf', archive, '-C', outDir], 180000);
+    if (t.code !== 0) throw new Error(`解压失败：${path.basename(archive)}（${t.stderr.trim() || 'RAR 需要 Windows 10 1803 以上自带的 tar'}）`);
+    return;
+  }
   const r = await run(SEVEN_ZIP, ['x', '-y', `-o${outDir}`, archive], 180000);
   if (r.code !== 0) throw new Error(`解压失败：${path.basename(archive)}（${r.stderr.trim() || r.stdout.slice(-200)}）`);
 }

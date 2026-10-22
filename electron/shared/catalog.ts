@@ -104,7 +104,7 @@ export const PLUGINS: PluginDef[] = [
     routes: ['feeder'],
     conflicts: [],
     requires: [],
-    source: { name: 'LumeniteFX Kernel', note: '导入到 Prism 组件仓库' },
+    source: { name: 'LumeniteFX Kernel', url: 'https://github.com/umar-afzaal/LumeniteFX', license: 'AGNYA License', note: '作者 Afzaal（Kaidō）授权随 Prism NR 分发，安装时自动装好，不用手动导入' },
     params: [],
   },
   {
