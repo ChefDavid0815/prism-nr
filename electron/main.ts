@@ -68,6 +68,7 @@ app.whenReady().then(() => {
     const r = await dialog.showOpenDialog(win!, { title: '选择游戏安装目录', properties: ['openDirectory'] });
     return r.canceled || !r.filePaths[0] ? null : service.addManual(r.filePaths[0]);
   });
+  handle('removeManual', (id: string) => service.removeManual(id));
   handle('catalog', () => service.catalog());
   handle('components', () => service.listComponents());
   handle('importComponent', async (id: string) => {

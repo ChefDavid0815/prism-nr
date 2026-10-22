@@ -12,6 +12,7 @@ const api: PrismApi = {
   scanGames: () => call('scan'),
   analyzeGame: (id) => call('analyze', id),
   addManualGame: () => call('addManual'),
+  removeManualGame: (id) => call('removeManual', id),
   getCatalog: () => call('catalog'),
   listComponents: () => call('components'),
   importComponent: (id) => call('importComponent', id),

@@ -29,6 +29,7 @@ function createPreviewApi(): PrismApi {
     { id: 'g6', name: 'Alan Wake 2', store: 'epic', installDir: 'D:\\Epic\\AlanWake2' },
     { id: 'g7', name: 'ACE COMBAT 8: WINGS OF THEVE', store: 'steam', installDir: 'E:\\Steam\\steamapps\\common\\ACE COMBAT 8' },
     { id: 'g8', name: 'Apex Legends', store: 'steam', installDir: 'D:\\Games\\Apex' },
+    { id: 'g9', name: 'Downloads', store: 'manual', installDir: 'C:\\Users\\me\\Downloads' },
   ];
   const a = (id: string, partial: Partial<GameAnalysis>): GameAnalysis => ({
     gameId: id,
@@ -56,6 +57,7 @@ function createPreviewApi(): PrismApi {
     g5: a('g5', { exe: 'D:\\Games\\Skyrim\\SkyrimSE.exe', apis: ['dx11'], nativeDlss: { present: false }, streamline: false, dlssFrameGen: false, routes: ['feeder'], recommendedRoute: 'feeder', routeReason: '游戏没有 DLSS，需要用 Feeder 从 ReShade 深度缓冲和估算的运动矢量补全输入。快速运动时可能拖影。' }),
     g6: a('g6', { exe: 'D:\\Epic\\AlanWake2\\AlanWake2.exe' }),
     g7: a('g7', { exe: 'AceCombat8.exe', apis: ['dx12'], nativeDlss: { present: false }, antiCheat: [{ name: 'Easy Anti-Cheat', evidence: 'EasyAntiCheat' }], routes: [], recommendedRoute: 'blocked', routeReason: '检测到 Easy Anti-Cheat。注入 DLL 可能导致封号，Prism 不会在这个游戏里安装。' }),
+    g9: a('g9', { exe: null, apis: [], nativeDlss: { present: false }, streamline: false, dlssFrameGen: false, routes: [], recommendedRoute: 'unknown', routeReason: '没有识别出图形 API。可能是启动器而不是游戏本体。' }),
     g8: a('g8', { exe: 'r5apex.exe', apis: ['dx12', 'dx11'], nativeDlss: { present: false }, antiCheat: [{ name: 'Easy Anti-Cheat', evidence: 'EasyAntiCheat' }], routes: [], recommendedRoute: 'blocked', routeReason: '检测到 Easy Anti-Cheat。注入 DLL 可能导致封号，Prism 不会在这个游戏里安装。' }),
   };
   let installs: InstallRecord[] = [];
@@ -71,6 +73,11 @@ function createPreviewApi(): PrismApi {
     },
     analyzeGame: async (id) => analyses[id],
     addManualGame: async () => null,
+    removeManualGame: async (id) => {
+      if (installs.some((r) => r.gameId === id && r.status === 'active')) throw new Error('这个目录里还有 Prism 的安装，请先还原，再移除。');
+      const i = games.findIndex((g) => g.id === id);
+      if (i >= 0) games.splice(i, 1);
+    },
     getCatalog: async () => ({ plugins: PLUGINS, presets: PRESETS }),
     listComponents: async () => [],
     importComponent: async () => null,

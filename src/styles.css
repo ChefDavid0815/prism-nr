@@ -1377,3 +1377,21 @@ html[data-motion='standard'] .stage {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------------ manual folder removal */
+.manual-remove {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+.manual-remove .btn {
+  flex: none;
+}
+.manual-remove .block-note {
+  margin-top: 0;
+}
+.manual-remove .btn.is-armed {
+  border-color: var(--blocked);
+  color: var(--white);
+}

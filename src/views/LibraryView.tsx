@@ -29,6 +29,7 @@ interface Props {
   onApplied: () => void;
   onRolledBack: () => void;
   onTuned: () => void;
+  onRemoveManual: (id: string) => Promise<void>;
   onAddManual: () => void;
 }
 
@@ -41,14 +42,14 @@ function groupOf(a: GameAnalysis | undefined): 0 | 1 | 2 | 3 {
 
 const GROUPS = ['可以直接启用', '需要补全输入', '已阻止', '分析中或未识别'];
 
-export function LibraryView({ games, analyses, scanning, system, installs, onApplied, onRolledBack, onTuned, onAddManual }: Props) {
+export function LibraryView({ games, analyses, scanning, system, installs, onApplied, onRolledBack, onTuned, onRemoveManual, onAddManual }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [progress, setProgress] = useState<InstallProgress | null>(null);
   const [plan, setPlan] = useState<InstallPlan | null>(null);
 
   useEffect(() => {
-    if (!selected && games.length) {
+    if ((!selected || !games.some((g) => g.id === selected)) && games.length) {
       const firstReady = games.find((g) => groupOf(analyses[g.id]) === 0) ?? games[0];
       setSelected(firstReady.id);
     }
@@ -170,6 +171,7 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
           onApplied={onApplied}
           onRolledBack={onRolledBack}
           onTuned={onTuned}
+          onRemoveManual={onRemoveManual}
         />
       )}
     </div>
@@ -233,11 +235,12 @@ interface DetailProps {
   onApplied: () => void;
   onRolledBack: () => void;
   onTuned: () => void;
+  onRemoveManual: (id: string) => Promise<void>;
 }
 
 type CoreValues = Record<string, number | boolean | string>;
 
-function Detail({ game, analysis, system, record, progress, onProgress, onPlan, onApplied, onRolledBack, onTuned }: DetailProps) {
+function Detail({ game, analysis, system, record, progress, onProgress, onPlan, onApplied, onRolledBack, onTuned, onRemoveManual }: DetailProps) {
   const [preset, setPreset] = useState<PresetId | undefined>(undefined);
   const [style, setStyle] = useState<string | undefined>(undefined);
   const [disabled, setDisabled] = useState<Set<string>>(new Set());
@@ -331,6 +334,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
       <div className="detail-scroll">
         <h1 className="detail-title">{game.name}</h1>
         <p className="detail-path mono dim">{game.installDir}</p>
+        {game.store === 'manual' && <RemoveManual game={game} installed={Boolean(record)} onRemove={onRemoveManual} onError={setError} />}
 
         <dl className="facts">
           <div><dt>主程序</dt><dd className="mono">{exeName}</dd></div>
@@ -632,5 +636,45 @@ function CoreSettings({ values, live, onChange, onTuned }: CoreSettingsProps) {
         )}
       </div>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+interface RemoveManualProps {
+  game: GameEntry;
+  installed: boolean;
+  onRemove: (id: string) => Promise<void>;
+  onError: (message: string) => void;
+}
+
+/** Takes a manually added folder off the list; the first press arms it for three seconds. */
+function RemoveManual({ game, installed, onRemove, onError }: RemoveManualProps) {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  const press = async () => {
+    if (!armed) return setArmed(true);
+    setBusy(true);
+    try {
+      await onRemove(game.id);
+    } catch (e) {
+      onError((e as Error).message);
+      setArmed(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="manual-remove">
+      <button className={`btn btn-line btn-small ${armed ? 'is-armed' : ''}`} disabled={installed || busy} onClick={() => void press()}>
+        {armed ? '确认移除' : '从列表移除'}
+      </button>
+      <p className="block-note">{installed ? '这个目录里还有 Prism 的安装，先点下方的"还原"，再移除。' : armed ? '再点一次确认。只从 Prism 的列表里拿掉，不会删除任何文件。' : '手动添加的目录。移除只是从列表里拿掉，不会删除任何文件。'}</p>
+    </div>
   );
 }

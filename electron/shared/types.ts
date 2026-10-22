@@ -260,6 +260,8 @@ export interface PrismApi {
   scanGames(): Promise<GameEntry[]>;
   analyzeGame(id: string): Promise<GameAnalysis>;
   addManualGame(): Promise<GameEntry | null>;
+  /** Takes a manually added folder off the list (files are untouched). */
+  removeManualGame(id: string): Promise<void>;
   getCatalog(): Promise<{ plugins: PluginDef[]; presets: PresetDef[] }>;
   listComponents(): Promise<ComponentInfo[]>;
   importComponent(id: string): Promise<ComponentInfo | null>;

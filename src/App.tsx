@@ -140,7 +140,7 @@ export function App() {
               {error}
             </div>
           )}
-          {view === 'library' && <LibraryView games={games} analyses={analyses} scanning={scanning} system={system} installs={installs} onApplied={onApplied} onRolledBack={refreshInstalls} onTuned={refreshInstalls} onAddManual={async () => { const g = await api.addManualGame(); if (g) await scan(); }} />}
+          {view === 'library' && <LibraryView games={games} analyses={analyses} scanning={scanning} system={system} installs={installs} onApplied={onApplied} onRolledBack={refreshInstalls} onTuned={refreshInstalls} onRemoveManual={async (id) => { await api.removeManualGame(id); setGames((prev) => prev.filter((g) => g.id !== id)); setAnalyses((prev) => { const next = { ...prev }; delete next[id]; return next; }); }} onAddManual={async () => { const g = await api.addManualGame(); if (g) await scan(); }} />}
           {view === 'plugins' && <PluginsView />}
           {view === 'history' && <HistoryView installs={installs} onChange={refreshInstalls} />}
           {view === 'diagnostics' && <DiagnosticsView />}

@@ -51,6 +51,17 @@ export class PrismService {
     return entry;
   }
 
+  /** Takes a manually added folder off the list. Files are untouched; an active install must be rolled back first. */
+  removeManual(id: string): void {
+    const entry = store.manualGames().find((g) => g.id === id);
+    if (!entry) throw new Error('这个目录不是手动添加的，不能从这里移除。');
+    if (store.installs().some((r) => r.gameId === id && r.status === 'active')) throw new Error('这个目录里还有 Prism 的安装，请先还原，再移除。');
+    store.saveManualGames(store.manualGames().filter((g) => g.id !== id));
+    this.games = this.games.filter((g) => g.id !== id);
+    delete this.analyses[id];
+    store.saveAnalysisCache(this.analyses);
+  }
+
   catalog() {
     return { plugins: PLUGINS, presets: PRESETS };
   }
