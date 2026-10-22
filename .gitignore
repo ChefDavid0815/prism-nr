@@ -15,3 +15,5 @@ native/prism-core/external/nvsdk_ngx_defs.h
 vendor-nvidia/
 # Recorded game frames for offline studies (large)
 research-data/
+# Third-party components shipped in the installer, never committed
+vendor-components/

@@ -34,6 +34,28 @@ export const SOURCES: ComponentSource[] = [
   { id: 'mgpu', name: 'MGPU Bridge', kind: 'manual', homepage: 'https://github.com/maohgad-web/Neural-coprocessor', license: '见项目仓库', manualHint: '双卡用户下载后导入。' },
 ];
 
+// Third-party components shipped inside the installer (resources/components/<id>/), imported on
+// first use so nobody has to import them by hand. Only components whose authors allow it go here.
+let bundledDir = '';
+export function setBundledComponentsDir(dir: string): void {
+  bundledDir = dir;
+}
+function bundledSource(id: string): string | null {
+  if (!bundledDir) return null;
+  const d = path.join(bundledDir, id);
+  try {
+    const entries = fs.readdirSync(d);
+    if (!entries.length) return null;
+    // One archive: import the archive; anything else: import the folder.
+    return entries.length === 1 && /\.(zip|7z|rar)$/i.test(entries[0]) ? path.join(d, entries[0]) : d;
+  } catch {
+    return null;
+  }
+}
+export function isBundled(id: string): boolean {
+  return bundledSource(id) !== null;
+}
+
 const SEVEN_ZIP = (() => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -184,6 +206,13 @@ export async function ensureComponent(id: string, onProgress: (msg: string) => v
   const src = SOURCES.find((s) => s.id === id);
   if (!src) throw new Error(`未知组件 ${id}`);
   ensureDir(path.join(dirs.components, id));
+  const shipped = bundledSource(id);
+  if (shipped) {
+    onProgress(`安装 Prism NR 自带的 ${src.name}`);
+    const info = await importComponent(id, shipped);
+    log(`component ${id}: imported the bundled copy`);
+    return info;
+  }
   if (src.kind === 'reshade-site') return fetchReshade(onProgress);
   if (src.kind === 'github') return fetchGithub(src, onProgress);
   throw new Error(`${src.name} 需要手动导入。${src.manualHint ?? ''}`);

@@ -18,7 +18,7 @@ import type {
   PresetId,
   Route,
 } from '../shared/types';
-import { componentFile, componentFiles, ensureComponent, getComponent, SOURCES } from './components';
+import { componentFile, componentFiles, ensureComponent, getComponent, isBundled, SOURCES } from './components';
 import { bestDll } from './nvidia';
 import { dirs, store } from './store';
 import { ensureDir, exists, log, readText, sha256File, sha256Text } from './util';
@@ -208,7 +208,8 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const needs: PlanNeed[] = componentIdsFor(route, plugins).map((id) => {
     const src = SOURCES.find((s) => s.id === id)!;
     const have = getComponent(id);
-    return { id, name: src.name, status: have ? 'ready' : src.kind === 'manual' ? 'manual' : 'auto', hint: src.manualHint };
+    // A component shipped with Prism NR installs itself, even one that would otherwise be imported by hand.
+    return { id, name: src.name, status: have ? 'ready' : src.kind === 'manual' && !isBundled(id) ? 'manual' : 'auto', hint: src.manualHint };
   });
   for (const n of needs) if (n.status === 'manual') blockers.push(`需要导入一次：${n.name}。${n.hint ?? ''}`);
 

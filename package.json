@@ -77,6 +77,13 @@
         "filter": [
           "*.dll"
         ]
+      },
+      {
+        "from": "vendor-components",
+        "to": "components",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "asarUnpack": [
