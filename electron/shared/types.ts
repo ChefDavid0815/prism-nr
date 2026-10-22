@@ -82,6 +82,8 @@ export interface GameAnalysis {
   /** The executable imports VERSION.dll, so Prism Core's loader is picked up at start-up. */
   importsVersionDll?: boolean;
   antiCheat: AntiCheatHit[];
+  /** Anti-cheat this game lets players avoid offline: installable after the user accepts the risk. */
+  antiCheatOptIn?: { names: string[]; how: string };
   existing: ExistingMods;
   routes: Route[];
   recommendedRoute: Route;
@@ -199,6 +201,8 @@ export interface InstallPlan {
   blockers: string[];
   warnings: string[];
   profileNotes: string[];
+  /** Set for games with anti-cheat that can be avoided offline: install needs the user's consent. */
+  riskConsent?: { names: string[]; how: string; accepted: boolean };
 }
 
 export interface InstallProgress {
@@ -232,6 +236,8 @@ export interface InstallRecord {
   rolledBackAt?: string;
   /** Files the user changed after install; rollback left them alone or restored them on request. */
   rollbackNotes?: string[];
+  /** When the user accepted the anti-cheat risk for this install. */
+  riskAcceptedAt?: string;
 }
 
 export interface DiagnosticsReport {
@@ -253,6 +259,8 @@ export interface PlanRequest {
   plugins?: string[];
   overrides?: Record<string, number | boolean | string>;
   route?: Route;
+  /** The user read and accepted the anti-cheat risk shown for this game. */
+  acceptRisk?: boolean;
 }
 
 export interface PrismApi {

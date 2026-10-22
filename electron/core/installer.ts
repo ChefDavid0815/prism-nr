@@ -175,7 +175,6 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const manualSteps: string[] = [];
   const steps: string[] = [];
 
-  if (profile?.key === 'nba2k27') blockers.push('NBA 2K27 官方支持 DLSS 5，在游戏设置里直接开启即可，不需要注入。');
   if (route === 'blocked') blockers.push(analysis.routeReason);
   if (route === 'unknown') blockers.push(analysis.routeReason || '无法确定安装路线。');
   if (!analysis.exe) blockers.push('没有找到游戏主程序。');
@@ -235,7 +234,10 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   else if (route !== 'optiscaler') manualSteps.push('游戏里按 F6 开关神经渲染、F7 开关 Prism 插件，可以随时对比。');
   if (route === 'optiscaler') manualSteps.push('第一次进游戏如果画面没有变化，按 Insert 打开 OptiScaler 菜单确认 Neural Rendering 已开启。');
 
+  const riskConsent = analysis.antiCheatOptIn ? { ...analysis.antiCheatOptIn, accepted: req.acceptRisk === true } : undefined;
+  if (riskConsent) manualSteps.unshift(riskConsent.how);
   return {
+    riskConsent,
     gameId: game.id,
     gameName: game.name,
     route,
@@ -587,6 +589,8 @@ export async function runInstall(
   progress: (p: InstallProgress) => void,
 ): Promise<InstallRecord> {
   if (plan.blockers.length) throw new Error(plan.blockers[0]);
+  if (analysis.antiCheatOptIn && !plan.riskConsent?.accepted) throw new Error('这款游戏有反作弊，需要先了解并接受风险。');
+  if (analysis.antiCheat.length && !analysis.antiCheatOptIn) throw new Error('检测到反作弊，Prism 不会在这个游戏里安装。');
   const emit = (stage: InstallProgress['stage'], message: string, fraction: number) => progress({ gameId: game.id, stage, message, fraction });
 
   const comps: Components = {};
@@ -636,6 +640,7 @@ export async function runInstall(
     installedAt: new Date().toISOString(),
     status: 'active',
     rollbackNotes: warnings.length ? warnings : undefined,
+    riskAcceptedAt: plan.riskConsent?.accepted ? new Date().toISOString() : undefined,
   };
   store.saveInstalls([record, ...records]);
   const settings = store.settings();

@@ -13,3 +13,5 @@ native/prism-core/external/nvsdk_ngx_defs.h
 
 # NVIDIA runtime files: shipped in the installer, never committed
 vendor-nvidia/
+# Recorded game frames for offline studies (large)
+research-data/

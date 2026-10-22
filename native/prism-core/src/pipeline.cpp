@@ -445,7 +445,22 @@ void BufferUav(ID3D12Resource* b, UINT count, UINT slot) {
 
 void SetupPresentHook();  // below, with the frame statistics
 
+// Objects released kRing + 4 frames after they were last used.
+std::vector<std::pair<uint64_t, IUnknown*>> grave;
+std::vector<std::pair<uint64_t, void*>> graveNgx;
+void Bury(IUnknown* o) { if (o) grave.push_back({frame, o}); }
+void BuryNgx(void* hnd) { if (hnd) graveNgx.push_back({frame, hnd}); }
+void Exhume() {
+  auto due = [](uint64_t at) { return frame > at + kRing + 4; };
+  for (auto it = grave.begin(); it != grave.end();) { if (due(it->first)) { it->second->Release(); it = grave.erase(it); } else ++it; }
+  for (auto it = graveNgx.begin(); it != graveNgx.end();) { if (due(it->first)) { if (nrRelease) nrRelease(it->second); it = graveNgx.erase(it); } else ++it; }
+}
+
+// Builds the pipeline for the current output size. The parts that do not depend on the size
+// (shaders, the runtime, timestamps, the Present hook) are made once; a resize rebuilds the rest.
 bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
+  HRESULT hr = S_OK;
+  if (!root) {
   if (FAILED(list->GetDevice(__uuidof(ID3D12Device), (void**)&device))) return Fail("GetDevice");
   // Shaders, compiled by the system's d3dcompiler_47.dll.
   using CompileFn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
@@ -460,7 +475,7 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   rp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; rp[2].DescriptorTable = {1, &ranges[1]};
   D3D12_ROOT_SIGNATURE_DESC rd = {}; rd.NumParameters = 3; rd.pParameters = rp;
   ID3DBlob *blob = nullptr, *err = nullptr;
-  HRESULT hr = D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
+  hr = D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
   if (FAILED(hr) || FAILED(hr = device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), __uuidof(ID3D12RootSignature), (void**)&root)))
     return Fail("root signature", hr);
   for (auto [entry, pso] : {std::pair{"Reduce1", &psoReduce1}, std::pair{"Reduce2", &psoReduce2}, std::pair{"Encode", &psoEncode}, std::pair{"Compose", &psoCompose}, std::pair{"Carry", &psoCarry}, std::pair{"Land", &psoLand}, std::pair{"CopyGuides", &psoCopyGuides}}) {
@@ -472,6 +487,7 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
     D3D12_COMPUTE_PIPELINE_STATE_DESC pd = {}; pd.pRootSignature = root; pd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
     if (FAILED(hr = device->CreateComputePipelineState(&pd, __uuidof(ID3D12PipelineState), (void**)pso))) return Fail("pipeline state", hr);
   }
+  }  // once
   // Resources at the output size.
   const D3D12_RESOURCE_DESC od = output->GetDesc();
   w = UINT(od.Width); h = od.Height; tilesX = (w + 15) / 16; tilesY = (h + 15) / 16;
@@ -500,7 +516,9 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
     for (UINT set : {8u, 13u, 18u, 23u}) { BufferUav(tiles, tilesX * tilesY, b + set + 1); BufferUav(exposure, 4, b + set + 2); }
   }
 
-  // The network: the signed runtime from the game folder, initialised on the game's device.
+  // The network: the signed runtime from the game folder, initialised on the game's device (once).
+  ngx::Result r = ngx::kSuccess;
+  if (!nrCreate) {
   HMODULE nr = LoadLibraryW((gameDir + L"nvngx_dlssnr.dll").c_str());
   if (!nr) return Fail("nvngx_dlssnr.dll not found beside the game");
   nrInit = (InitFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_Init_Ext");
@@ -508,8 +526,9 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   nrEvaluate = (EvaluateFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_EvaluateFeature");
   nrRelease = (ReleaseFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_ReleaseFeature");
   if (!nrInit || !nrCreate || !nrEvaluate) return Fail("runtime exports");
-  ngx::Result r = nrInit(0x876232cULL, gameDir.c_str(), device, 0x15, nullptr);
-  if (r != ngx::kSuccess) { Log("NR init 0x%08x", r); return Fail("NR init"); }
+  r = nrInit(0x876232cULL, gameDir.c_str(), device, 0x15, nullptr);
+  if (r != ngx::kSuccess) { Log("NR init 0x%08x", r); nrCreate = nullptr; return Fail("NR init"); }
+  }  // once
   nrParams.vtable = ownedVtable;
   void* p = &nrParams;
   ngx::SetUI(p, "Width", w); ngx::SetUI(p, "Height", h); ngx::SetUI(p, "OutWidth", w); ngx::SetUI(p, "OutHeight", h);
@@ -525,7 +544,7 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   r = nrCreate(list, ngx::kFeatureNeuralRendering, p, &nrHandle);
   if (r != ngx::kSuccess || !nrHandle) { Log("NR create 0x%08x", r); return Fail("NR create"); }
   D3D12_QUERY_HEAP_DESC qd = {}; qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP; qd.Count = 2 * kRing;
-  if (SUCCEEDED(device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void**)&queries))) {
+  if (!queries && SUCCEEDED(device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void**)&queries))) {
     D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_READBACK;
     D3D12_RESOURCE_DESC d = {}; d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; d.Width = 16 * kRing; d.Height = 1; d.DepthOrArraySize = 1;
     d.MipLevels = 1; d.SampleDesc.Count = 1; d.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -537,7 +556,8 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
     if (SUCCEEDED(device->CreateCommandQueue(&qdesc, __uuidof(ID3D12CommandQueue), (void**)&q))) { q->GetTimestampFrequency(&tsFreq); q->Release(); }
   }
   Log("pipeline ready: %ux%u, game create flags 0x%x", w, h, gameCreateFlags);
-  SetupPresentHook();
+  static bool presentHooked = false;
+  if (!presentHooked) { presentHooked = true; SetupPresentHook(); }
   return true;
 }
 
@@ -606,14 +626,32 @@ bool SetupAsync(const UpscaleCall& c) {
 // Drops the compute queue and its feature (between launches) so the next frame builds them again,
 // with the priority now asked for.
 void ReleaseAsync() {
-  if (asyncHandle && nrRelease) nrRelease(asyncHandle);
+  BuryNgx(asyncHandle);
   asyncHandle = nullptr;
-  if (computeList) computeList->Release();
-  for (auto& a : computeAlloc) if (a) { a->Release(); a = nullptr; }
-  if (computeQueue) computeQueue->Release();
-  if (fenceLaunch) fenceLaunch->Release();
-  if (fenceDone) fenceDone->Release();
+  Bury(computeList);
+  for (auto& a : computeAlloc) { Bury(a); a = nullptr; }
+  Bury(computeQueue); Bury(fenceLaunch); Bury(fenceDone);
   computeList = nullptr; computeQueue = nullptr; fenceLaunch = nullptr; fenceDone = nullptr;
+}
+
+// Everything that depends on the output or render size, for a rebuild at a new size. Nothing is
+// released while the GPU might still use it: it waits in the graveyard for a few frames.
+void Teardown() {
+  ID3D12Resource** slots[] = {&origCopy, &proxy, &neural, &tiles, &exposure, &edits[0], &edits[1], &warps[0], &warps[1], &motionCopy, &depthCopy, &recMotion, &recDepth};
+  for (ID3D12Resource** r : slots) {
+    Bury(*r);
+    *r = nullptr;
+  }
+  Bury(heap);
+  heap = nullptr;
+  BuryNgx(nrHandle);
+  nrHandle = nullptr;
+  if (computeQueue) ReleaseAsync();
+  for (RecFrame& rf : recFrames) { Bury(rf.color); Bury(rf.motion); Bury(rf.depth); }
+  recFrames.clear(); recordLeft = 0; recordDoneAt = 0;
+  historyValid = false;
+  current = 0;
+  w = h = 0;
 }
 
 // ------------------------------------------------------------------ frame pacing and statistics
@@ -1025,9 +1063,28 @@ bool PipelineRecord(const UpscaleCall& c) {
   if (keys.capture && Pressed(keys.capture) && !captureAt) { captureAt = frame + 1; Log("capture requested (key)"); }
 
   if (!enabled) return true;
-  if (!heap && !Setup(c.list, c.output)) return false;
-  const D3D12_RESOURCE_DESC od = c.output->GetDesc();
-  if (UINT(od.Width) != w || od.Height != h) return true;  // a resize: skip (recreation comes later)
+  Exhume();
+  {
+    // A new output or render size: let the network in flight finish, then rebuild.
+    static uint32_t builtRW = 0, builtRH = 0, waited = 0;
+    const D3D12_RESOURCE_DESC nd = c.output->GetDesc();
+    if (heap && (UINT(nd.Width) != w || nd.Height != h || c.renderWidth != builtRW || c.renderHeight != builtRH)) {
+      bool busy = false;
+      {
+        std::lock_guard<std::mutex> lock(asyncMutex);
+        busy = inFlight && fenceDone && fenceDone->GetCompletedValue() < launchId && waited < 120;
+        if (!busy) { inFlight = false; launchList = nullptr; landList = nullptr; }
+      }
+      if (busy) { ++waited; return true; }
+      Log("output %llux%u, render %ux%u (was %ux%u, %ux%u): rebuilding", (unsigned long long)nd.Width, nd.Height, c.renderWidth, c.renderHeight, w, h, builtRW, builtRH);
+      Teardown();
+      waited = 0;
+    }
+    if (!heap) {
+      if (!Setup(c.list, c.output)) return false;
+      builtRW = c.renderWidth; builtRH = c.renderHeight;
+    }
+  }
 
   auto* l = c.list;
   const auto SRV = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, UAV = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;

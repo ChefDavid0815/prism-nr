@@ -1395,3 +1395,24 @@ html[data-motion='standard'] .stage {
   border-color: var(--blocked);
   color: var(--white);
 }
+
+/* ------------------------------------------------------------------ anti-cheat risk consent */
+.risk .notes {
+  margin-top: 10px;
+}
+.risk-accept {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 10px;
+  align-items: start;
+  margin-top: 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--rule-2);
+  border-bottom: 1px solid var(--rule-2);
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.risk-accept input {
+  margin-top: 3px;
+}

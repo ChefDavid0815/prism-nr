@@ -52,6 +52,17 @@ export interface GameProfile {
   preset: PresetId;
   values: Record<string, number | boolean | string>;
   notes: string[];
+  /**
+   * Anti-cheat that can be avoided by playing offline or launching without it. Only games listed
+   * here can be installed despite anti-cheat, and only after the user accepts the risk. Online-only
+   * and competitive games are never listed.
+   */
+  antiCheatOptIn?: { names: string[]; how: string };
+  /**
+   * Anti-cheat this game is known to use. It blocks the install even when its files are missing
+   * from the folder (removed, bypassed, or the game not fully installed).
+   */
+  antiCheatKnown?: string;
 }
 
 /**
@@ -59,6 +70,9 @@ export interface GameProfile {
  * values are Prism's starting point and can be tuned in the app.
  */
 export const PROFILES: GameProfile[] = [
+  { key: 'f1-25', title: 'F1 25', steamAppIds: ['3059520'], names: /^f1[^a-z0-9]*25\b/i, style: 'realistic', preset: 'flagship', values: {}, notes: [], antiCheatKnown: 'EA Javelin' },
+  { key: 'fc26', title: 'EA SPORTS FC 26', steamAppIds: [], names: /\bfc\s*26\b/i, style: 'realistic', preset: 'flagship', values: {}, notes: [], antiCheatKnown: 'EA Javelin' },
+  { key: 'apex', title: 'Apex Legends', steamAppIds: ['1172470'], names: /apex legends/i, style: 'realistic', preset: 'flagship', values: {}, notes: [], antiCheatKnown: 'Easy Anti-Cheat' },
   { key: 'cyberpunk2077', title: '赛博朋克 2077', steamAppIds: ['1091500'], names: /cyberpunk\s*2077|赛博朋克/i, style: 'realistic', preset: 'flagship', values: { 'nr-renodx.intensity': 28 }, notes: ['社区反馈人脸、材质和光影变化明显，强度建议不超过 35%。', '游戏内开启 DLSS 超分或 DLAA，路径追踪和光线重建可以保留。'] },
   { key: 'control', title: '控制', steamAppIds: ['870780'], names: /^control|控制/i, style: 'realistic', preset: 'flagship', values: {}, notes: ['最早跑通 RenoDX 实现的游戏之一，兼容性好。', 'Prism Core 在这款游戏上实测：比每帧全分辨率跑网络快 40%。'] },
   { key: 'witcher3', title: '巫师 3：狂猎 次世代版', steamAppIds: ['292030'], names: /witcher\s*3|巫师\s*3/i, style: 'stylized', preset: 'faithful', values: {}, notes: ['原作风格容易被明显改变，默认用原片优先。', 'NPC 脸部可能显得不自然，强度不要高。'] },
@@ -75,7 +89,7 @@ export const PROFILES: GameProfile[] = [
   { key: 'alanwake2', title: '心灵杀手 2', steamAppIds: [], names: /alan wake 2|心灵杀手\s*2/i, style: 'dark', preset: 'flagship', values: {}, notes: ['暗调画面，暗部保护已调高。'] },
   { key: 'skyrim', title: '上古卷轴 V：天际', steamAppIds: ['489830'], names: /skyrim|天际/i, style: 'retro', preset: 'balanced', values: {}, notes: ['没有原生 DLSS，走 Feeder 路线；社区已修复特别版的神经渲染。'] },
   { key: 'fallout4', title: '辐射 4', steamAppIds: ['377160'], names: /fallout\s*4|辐射\s*4/i, style: 'retro', preset: 'balanced', values: {}, notes: ['没有原生 DLSS，走 Feeder 路线。'] },
-  { key: 'nba2k27', title: 'NBA 2K27', steamAppIds: [], names: /nba\s*2k27/i, style: 'realistic', preset: 'flagship', values: {}, notes: ['官方支持 DLSS 5 的游戏，直接在游戏设置里开启，不需要 Prism 注入。'] },
+  { key: 'nba2k27', title: 'NBA 2K27', steamAppIds: [], names: /nba\s*2k27/i, style: 'realistic', preset: 'flagship', values: {}, notes: ['游戏自带 DLSS 5 选项；用 Prism 时把游戏里的神经渲染关掉，避免两层叠加。'], antiCheatOptIn: { names: ['Easy Anti-Cheat'], how: '只在离线模式下使用：不要进入 MyCAREER 在线、公园、排位、MyTEAM 等任何联网模式。要联网玩之前，先在 Prism 里点"还原"。' } },
 ];
 
 export function matchProfile(name: string, steamAppId?: string): GameProfile | null {

@@ -116,7 +116,7 @@ export function LibraryView({ games, analyses, scanning, system, installs, onApp
                   const a = analyses[g.id];
                   const active = installs.some((r) => r.gameId === g.id && r.status === 'active');
                   const isSel = g.id === selected;
-                  const tone = routeTone(a?.recommendedRoute);
+                  const tone = a?.antiCheatOptIn ? 'caution' : routeTone(a?.recommendedRoute);
                   return (
                     <div
                       key={g.id}
@@ -251,6 +251,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
   const [nonce, setNonce] = useState(0);
   const basePlugins = useRef<string[] | null>(null);
   // Prism Core settings: start from what is installed, so the panel shows the game's live values.
+  const [acceptRisk, setAcceptRisk] = useState(false);
   const [coreValues, setCoreValues] = useState<CoreValues>(() => (record?.route === 'prism-core' ? pickCore(record.values ?? {}) : {}));
 
   useEffect(() => {
@@ -258,7 +259,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
     let alive = true;
     const plugins = basePlugins.current ? basePlugins.current.filter((p) => !disabled.has(p)) : undefined;
     api
-      .planInstall({ gameId: game.id, preset, style, plugins, overrides: coreValues })
+      .planInstall({ gameId: game.id, preset, style, plugins, overrides: coreValues, acceptRisk })
       .then((p) => {
         if (!alive) return;
         setPlan(p);
@@ -270,7 +271,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
     return () => {
       alive = false;
     };
-  }, [game.id, analysis, preset, style, disabled, onPlan, nonce, coreValues]);
+  }, [game.id, analysis, preset, style, disabled, onPlan, nonce, coreValues, acceptRisk]);
 
   // The preset defines the plugin baseline; toggles subtract from it.
   useEffect(() => {
@@ -323,6 +324,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
   const coreAvailable = analysis?.routes.includes('prism-core') ?? false;
   const tier = system?.primary?.tier;
   const blocked = Boolean(plan?.blockers.length);
+  const needsConsent = Boolean(plan?.riskConsent && !plan.riskConsent.accepted);
   const tone = routeTone(plan?.route ?? analysis?.recommendedRoute);
   const stages = plan ? pipeline(plan) : [];
   const exeName = analysis?.exe ? analysis.exe.split(/[\\/]/).pop() : '—';
@@ -344,6 +346,26 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
           <div><dt>帧生成</dt><dd className="mono">{analysis ? (analysis.dlssFrameGen ? '支持' : '无') : '—'}</dd></div>
           <div><dt>反作弊</dt><dd className={analysis?.antiCheat.length ? 'tone-blocked' : 'mono'}>{analysis ? analysis.antiCheat.map((x) => x.name).join('、') || '无' : '—'}</dd></div>
         </dl>
+
+        {plan?.riskConsent && !blocked && (
+          <section className="block risk">
+            <h2 className="block-title">
+              <i className="tone-bar" style={{ background: TONE_COLOR.caution }} />
+              风险确认
+            </h2>
+            <p className="block-text">
+              这款游戏带有 {plan.riskConsent.names.join('、')}。它可以离线玩、不启动反作弊，所以 Prism 允许你在了解风险后自行启用。
+            </p>
+            <ul className="notes">
+              <li><i style={{ background: TONE_COLOR.caution }} />{plan.riskConsent.how}</li>
+              <li><i style={{ background: TONE_COLOR.blocked }} />带着 Prism 进入在线模式，账号可能被封禁。这一后果由你自己承担，Prism 不负责。</li>
+            </ul>
+            <label className="risk-accept">
+              <input type="checkbox" checked={acceptRisk} onChange={(e) => setAcceptRisk(e.target.checked)} />
+              <span>我已了解上面的风险，只在离线模式下使用，后果由我自己承担</span>
+            </label>
+          </section>
+        )}
 
         <section className="block">
           <h2 className="block-title">
@@ -517,8 +539,8 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
           </div>
         )}
         <div className="foot-actions">
-          <button className="btn btn-primary" disabled={!plan || blocked || busy} onClick={() => void install()}>
-            {busy ? '正在启用' : record ? '重新应用' : blocked ? '无法启用' : '一键启用'}
+          <button className="btn btn-primary" disabled={!plan || blocked || needsConsent || busy} onClick={() => void install()}>
+            {busy ? '正在启用' : blocked ? '无法启用' : needsConsent ? '先确认风险' : record ? '重新应用' : '一键启用'}
           </button>
           {record && (
             <button className="btn btn-line" onClick={() => void rollback()} disabled={busy}>

@@ -1,15 +1,16 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AntiCheatHit, GameAnalysis, GameEntry, GraphicsApi, Route } from '../shared/types';
+import { matchProfile } from '../shared/profiles';
 import { readPe } from './pe';
 import { exists, log, psJson, psQuote, walk } from './util';
 
 /** Bumped when the analysis gains a field or a route, so cached analyses are redone. */
-export const ANALYSIS_SCHEMA = 2;
+export const ANALYSIS_SCHEMA = 4;
 
 // Executables that are never the game itself.
 const NOT_GAME_EXE =
-  /(unins\d*|setup|install|redist|vc_?redist|dxsetup|crash|report|launcher|uplay|easyanticheat|battleye|be(service|launcher)|start_protected_game|cefprocess|ue4prereq|helper|update|patch|config|settings|benchmark|dotnet|7z|python|node|ffmpeg|unitycrashhandler|steamerrorreporter|eac|server|editor|tool)/i;
+  /(bypass|inject|trainer|crack|cheat|unins\d*|setup|install|redist|vc_?redist|dxsetup|crash|report|launcher|uplay|easyanticheat|battleye|be(service|launcher)|start_protected_game|cefprocess|ue4prereq|helper|update|patch|config|settings|benchmark|dotnet|7z|python|node|ffmpeg|unitycrashhandler|steamerrorreporter|eac|server|editor|tool)/i;
 
 const ANTI_CHEAT: { name: string; test: (rel: string) => boolean }[] = [
   { name: 'Easy Anti-Cheat', test: (r) => /(^|\\)easyanticheat(_eos)?(\\|\.|$)|start_protected_game\.exe$|easyanticheat_x64\.dll$/i.test(r) },
@@ -142,7 +143,14 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
   let recommendedRoute: Route = 'unknown';
   let routeReason = '';
 
-  if (antiCheat.length) {
+  // Anti-cheat blocks the install, except in games whose profile says it can be avoided offline
+  // (every detected anti-cheat must be one the profile names).
+  const profile = matchProfile(entry.name, entry.steamAppId);
+  if (profile?.antiCheatKnown && !antiCheat.some((a) => a.name === profile.antiCheatKnown))
+    antiCheat.push({ name: profile.antiCheatKnown, evidence: '已知这款游戏使用该反作弊（与目录里有没有它的文件无关）' });
+  const optIn = profile?.antiCheatOptIn;
+  const optInApplies = Boolean(antiCheat.length && optIn && antiCheat.every((a) => optIn.names.includes(a.name)));
+  if (antiCheat.length && !optInApplies) {
     recommendedRoute = 'blocked';
     routeReason = `检测到 ${antiCheat.map((a) => a.name).join('、')}。注入 DLL 可能导致封号，Prism 不会在这个游戏里安装。`;
   } else if (!exe) {
@@ -171,6 +179,7 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
       routeReason = '没有识别出图形 API。可能是启动器而不是游戏本体。';
     }
   }
+  if (optInApplies) routeReason = `检测到 ${antiCheat.map((a) => a.name).join('、')}，这款游戏可以离线玩、不启动反作弊。了解并接受风险后才能启用。${routeReason ? ' ' + routeReason : ''}`;
   if (proxies.length && !existing.prism) warnings.push(`游戏目录里已有 ${proxies.join('、')}，可能是其他 Mod。安装时会先备份。`);
   if (existing.optiscaler && !existing.prism) warnings.push('检测到已安装的 OptiScaler，同时使用两个神经渲染插件会让其中一个静默失效。');
   if (/witcher|巫师/i.test(entry.name)) warnings.push('这个游戏的原作风格容易被神经渲染改变，建议用“原片优先”方案。');
@@ -186,6 +195,7 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
     nativeDlss,
     streamline,
     dlssFrameGen,
+    antiCheatOptIn: optInApplies ? optIn : undefined,
     importsVersionDll: pe ? pe.imports.includes('version.dll') : undefined,
     antiCheat,
     existing,
