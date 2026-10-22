@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   assert(/\[Plugins\]\r\nLoadReshade=true/.test(setIniValue('[A]\r\nx=1', 'Plugins', 'LoadReshade', 'true')), 'INI writer adds a missing section');
 
   const ini0 = coreIni({});
-  assert(/\[Prism Core\]\r\nEnabled=1\r\nCadence=4\r\nAsync=1\r\nIntensity=1\.00\r\nGuard=1\.00/.test(ini0), 'Core INI: defaults are cadence 2, async, full intensity and guard');
+  assert(/\[Prism Core\]\r\nEnabled=1\r\nCadence=2\r\nAsync=1\r\nIntensity=1\.00\r\nGuard=1\.00/.test(ini0), 'Core INI: defaults are cadence 2, async, full intensity and guard');
   const ini1 = coreIni({ 'prism-core.cadence': '2', 'prism-core.async': false, 'prism-core.intensity': 60, 'prism-core.guard': 150 });
   assert(/Cadence=2/.test(ini1) && /Async=0/.test(ini1) && /Intensity=0\.60/.test(ini1) && /Guard=1\.00/.test(ini1), 'Core INI: values are written and clamped');
   assert(/^[\x00-\x7f]*$/.test(ini0), 'Core INI: ASCII only (GetPrivateProfileString reads it as ANSI)');
