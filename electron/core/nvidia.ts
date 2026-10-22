@@ -4,14 +4,21 @@ import { exists, isDir, log, psJson, walk } from './util';
 
 const NAMES = ['nvngx_dlssnr.dll', 'nvngx_dlss.dll', 'nvngx_dlssg.dll'] as const;
 
+// NVIDIA's signed runtimes shipped inside the installer (resources/nvidia), when present.
+let bundledDir = '';
+export function setBundledNvidiaDir(dir: string): void {
+  bundledDir = dir;
+}
+
 /**
- * Finds NVIDIA NGX runtimes already on this PC and verifies each is signed by NVIDIA.
- * Prism never downloads or redistributes these files; it only reuses copies the
- * user legally has (a game that ships them, the NGX model cache, the driver store).
+ * Finds NVIDIA NGX runtimes and verifies each is signed by NVIDIA: the copies shipped with
+ * Prism NR, then the ones already on this PC (a game that ships them, the NGX model cache, the
+ * driver store). Every candidate is checked again here, so a damaged or replaced file is never used.
  */
 export async function locateNvidiaDlls(games: GameEntry[], extraDirs: string[] = []): Promise<NvidiaDll[]> {
   const found = new Map<string, string>();
   const roots: { dir: string; depth: number }[] = [
+    ...(bundledDir ? [{ dir: bundledDir, depth: 1 }] : []),
     { dir: path.join(process.env.ProgramData ?? 'C:\\ProgramData', 'NVIDIA', 'NGX'), depth: 6 },
     { dir: path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'DriverStore', 'FileRepository'), depth: 2 },
   ];
@@ -48,12 +55,13 @@ export async function locateNvidiaDlls(games: GameEntry[], extraDirs: string[] =
   const result: NvidiaDll[] = arr.map((r) => ({
     file: path.basename(r.Path).toLowerCase() as NvidiaDll['file'],
     path: r.Path,
+    bundled: Boolean(bundledDir) && path.resolve(path.dirname(r.Path)).toLowerCase() === path.resolve(bundledDir).toLowerCase(),
     version: r.Version ? r.Version.replace(/,\s*/g, '.') : null,
     // Driver-store copies are catalog-signed through WHQL rather than by NVIDIA directly.
     signed: r.Status === 'Valid' && /NVIDIA|Microsoft Windows Hardware Compatibility Publisher/i.test(r.Signer ?? ''),
     signer: r.Signer,
   }));
-  log(`nvidia: ${result.length} NGX files, ${result.filter((r) => r.signed).length} signed`);
+  log(`nvidia: ${result.length} NGX files, ${result.filter((r) => r.signed).length} signed, ${result.filter((r) => r.bundled).length} bundled`);
   return result;
 }
 
@@ -72,7 +80,7 @@ export function bestDll(dlls: NvidiaDll[], file: NvidiaDll['file'], allowUnsigne
     const va = versionKey(a.version);
     const vb = versionKey(b.version);
     for (let i = 0; i < Math.max(va.length, vb.length); i++) if ((va[i] ?? 0) !== (vb[i] ?? 0)) return (vb[i] ?? 0) - (va[i] ?? 0);
-    return 0;
+    return Number(Boolean(b.bundled)) - Number(Boolean(a.bundled));  // same version: the shipped copy
   });
   return signed[0] ?? null;
 }

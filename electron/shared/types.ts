@@ -164,6 +164,8 @@ export interface NvidiaDll {
   version: string | null;
   signed: boolean;
   signer: string | null;
+  /** Shipped inside the Prism NR installer rather than found on this PC. */
+  bundled?: boolean;
 }
 
 export type FileOp =

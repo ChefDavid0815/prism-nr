@@ -70,6 +70,13 @@
           "version.dll",
           "prism_nvngx.dll"
         ]
+      },
+      {
+        "from": "vendor-nvidia",
+        "to": "nvidia",
+        "filter": [
+          "*.dll"
+        ]
       }
     ],
     "asarUnpack": [

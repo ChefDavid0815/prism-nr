@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { setCoreDir, setShaderDir } from './core/installer';
+import { setBundledNvidiaDir } from './core/nvidia';
 import { PrismService } from './core/service';
 import { initStore } from './core/store';
 import { log } from './core/util';
@@ -56,6 +57,7 @@ app.whenReady().then(() => {
   initStore(app.getPath('userData'));
   const shaders = app.isPackaged ? path.join(process.resourcesPath, 'prism-shaders', 'Shaders') : path.join(__dirname, '..', 'plugins', 'prism-shaders', 'Shaders');
   setShaderDir(shaders);
+  setBundledNvidiaDir(app.isPackaged ? path.join(process.resourcesPath, 'nvidia') : path.join(__dirname, '..', 'vendor-nvidia'));
   setCoreDir(app.isPackaged ? path.join(process.resourcesPath, 'prism-core') : path.join(__dirname, '..', 'native', 'prism-core', 'build'));
   service = new PrismService();
 

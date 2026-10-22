@@ -31,6 +31,18 @@ bool paint = false;
 struct Capture { ID3D12Resource* src; const char* name; ID3D12Resource* rb = nullptr; D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp = {}; };
 Capture captures[4];
 uint64_t captureAt = 0;
+// Sequence recorder (Record=N in prism-core.ini): N consecutive frames of the game's upscaled
+// frame, motion vectors and depth, read back and written to prism-record/ once all have landed,
+// for offline study with the real network (tools/nets-sim, tests/nr_bench seq).
+struct RecFrame {
+  ID3D12Resource *color = nullptr, *motion = nullptr, *depth = nullptr;
+  D3D12_PLACED_SUBRESOURCE_FOOTPRINT fc = {}, fm = {}, fd = {};
+  float mvx = 0, mvy = 0; int reset = 0; uint32_t rw = 0, rh = 0;
+};
+std::vector<RecFrame> recFrames;
+int recordLeft = 0, recordAsked = 0;
+uint64_t recordDoneAt = 0;
+ID3D12Resource *recMotion = nullptr, *recDepth = nullptr;
 // A press: the key went down since the last poll (held now and not before), or the "pressed
 // since the last call" bit is set. That bit is shared by the whole process (another add-on
 // polling the same key clears it), so the held state with edge detection is the reliable part.
@@ -317,8 +329,9 @@ UINT inc = 0;
 constexpr UINT kRing = 8;
 // Per ring slot: SRVs t0..t7 at [0..7], then three UAV sets of u0..u4:
 // [8..12] proxy, tiles, exposure, next edit, next warp; [13..17] output, tiles, exposure, next edit,
-// next warp; [18..22] the launch copies: motion, tiles, exposure, depth, next warp.
-constexpr UINT kBlock = 24;
+// next warp; [18..22] the launch copies: motion, tiles, exposure, depth, next warp; [23..27] the
+// recorder's copies: motion, tiles, exposure, depth, next warp.
+constexpr UINT kBlock = 28;
 uint32_t w = 0, h = 0, tilesX = 0, tilesY = 0;
 ID3D12Resource *origCopy = nullptr, *proxy = nullptr, *neural = nullptr, *tiles = nullptr, *exposure = nullptr;
 ID3D12Resource* edits[2] = {};  // ping-pong: last frame's edit and this frame's
@@ -328,7 +341,7 @@ bool historyValid = false;
 int cadence = 4;  // the network every N frames (F2 cycles 1-4); 0: adaptive (see Adapt)
 // Landing: "wait" makes the game's queue wait for the network on the frame after the launch (1.1);
 // "poll" lands only once the network has finished and carries one more frame otherwise.
-bool landPoll = false;
+bool landPoll = true;  // the default: no GPU wait on the game's queue (fixes freezes, see notes)
 int netPriority = 0;      // 0 normal, 1 high: the compute queue's priority
 int fpsCap = 0;           // rendered frames per second, 0 for no cap
 uint64_t lastLaunchFrame = 0;
@@ -484,7 +497,7 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
     sv.Format = od.Format; device->CreateShaderResourceView(origCopy, &sv, Cpu(b + 0));
     sv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; device->CreateShaderResourceView(proxy, &sv, Cpu(b + 1)); device->CreateShaderResourceView(neural, &sv, Cpu(b + 2));
     device->CreateUnorderedAccessView(proxy, nullptr, nullptr, Cpu(b + 8));
-    for (UINT set : {8u, 13u, 18u}) { BufferUav(tiles, tilesX * tilesY, b + set + 1); BufferUav(exposure, 4, b + set + 2); }
+    for (UINT set : {8u, 13u, 18u, 23u}) { BufferUav(tiles, tilesX * tilesY, b + set + 1); BufferUav(exposure, 4, b + set + 2); }
   }
 
   // The network: the signed runtime from the game folder, initialised on the game's device.
@@ -812,6 +825,10 @@ void LoadConfig() {
     label.assign(lb.begin(), lb.end());  // ASCII labels
   }
   fpsCap = int(Num(L"FpsCap", fpsCap, 0, 500));
+  {
+    const int asked = int(Num(L"Record", 0, 0, 240));
+    if (asked != recordAsked) { recordAsked = asked; if (asked > 0 && recFrames.empty()) recordLeft = asked; }
+  }
   statsSec = int(Num(L"StatsSeconds", statsSec, 2, 120));
   frameLog = Num(L"FrameLog", frameLog ? 1 : 0, 0, 1) != 0;
   if (frameLog && !frameCsv) {
@@ -834,6 +851,99 @@ void LoadConfig() {
   keys.capture = ParseKey(Get(L"KeyCapture"), keys.capture);
   if (cadence != oldCadence || asyncMode != oldAsync || enabled != oldEnabled) historyValid = false;
   if (Log) Log("prism-core.ini: %s, network every %d frame(s), async %s, land %s, %s priority, cap %d fps, intensity %.2f, guard %.2f [%s]", enabled ? "on" : "off", cadence, asyncMode ? "on" : "off", landPoll ? "poll" : "wait", netPriority ? "high" : "normal", fpsCap, intensity, guardStrength, label.c_str());
+}
+
+ID3D12Resource* Readback(ID3D12Resource* src, D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp) {
+  D3D12_RESOURCE_DESC d = src->GetDesc();
+  UINT rows; UINT64 rowBytes, total;
+  device->GetCopyableFootprints(&d, 0, 1, 0, &fp, &rows, &rowBytes, &total);
+  D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_READBACK;
+  D3D12_RESOURCE_DESC bd = {}; bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = total; bd.Height = 1; bd.DepthOrArraySize = 1;
+  bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  ID3D12Resource* rb = nullptr;
+  return SUCCEEDED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource), (void**)&rb)) ? rb : nullptr;
+}
+
+void CopyOut(ID3D12GraphicsCommandList* l, ID3D12Resource* src, ID3D12Resource* rb, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp) {
+  D3D12_TEXTURE_COPY_LOCATION dst = {}, s2 = {};
+  dst.pResource = rb; dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; dst.PlacedFootprint = fp;
+  s2.pResource = src; s2.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  l->CopyTextureRegion(&dst, 0, 0, 0, &s2, nullptr);
+}
+
+// One frame of the recording: the upscaled frame from our copy, motion and depth through the
+// guide-copy shader (SRV reads, so the game's resource states are never touched).
+void RecordFrame(const UpscaleCall& c, ID3D12GraphicsCommandList* l, UINT ring) {
+  const auto SRV = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, UAV = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  if (!recMotion) {
+    auto make = [&](DXGI_FORMAT fmt) -> ID3D12Resource* {
+      D3D12_RESOURCE_DESC d = {};
+      d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; d.Width = c.renderWidth; d.Height = c.renderHeight; d.DepthOrArraySize = 1; d.MipLevels = 1;
+      d.Format = fmt; d.SampleDesc.Count = 1; d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+      D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+      ID3D12Resource* r = nullptr;
+      return SUCCEEDED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, UAV, nullptr, __uuidof(ID3D12Resource), (void**)&r)) ? r : nullptr;
+    };
+    recMotion = make(DXGI_FORMAT_R16G16_FLOAT);
+    recDepth = make(DXGI_FORMAT_R32_FLOAT);
+    if (!recMotion || !recDepth) { Log("record: no textures"); recordLeft = 0; return; }
+  }
+  RecFrame rf;
+  rf.color = Readback(origCopy, rf.fc);
+  rf.motion = Readback(recMotion, rf.fm);
+  rf.depth = Readback(recDepth, rf.fd);
+  if (!rf.color || !rf.motion || !rf.depth) { Log("record: out of readback memory after %zu frames", recFrames.size()); recordLeft = 0; return; }
+  rf.mvx = c.motionScaleX; rf.mvy = c.motionScaleY; rf.reset = c.reset; rf.rw = c.renderWidth; rf.rh = c.renderHeight;
+  device->CreateUnorderedAccessView(recMotion, nullptr, nullptr, Cpu(ring + 23));
+  device->CreateUnorderedAccessView(recDepth, nullptr, nullptr, Cpu(ring + 26));
+  ID3D12DescriptorHeap* heaps[] = {heap};
+  l->SetDescriptorHeaps(1, heaps);
+  l->SetComputeRootSignature(root);
+  const Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, 0u, c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f, 0u, {0, 0}};
+  l->SetComputeRoot32BitConstants(0, 16, &k, 0);
+  l->SetComputeRootDescriptorTable(1, Gpu(ring));
+  l->SetComputeRootDescriptorTable(2, Gpu(ring + 23));
+  l->SetPipelineState(psoCopyGuides); l->Dispatch((c.renderWidth + 15) / 16, (c.renderHeight + 15) / 16, 1);
+  UavBarrier(l);
+  Barrier(l, recMotion, UAV, D3D12_RESOURCE_STATE_COPY_SOURCE);
+  Barrier(l, recDepth, UAV, D3D12_RESOURCE_STATE_COPY_SOURCE);
+  Barrier(l, origCopy, SRV, D3D12_RESOURCE_STATE_COPY_SOURCE);
+  CopyOut(l, origCopy, rf.color, rf.fc);
+  CopyOut(l, recMotion, rf.motion, rf.fm);
+  CopyOut(l, recDepth, rf.depth, rf.fd);
+  Barrier(l, origCopy, D3D12_RESOURCE_STATE_COPY_SOURCE, SRV);
+  Barrier(l, recMotion, D3D12_RESOURCE_STATE_COPY_SOURCE, UAV);
+  Barrier(l, recDepth, D3D12_RESOURCE_STATE_COPY_SOURCE, UAV);
+  recFrames.push_back(rf);
+  if (--recordLeft == 0) recordDoneAt = frame + kRing + 2;  // by then the GPU has long finished them
+}
+
+void WriteRecording() {
+  recordDoneAt = 0;
+  const std::wstring dir = gameDir + L"prism-record\\";
+  CreateDirectoryW(dir.c_str(), nullptr);
+  auto dump = [&](ID3D12Resource* rb, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp, const std::wstring& name) {
+    void* data = nullptr;
+    if (FAILED(rb->Map(0, nullptr, &data))) return;
+    if (FILE* fo = _wfopen((dir + name).c_str(), L"wb")) { std::fwrite(data, 1, size_t(fp.Footprint.RowPitch) * fp.Footprint.Height, fo); std::fclose(fo); }
+    rb->Unmap(0, nullptr);
+  };
+  FILE* meta = _wfopen((dir + L"meta.txt").c_str(), L"w");
+  for (size_t i = 0; i < recFrames.size(); ++i) {
+    RecFrame& rf = recFrames[i];
+    const std::wstring n = std::to_wstring(i);
+    dump(rf.color, rf.fc, L"color_" + n + L".raw");
+    dump(rf.motion, rf.fm, L"motion_" + n + L".raw");
+    dump(rf.depth, rf.fd, L"depth_" + n + L".raw");
+    if (meta) std::fprintf(meta, "%zu color %u %u %u %d motion %u %u %u depth %u %u %u mvscale %.6f %.6f reset %d flags %d\n", i,
+                           rf.fc.Footprint.Width, rf.fc.Footprint.Height, rf.fc.Footprint.RowPitch, int(rf.fc.Footprint.Format),
+                           rf.fm.Footprint.Width, rf.fm.Footprint.Height, rf.fm.Footprint.RowPitch,
+                           rf.fd.Footprint.Width, rf.fd.Footprint.Height, rf.fd.Footprint.RowPitch, rf.mvx, rf.mvy, rf.reset, gameCreateFlags);
+    rf.color->Release(); rf.motion->Release(); rf.depth->Release();
+  }
+  if (meta) std::fclose(meta);
+  Log("record: %zu frames written to prism-record", recFrames.size());
+  recFrames.clear();
 }
 
 }  // namespace
@@ -963,7 +1073,7 @@ bool PipelineRecord(const UpscaleCall& c) {
     device->CreateUnorderedAccessView(next, nullptr, nullptr, Cpu(ring + 11));
     device->CreateUnorderedAccessView(c.output, nullptr, nullptr, Cpu(ring + 13));
     device->CreateUnorderedAccessView(next, nullptr, nullptr, Cpu(ring + 16));
-    for (UINT set : {8u, 13u, 18u}) device->CreateUnorderedAccessView(warpNext, nullptr, nullptr, Cpu(ring + set + 4));
+    for (UINT set : {8u, 13u, 18u, 23u}) device->CreateUnorderedAccessView(warpNext, nullptr, nullptr, Cpu(ring + set + 4));
   }
   const Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, paint ? 2u : (split ? 1u : 0u),
                        c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f, launchNow ? 1u : 0u, {0, 0}};
@@ -1190,6 +1300,8 @@ bool PipelineRecord(const UpscaleCall& c) {
   Barrier(l, neural, SRV, UAV);
   Barrier(l, proxy, SRV, UAV);
   }  // refresh
+  if (recordLeft > 0) RecordFrame(c, l, ring);
+  if (recordDoneAt && frame >= recordDoneAt) WriteRecording();
   Barrier(l, history, SRV, UAV);
   Barrier(l, warpHistory, SRV, UAV);
   Barrier(l, origCopy, SRV, D3D12_RESOURCE_STATE_COPY_DEST);

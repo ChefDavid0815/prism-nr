@@ -201,7 +201,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   if (gpu?.nrSupport === 'experimental') warnings.push(gpu.expectation);
 
   const nr = bestDll(dlls, 'nvngx_dlssnr.dll', true);
-  if (!nr) blockers.push('本机没有找到神经渲染文件 nvngx_dlssnr.dll。安装任意一款官方支持 DLSS 5 的游戏（如 NBA 2K27）后，Prism 会自动找到它。');
+  if (!nr) blockers.push('没有找到可用的神经渲染文件 nvngx_dlssnr.dll（安装包自带的副本缺失或签名无效）。请重新安装 Prism NR。');
   else if (!nr.signed) warnings.push(`将使用本机的未签名版 nvngx_dlssnr.dll（${nr.version ?? '未知版本'}，可能是社区修改版）。找到 NVIDIA 签名版后 Prism 会自动改用签名版。`);
   if (route === 'feeder' && !analysis.nativeDlss.present && !bestDll(dlls, 'nvngx_dlss.dll'))
     blockers.push('Feeder 路线还需要 nvngx_dlss.dll，本机没有找到 NVIDIA 签名的副本。');
@@ -220,7 +220,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   if (route === 'prism-core') steps.push('部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini');
   else if (route !== 'optiscaler') steps.push('部署 ReShade 和神经渲染插件');
   if (route === 'feeder') steps.push('部署 Feeder 与运动矢量，补全神经渲染输入');
-  steps.push(`复制本机的 nvngx_dlssnr.dll${nr?.version ? `（${nr.version}）` : ''}`);
+  steps.push(`复制${nr?.bundled ? ' Prism NR 自带的' : '本机的'} NVIDIA 签名版 nvngx_dlssnr.dll${nr?.version ? `（${nr.version}）` : ''}`);
   const prismCount = plugins.filter((p) => pluginById(p)?.origin === 'prism').length;
   if (prismCount) steps.push(`部署 ${prismCount} 个 Prism 原生插件，写好参数和顺序`);
   steps.push('写入安装清单，之后可以一键还原');

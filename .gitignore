@@ -10,3 +10,6 @@ release/
 # Prism Core build output and third-party SDK headers kept out of the repository
 native/prism-core/build/
 native/prism-core/external/nvsdk_ngx_defs.h
+
+# NVIDIA runtime files: shipped in the installer, never committed
+vendor-nvidia/
