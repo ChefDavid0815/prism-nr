@@ -7,7 +7,8 @@ export type CostSource = 'measured' | 'published' | 'estimated';
 
 /**
  * Network cost of one evaluation: fixedMs + msPerMP x megapixels. Prism's NR bench measured the
- * fixed part directly (RTX 5090 Laptop: 1.45 ms + 1.96 ms/MP, August model), so a smaller
+ * fixed part directly (RTX 5090 Laptop: 0.90 ms + 1.11 ms/MP with model 310.9.16; 1.45 + 1.96 with
+ * the August model), so a smaller
  * working size never saves as much as its pixel count suggests.
  */
 export interface NrCost {
@@ -17,12 +18,12 @@ export interface NrCost {
   note: string;
 }
 
-// The October model halves the GPU overhead, according to NVIDIA.
-const NEW_MODEL = 0.5;
+// Model 310.9.16 against the August model on Prism's NR bench (RTX 5090 Laptop, 720p to 4K): 0.56x.
+const NEW_MODEL = 0.56;
 // TechSpot's 1440p and 4K figures (previous model, desktop cards) give slope and intercept.
 const PUBLISHED: Record<string, [number, number]> = { '5090': [0.935, 0.15], '5070': [2.59, 0.64], '5060': [4.54, 0.14] };
-// Prism's own measurement (nr_bench, August model).
-const MEASURED_LAPTOP: Record<string, [number, number]> = { '5090': [1.96, 1.45] };
+// Prism's own measurement (nr_bench, model 310.9.16): used as measured, no model factor.
+const MEASURED_LAPTOP: Record<string, [number, number]> = { '5090': [1.109, 0.896] };
 // For the rest, the slope scales with the inverse of tensor throughput (NVIDIA's AI TOPS);
 // K is fitted to the three published cards (5090 3184, 5070 2668, 5060 2824). The fixed part is
 // taken as 0.35 of the slope, between the desktop intercepts and the laptop measurement.
@@ -43,10 +44,10 @@ export function nrCostFor(name: string, laptop: boolean): NrCost | null {
   const known = laptop ? MEASURED_LAPTOP[key] : PUBLISHED[key];
   if (known) {
     return {
-      msPerMP: known[0] * NEW_MODEL,
-      fixedMs: known[1] * NEW_MODEL,
+      msPerMP: laptop ? known[0] : known[0] * NEW_MODEL,
+      fixedMs: laptop ? known[1] : known[1] * NEW_MODEL,
       source: laptop ? 'measured' : 'published',
-      note: laptop ? 'Prism NR 测试台实测（旧模型）按新模型减半' : 'TechSpot 实测（旧模型）按新模型减半',
+      note: laptop ? 'Prism NR 测试台实测（310.9.16 模型）' : 'TechSpot 实测（旧模型）按测试台实测的新模型提速换算',
     };
   }
   const tops = (laptop ? TOPS_LAPTOP : TOPS_DESKTOP)[key];

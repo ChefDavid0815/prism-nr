@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.1.2 — 2026-10-22 · Less ghosting, no freezes, NVIDIA's new model built in
+
+- Ghosting under motion: a study on a recorded game sequence with the real network as reference
+  (`docs/research/ghosting`) showed the error follows the age of the shown edit. Prism Core now
+  runs the network every 2 frames by default, lands and launches on the same frame, samples the
+  network's landed answer directly through a warp to its launch frame, gives the network the true
+  motion since its previous run, fills newly revealed surfaces from same-depth neighbours and keeps
+  30% of the previous edit where both agree. Offline: 42% less error on moving pixels and 34% less
+  flicker than 1.1.1.
+- No more freezes from a GPU wait: the network lands only after the CPU sees it finished; the
+  game's queue never waits on the GPU (field reports tied the old wait to freezes in Crimson Desert
+  and FF16).
+- NVIDIA's model 310.9.16.0 ships inside the installer and installs itself (re-verified as signed
+  by NVIDIA every time). On Prism's bench it is 44% cheaper than 310.8 (2560×1600: 9.2 → 5.1 ms).
+- Prism Core rebuilds itself when the resolution, window mode or DLSS mode changes instead of
+  switching off.
+- Anti-cheat: games that can be played offline without their anti-cheat (NBA 2K27 for now) can be
+  installed after the user accepts the risk; every other anti-cheat game stays blocked, and known
+  online titles (F1 25, FC 26, Apex Legends) are blocked even when their anti-cheat files are gone.
+- A manually added folder can be removed from the list (files are untouched).
+- Third-party components can ship in the installer and import themselves on first use.
+- Core records frame sequences (`Record=N`) for offline studies, and has frame-time statistics and
+  an experimental frame cap for the 1.2 frame-pacing work.
+
 ## 1.1.1 — 2026-10-21 · One-click Prism Core
 
 - Prism Core is now a route and a preset in the app: DX12, 64-bit games with their own DLSS get it

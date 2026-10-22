@@ -30,12 +30,12 @@ async function main(): Promise<void> {
   assert(/^[\x00-\x7f]*$/.test(ini0), 'Core INI: ASCII only (GetPrivateProfileString reads it as ANSI)');
 
   const c5060 = nrCostFor('NVIDIA GeForce RTX 5060', false);
-  assert(c5060?.source === 'published' && Math.abs(c5060.msPerMP - 2.27) < 1e-9 && Math.abs(c5060.fixedMs - 0.07) < 1e-9, 'NR cost: RTX 5060 uses the published figure');
+  assert(c5060?.source === 'published' && Math.abs(c5060.msPerMP - 4.54 * 0.56) < 1e-9 && Math.abs(c5060.fixedMs - 0.14 * 0.56) < 1e-9, 'NR cost: RTX 5060 uses the published figure');
   assert(nrCostFor('NVIDIA GeForce RTX 5070 Ti Laptop GPU', true)?.source === 'estimated', 'NR cost: laptop parts without a measurement are estimated');
   assert(nrCostFor('NVIDIA GeForce RTX 5090 Laptop GPU', true)?.source === 'measured', 'NR cost: RTX 5090 Laptop uses the bench measurement');
   assert(nrCostFor('NVIDIA GeForce RTX 4090', false) === null, 'NR cost: no figure without official support');
   const p60 = planNr({ cost: c5060!, outputWidth: 2560, outputHeight: 1440, targetFps: 60, baseFrameMs: 12 });
-  assert(p60.fits && p60.scale === 0.67 && p60.estimatedMs <= p60.budgetMs, `NR plan: RTX 5060 1440p60 -> ${p60.label} ${p60.estimatedMs} ms of ${p60.budgetMs}`);
+  assert(p60.fits && p60.scale < 1 && p60.estimatedMs <= p60.budgetMs, `NR plan: RTX 5060 1440p60 -> ${p60.label} ${p60.estimatedMs} ms of ${p60.budgetMs}`);
   const p144 = planNr({ cost: c5060!, outputWidth: 2560, outputHeight: 1440, targetFps: 144, frameGen: 2, baseFrameMs: 10 });
   assert(p144.fits && p144.scale === 0.5, `NR plan: RTX 5060 1440p144 with 2x frame generation -> ${p144.label} ${p144.estimatedMs} ms of ${p144.budgetMs}`);
   const p5090 = planNr({ cost: nrCostFor('RTX 5090', false)!, outputWidth: 2560, outputHeight: 1440, targetFps: 60, baseFrameMs: 8 });

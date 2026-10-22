@@ -60,8 +60,11 @@ about once a second), so it can be tuned while the game runs. The app writes it;
 ```ini
 [Prism Core]
 Enabled=1        ; 0 starts with Core off (the toggle key still works)
-Cadence=4        ; the network every 1-4 frames
+Cadence=2        ; the network every 1-4 frames
 Async=1          ; the network on its own compute queue (cadence 2 and up)
+Stability=0.3    ; how much of the previous edit stays where a landed edit is sampled, 0-0.9
+NetMotion=exact  ; exact: the network gets the true motion since its last run; approx: x span
+Land=poll        ; poll: land only once the network finished (no GPU wait); wait: 1.1 behaviour
 Intensity=1.00   ; how much of the network's edit is kept, 0-1
 Guard=1.00       ; character guard strength on skin and strong colour, 0-1
 KeyToggle=F8     ; F1-F24, a virtual-key number, or none
@@ -72,6 +75,11 @@ KeyCapture=F11
 ```
 
 Missing keys keep their defaults. Intensity and guard apply from the next network frame.
+
+For studies: `Record=90` writes 90 consecutive frames (upscaled frame, motion vectors, depth) to
+`prism-record/` (about 24 MB per frame at 2560×1600); `StatsSeconds` and `Label` set the
+frame-time statistics written to the log; `FpsCap`, `Cadence=0` (adaptive) and `NetPriority`
+are experimental.
 
 | Key | Action |
 |---|---|
@@ -93,10 +101,12 @@ bash native/prism-core/build.sh
 |---|---|
 | `src/proxy/` | the `version.dll` loader |
 | `src/core.cpp` | NGX hooks (create / evaluate), feature tracking, logging |
-| `src/pipeline.cpp` | exposure, encode, network (sync and async), carry, land, guard, compose |
+| `src/pipeline.cpp` | exposure, encode, network (sync and async), carry, bake, fill, guard, compose, recorder |
 | `src/ngx_param.h` | NGX parameter blocks by MSVC vtable slot |
 | `tests/nr_bench.cpp` | drives the signed network outside any game: cost, sequences, async overlap |
 | `tests/nets_harness.cpp` | GPU check of the NETS shaders against the CPU reference |
+| `tests/shader_check.cpp` | compiles every runtime shader entry point at build time |
+| `tests/ab_run.cjs` | A/B runner: switches prism-core.ini settings in a running game and collects the statistics |
 | `shaders/` | NETS and guard shaders used by the harness |
 
 ## Limits
