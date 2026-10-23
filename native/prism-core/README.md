@@ -68,10 +68,11 @@ NetMotion=exact  ; exact: the network gets the true motion since its last run; a
 Land=poll        ; poll: land only once the network finished (no GPU wait); wait: 1.1 behaviour
 Intensity=1.00   ; how much of the network's edit is kept, 0-1
 Guard=1.00       ; character guard strength on skin and strong colour, 0-1
-NetScale=1.00    ; the network's resolution, 0.5-1 (cadence 1); below 1 the edit comes back up to native
+NetScale=0.625   ; the network's resolution a side, 0.5-1 (cadence 1), its edit brought back up to native;
+                 ; 0.625 is the panel's 100% (旗舰), 0.7655 its 150% (极致: half as many pixels again)
 UpFilter=1       ; how it comes back: 1 guided filter (flickers least), 0 joint bilateral (1.2)
 NetScaleAuto=0   ; 1: the resolution follows FpsTarget, from NetScale down to NetScaleMin
-FpsTarget=60     ; displayed frames per second, generated frames included (the panel's 目标帧率)
+FpsTarget=60     ; rendered frames per second (the panel's 目标帧率); frame generation multiplies what is shown
 NetScaleMin=0.50
 KeyToggle=F8     ; F1-F24, a virtual-key number, or none
 KeyCadence=F2

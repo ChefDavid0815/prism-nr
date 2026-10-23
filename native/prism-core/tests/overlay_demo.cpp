@@ -26,7 +26,7 @@
 // ------------------------------------------------------------------ the stand-in pipeline
 namespace prism {
 namespace {
-LiveSettings live = [] { LiveSettings s; s.cadence = 1; s.passes = 2; s.async = false; s.intensity = 2.4f; s.netScale = 0.75f; s.guard = 1.0f; s.netAuto = std::getenv("PRISM_DEMO_AUTO") != nullptr; s.fpsTarget = 90; return s; }();
+LiveSettings live = [] { LiveSettings s; s.cadence = 1; s.passes = 2; s.async = false; s.intensity = 2.4f; s.netScale = 0.625f; s.guard = 1.0f; s.netAuto = std::getenv("PRISM_DEMO_AUTO") != nullptr; s.fpsTarget = 90; return s; }();
 std::wstring dir;
 void LogStd(const char* fmt, ...) { va_list a; va_start(a, fmt); std::vfprintf(stderr, fmt, a); va_end(a); std::fputc('\n', stderr); }
 }  // namespace
@@ -35,7 +35,7 @@ void SetLiveSettings(const LiveSettings& s) { live = s; }
 void SaveLiveSettings() {}
 void GetLiveStats(LiveStats* o) {
   o->running = true;
-  o->outW = 2560; o->outH = 1600; o->renderW = 1707; o->renderH = 1067; o->netW = 1920; o->netH = 1200;
+  o->outW = 2560; o->outH = 1600; o->renderW = 1707; o->renderH = 1067; o->netW = 1600; o->netH = 1000;
   o->prismMs = 9.8f; o->renderFps = 79.2f; o->presentFps = 158.1f;
   o->frames = kFrameHistory;
   for (int i = 0; i < kFrameHistory; ++i) {

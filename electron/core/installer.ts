@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { pluginById, PLUGINS, PRESETS, resolveValues, tierLocked } from '../shared/catalog';
+import { netScaleFor, netSizeFor, pluginById, PLUGINS, PRESETS, resolveValues, tierLocked } from '../shared/catalog';
 import { matchProfile, styleById } from '../shared/profiles';
 import type {
   BackupRecord,
@@ -93,7 +93,8 @@ export function coreIni(values: Values, keep: string[] = []): string {
     `Guard=${pct('prism-core.guard', 100)}`,
     `Passes=${passes}`,
     `Guided=${values['prism-core.guided'] === true || values['prism-core.guided'] === 1 || values['prism-core.guided'] === '1' ? 1 : 0}`,
-    `NetScale=${(Math.max(50, Math.min(100, Number(values['prism-core.netScale'] ?? 100))) / 100).toFixed(2)}`,
+    // The network's size only applies to every-frame tiers; the asynchronous network runs native.
+    `NetScale=${cadence === 1 ? netScaleFor(values['prism-core.netSize']).toFixed(4) : '1.00'}`,
     `Look=${Math.max(0, Math.min(4, Math.round(Number(values['prism-core.look'] ?? 0)) || 0))}`,
     'KeyToggle=F8',
     'KeyCadence=F2',
@@ -805,7 +806,7 @@ export function syncCoreFromIni(): boolean {
     if (passes !== undefined) next['prism-core.passes'] = String(Math.round(passes));
     if (intensity !== undefined) next['prism-core.intensity'] = Math.round(intensity * 100);
     if (guard !== undefined) next['prism-core.guard'] = Math.round(guard * 100);
-    if (netScale !== undefined) next['prism-core.netScale'] = String(Math.round(netScale * 100));
+    if (netScale !== undefined && netScale < 0.999) next['prism-core.netSize'] = netSizeFor(netScale);
     if (async !== undefined) next['prism-core.async'] = async !== 0;
     if (look !== undefined) next['prism-core.look'] = String(Math.max(0, Math.min(4, Math.round(look))));
     r.values = next;

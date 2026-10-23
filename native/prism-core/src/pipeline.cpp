@@ -612,8 +612,11 @@ bool netReset = false;  // NetReset=1: the network starts without its history on
 // active size) is used and evaluated: the cost follows the active area, and the size can change
 // from one frame to the next without making anything again.
 float netScale = 1.0f;      // the size this frame runs at
-float netScaleUser = 1.0f;  // the size asked for (NetScale): the ceiling when NetScaleAuto is on
-// NetScaleAuto=1 with FpsTarget (displayed frames per second, generated frames included): the
+// The size asked for (NetScale): the ceiling when NetScaleAuto is on. The default is the flagship's
+// base, 62.5% a side (the app and the panel call it 100%; 150% is 76.55%, half as many pixels again).
+float netScaleUser = 0.625f;
+// NetScaleAuto=1 with FpsTarget (rendered frames per second: generated frames are not always seen
+// by the Present hook, Forza Horizon 6's come from inside the game's own Present): the
 // network takes the largest size up to NetScale that keeps the frame rate at the target, down to
 // NetScaleMin. Every second the rate is checked; two short seconds step down, three seconds with
 // room for the next size (by the measured cost) step up, and a size holds at least three seconds
@@ -627,6 +630,11 @@ float netAutoScale = 1.0f;
 double autoNextCheck = 0.0, autoHoldUntil = 0.0, autoBlockUntil = 0.0;
 int autoShort = 0, autoRoom = 0;
 double autoDownFrom = 0.0, autoDownGain = 0.0;  // the frame time before the last step down, and the gain expected
+float autoDownPrev = 0.0f;                       // the size before it
+// The sizes the governor steps through: the panel's two (100% and 150%) and the steps around them.
+const float kNetLevels[] = {0.5f, 0.5625f, 0.625f, 0.6875f, 0.7655f, 0.875f, 1.0f};
+float NetLevelUp(float sc, float ceiling) { for (float l : kNetLevels) if (l > sc + 1e-3f) return std::min(l, ceiling); return ceiling; }
+float NetLevelDown(float sc, float floor) { float d = floor; for (float l : kNetLevels) if (l < sc - 1e-3f) d = std::max(d, l); return std::min(d, sc); }
 uint32_t nw = 0, nh = 0;  // the network's working size
 ID3D12Resource *proxyLow = nullptr, *neuralLow = nullptr, *midsLow[2] = {};
 ID3D12Resource *gfA = nullptr, *gfB = nullptr;  // the guided filter's coefficients (UpFilter=1)
@@ -1197,48 +1205,46 @@ void StatsTick() {
 }
 
 // NetScaleAuto: this frame's size, from the frame rates of the last second and Prism's measured
-// GPU time. The sizes are steps of 1/8 between NetScaleMin and NetScale.
+// GPU time. The sizes are kNetLevels between NetScaleMin and NetScale.
 void AutoNetScale() {
-  if (!netAuto || cadence != 1) { netScale = netScaleUser; netAutoScale = netScaleUser; autoShort = autoRoom = 0; autoDownFrom = 0.0; return; }
+  // The asynchronous network (cadence 2 and up) runs native.
+  if (!netAuto || cadence != 1) { netScale = cadence == 1 ? netScaleUser : 1.0f; netAutoScale = netScaleUser; autoShort = autoRoom = 0; autoDownFrom = 0.0; return; }
   const double now = NowMs();
   if (netAutoScale > netScaleUser + 1e-3f) netAutoScale = netScaleUser;
   netScale = netAutoScale;
   if (now < autoNextCheck) return;
   autoNextCheck = now + 1000.0;
-  double renderFps = 0.0, presentFps = 0.0;
+  double renderFps = 0.0;
   {
     std::lock_guard<std::mutex> lock(statsMutex);
-    auto rate = [](const std::deque<double>& t) { return t.size() > 2 && t.back() > t.front() ? (t.size() - 1) * 1000.0 / (t.back() - t.front()) : 0.0; };
-    renderFps = rate(renderTimes); presentFps = rate(presentTimes);
+    if (renderTimes.size() > 2 && renderTimes.back() > renderTimes.front()) renderFps = (renderTimes.size() - 1) * 1000.0 / (renderTimes.back() - renderTimes.front());
   }
   if (renderFps <= 0.0 || now < autoHoldUntil) return;
-  // The target is in displayed frames; with frame generation each rendered frame shows as several.
-  const double shown = presentFps > renderFps ? presentFps / renderFps : 1.0;
-  const double frameMs = 1000.0 / renderFps, targetMs = 1000.0 * shown / fpsTarget;
+  const double frameMs = 1000.0 / renderFps, targetMs = 1000.0 / fpsTarget;
   // The network's cost model (bench: 0.87 ms a call + 1.11 ms per megapixel), scaled to what this
   // GPU measured at the current size.
   const double mp = double(w) * h / 1e6;
   auto model = [&](float sc) { return passes * (0.87 + 1.11 * mp * sc * sc); };
   const double k = prismMsSmooth > 0.0 ? prismMsSmooth / model(netAutoScale) : 1.0;
   auto change = [&](float next, const char* why) {
-    Log("auto network size: %.1f%% -> %.1f%% (%.1f fps shown, target %d)%s", netAutoScale * 100.0, next * 100.0, renderFps * shown, fpsTarget, why);
+    Log("auto network size: %.1f%% -> %.1f%% (%.1f fps rendered, target %d)%s", netAutoScale * 100.0, next * 100.0, renderFps, fpsTarget, why);
     netAutoScale = next; netScale = next; autoShort = autoRoom = 0; autoHoldUntil = now + 3000.0;
   };
   // The first look after a step down: did it pay?
   if (autoDownFrom > 0.0) {
     const double got = autoDownFrom - frameMs, want = autoDownGain;
     autoDownFrom = 0.0;
-    if (got < want / 3.0 && netAutoScale + 0.125f <= netScaleUser + 1e-3f) {
+    if (got < want / 3.0 && autoDownPrev <= netScaleUser + 1e-3f) {
       autoBlockUntil = now + 30000.0;
-      change(netAutoScale + 0.125f, " (the smaller size did not help: limited elsewhere)");
+      change(autoDownPrev, " (the smaller size did not help: limited elsewhere)");
       return;
     }
   }
-  const float up = std::min(netScaleUser, netAutoScale + 0.125f), down = std::max(netAutoMin, netAutoScale - 0.125f);
+  const float up = NetLevelUp(netAutoScale, netScaleUser), down = NetLevelDown(netAutoScale, netAutoMin);
   autoShort = frameMs > targetMs * 1.03 ? autoShort + 1 : 0;
   autoRoom = up > netAutoScale + 1e-3f && frameMs + k * (model(up) - model(netAutoScale)) < targetMs * 0.95 ? autoRoom + 1 : 0;
   if (autoShort >= 2 && down < netAutoScale - 1e-3f && now >= autoBlockUntil) {
-    autoDownFrom = frameMs; autoDownGain = k * (model(netAutoScale) - model(down));
+    autoDownFrom = frameMs; autoDownGain = k * (model(netAutoScale) - model(down)); autoDownPrev = netAutoScale;
     change(down, "");
   } else if (autoRoom >= 3) {
     change(up, "");
@@ -1636,7 +1642,7 @@ void SaveLiveSettings() {
   put(L"Async", s.async ? L"1" : L"0");
   std::swprintf(b, 32, L"%.2f", s.intensity); put(L"Intensity", b);
   std::swprintf(b, 32, L"%.2f", s.guard); put(L"Guard", b);
-  std::swprintf(b, 32, L"%.2f", s.netScale); put(L"NetScale", b);
+  std::swprintf(b, 32, L"%.4f", s.netScale); put(L"NetScale", b);
   put(L"NetScaleAuto", s.netAuto ? L"1" : L"0");
   put(L"FpsTarget", std::to_wstring(s.fpsTarget));
   put(L"Split", s.split ? L"1" : L"0");

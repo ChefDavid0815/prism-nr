@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { LEGACY_PRESET_NAMES, pluginById, PRESETS, resolveValues, tierLocked, tierOf } from '../../electron/shared/catalog';
+import { LEGACY_PRESET_NAMES, NET_SIZES, pluginById, PRESETS, resolveValues, tierLocked, tierOf } from '../../electron/shared/catalog';
 import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PresetDef, PresetId, Route, SystemInfo } from '../../electron/shared/types';
 import { api } from '../api';
 import { Barcode } from '../components/Barcode';
@@ -217,10 +217,12 @@ function pipeline(plan: InstallPlan): Stage[] {
     const async = plan.values['prism-core.async'] !== false && cadence >= 2;
     // From the CONTROL measurements: every frame 13.4 ms, every 2nd 61% of that, every 4th async 37%.
     const passes = Math.max(1, Math.min(5, Number(plan.values['prism-core.passes'] ?? 2)));
-    const reduced = cadence === 1 && plan.values['prism-core.async'] === false && Number(plan.values['prism-core.netScale'] ?? 100) < 100;
-    // A 75% network costs about 0.56 of native (pixels), measured +17% frame rate on Forza Horizon 6.
-    const weight = Math.round((({ 1: 14, 2: 9, 3: 7, 4: 5 } as Record<number, number>)[cadence] + (async || cadence === 1 ? 0 : 1)) * passes * (reduced ? 0.6 : 1));
-    stages.push({ label: 'DLSS', weight: 2 }, { label: `${cadence === 1 ? '神经渲染 每帧' : `神经渲染 每 ${cadence} 帧`} × ${passes} 遍${reduced ? ' · 75%' : ''}`, weight });
+    const size = NET_SIZES.find((n) => n.value === String(plan.values['prism-core.netSize'] ?? '100')) ?? NET_SIZES[0];
+    const reduced = cadence === 1 && plan.values['prism-core.async'] === false;
+    // The network's cost per pass is about 0.87 ms plus 1.11 ms per megapixel (nr_bench): at
+    // 2560x1600 the base size (62.5%) costs about half of native, 150% about two thirds.
+    const weight = Math.round((({ 1: 14, 2: 9, 3: 7, 4: 5 } as Record<number, number>)[cadence] + (async || cadence === 1 ? 0 : 1)) * passes * (reduced ? (size.value === '150' ? 0.65 : 0.5) : 1));
+    stages.push({ label: 'DLSS', weight: 2 }, { label: `${cadence === 1 ? '神经渲染 每帧' : `神经渲染 每 ${cadence} 帧`} × ${passes} 遍${reduced ? ` · ${size.label}` : ''}`, weight });
     if (reduced) stages.push({ label: '边缘感知放大', weight: 1, prism: true });
     if (cadence > 1) stages.push({ label: '携带改动', weight: 1, prism: true });
     if (Number(plan.values['prism-core.guard'] ?? 100) > 0) stages.push({ label: '角色守护', weight: 1, prism: true });
@@ -506,7 +508,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
 
 // ---------------------------------------------------------------------------
 
-const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.netScale', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard', 'prism-core.look'];
+const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.netSize', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard', 'prism-core.look'];
 /** The look is its own choice: tiers neither set nor reset it. */
 const TIER_KEYS = CORE_KEYS.filter((k) => k !== 'prism-core.look');
 
@@ -554,7 +556,7 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cadence = Number(values['prism-core.cadence'] ?? 2);
   const passes = Number(values['prism-core.passes'] ?? 2);
-  const netScale = String(values['prism-core.netScale'] ?? '100');
+  const netSize = String(values['prism-core.netSize'] ?? '100');
   const async = values['prism-core.async'] !== false;
   const defaults = resolveValues(tier.id);
   const look = String(values['prism-core.look'] ?? '0');
@@ -629,18 +631,18 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
       <div className="core-field">
         <span className="core-field-label" id="core-scale-label">网络分辨率</span>
         <div className="segmented segmented-2" role="radiogroup" aria-labelledby="core-scale-label">
-          {['100', '75'].map((v) => (
-            <button key={v} role="radio" aria-checked={netScale === v} className={netScale === v ? 'is-on' : ''} onClick={() => set({ 'prism-core.netScale': v })}>
-              {v === '100' ? '原生' : '75%'}
+          {NET_SIZES.map((n) => (
+            <button key={n.value} role="radio" aria-checked={netSize === n.value} className={netSize === n.value ? 'is-on' : ''} onClick={() => set({ 'prism-core.netSize': n.value })}>
+              {n.label}
             </button>
           ))}
         </div>
         <p className="block-note">
           {cadence !== 1
             ? '只在每帧跑网络时生效；隔帧时网络始终用原生分辨率。'
-            : netScale === '75'
-              ? '网络在 75% 分辨率上跑，改动按原生画面的边缘放大回来：地平线 6 实测帧率 +17%，没有拖影。'
-              : '网络在原生分辨率上跑，画面最好，开销最大。'}
+            : netSize === '150'
+              ? '比旗舰基准多算一半像素，细节更足，开销更高。改动按原生画面的边缘放大回来，没有拖影。'
+              : '旗舰的基准分辨率：改动按原生画面的边缘放大回来，帧率和细节最均衡，没有拖影。'}
         </p>
       </div>
 
@@ -651,7 +653,7 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
       </label>
 
       <div className="core-field">
-        <TickRange label="改动强度" value={Number(values['prism-core.intensity'] ?? 200)} min={0} max={300} step={5} unit="%" help="100% 是网络的完整答案；调低更接近原画，调高会把网络的改动再放大，最高 300%。档位用的是 120%～210%，250% 以上容易过度。" onChange={(v) => set({ 'prism-core.intensity': v })} />
+        <TickRange label="改动强度" value={Number(values['prism-core.intensity'] ?? 200)} min={0} max={300} step={5} unit="%" help="100% 是网络的完整答案；调低更接近原画，调高会把网络的改动再放大，最高 300%。档位用的是 120%～240%，250% 以上容易过度。" onChange={(v) => set({ 'prism-core.intensity': v })} />
         <TickRange label="角色守护" value={Number(values['prism-core.guard'] ?? 100)} min={0} max={100} step={5} unit="%" help="压住肤色和高饱和颜色上的色度改动。0% 等于不干预。" onChange={(v) => set({ 'prism-core.guard': v })} />
       </div>
 

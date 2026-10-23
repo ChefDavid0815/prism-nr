@@ -13,8 +13,13 @@
   and clean, for anime and stylised games), 低饱和 (restrained colour, cool whites: the film and
   series look) and 浓烈 (deep contrast, rich colour). They grade in scene light before the game's
   tone mapping, keep greys neutral and skin natural, and never clip colours. In the app and the panel.
-- Target frame rate (目标帧率, in the panel: off, 45, 60, 90, 120 displayed frames per second):
-  when the game falls short, the network's resolution steps down in eighths (to 50% at most) and
+- New resolution scale for the every-frame tiers. The network's resolution is named by pixels
+  relative to the flagship's base: 100% is the network at 62.5% of the output a side, its edit
+  brought back up to native along the native picture's edges; 150% has half as many pixels again
+  (76.5% a side). 旗舰 runs at 100%, 极致 at 150% (both 2 passes, 240%), and native is gone: next
+  to 150% it costs far more for detail the upsample keeps anyway. 极致 opens on RTX 5080 too.
+- Target frame rate (目标帧率, in the panel: off, 40, 50, 60, 90 rendered frames per second):
+  when the game falls short, the network's resolution steps down a size at a time (to 50% a side at most) and
   steps back up once the measured cost says the next size fits. Each size holds at least three
   seconds, so it never flickers from changing every frame, and a step that did not make the game
   faster (it was held back by the CPU) is undone. It changes size without rebuilding anything.

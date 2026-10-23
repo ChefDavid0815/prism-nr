@@ -7,7 +7,7 @@ import { parseVdf } from '../core/scanner';
 import { PrismService } from '../core/service';
 import { initStore } from '../core/store';
 import { setIniValue } from '../core/installer';
-import { PRESETS, resolveValues, tierLocked, tierOf } from '../shared/catalog';
+import { netScaleFor, netSizeFor, PRESETS, resolveValues, tierLocked, tierOf } from '../shared/catalog';
 import { nrCostFor, planNr } from '../shared/nrplan';
 
 function assert(cond: boolean, msg: string): void {
@@ -32,12 +32,14 @@ async function main(): Promise<void> {
   const ini2 = coreIni({ 'prism-core.intensity': 400, 'prism-core.passes': '9' });
   assert(/Intensity=3\.00/.test(ini2) && /Passes=5/.test(ini2), 'Core INI: intensity goes up to 300%, passes up to 5');
   const extreme = coreIni(resolveValues('extreme'));
-  assert(/Cadence=1/.test(extreme) && /Async=0/.test(extreme) && /Intensity=2\.10/.test(extreme) && /Passes=2/.test(extreme), 'Core INI: the extreme tier is every frame, 2 passes, 210%');
+  assert(/Cadence=1/.test(extreme) && /Async=0/.test(extreme) && /Intensity=2\.40/.test(extreme) && /Passes=2/.test(extreme), 'Core INI: the extreme tier is every frame, 2 passes, 240%');
   const flagship = coreIni(resolveValues('flagship'));
-  assert(/Cadence=1/.test(flagship) && /Async=0/.test(flagship) && /Passes=2/.test(flagship) && /Intensity=2\.40/.test(flagship) && /NetScale=0\.75/.test(flagship), 'Core INI: the flagship tier is every frame, 2 passes, 75%, 240%');
-  assert(/NetScale=1\.00/.test(extreme), 'Core INI: the extreme tier runs the network at native resolution');
+  assert(/Cadence=1/.test(flagship) && /Async=0/.test(flagship) && /Passes=2/.test(flagship) && /Intensity=2\.40/.test(flagship) && /NetScale=0\.6250/.test(flagship), 'Core INI: the flagship tier is every frame, 2 passes, the base size (62.5%), 240%');
+  assert(/NetScale=0\.7655/.test(extreme), 'Core INI: the extreme tier runs the network at 150% of the base\'s pixels');
+  assert(/NetScale=1\.00/.test(coreIni(resolveValues('high'))), 'Core INI: the asynchronous tiers run the network native');
+  assert(netSizeFor(0.75) === '150' && netSizeFor(0.63) === '100' && Math.abs(netScaleFor('150') ** 2 / netScaleFor('100') ** 2 - 1.5) < 0.002, 'Net sizes: 150% is half as many pixels again as 100%');
   const ext = PRESETS.find((p) => p.id === 'extreme')!;
-  assert(tierLocked(ext, 'NVIDIA GeForce RTX 5090 Laptop GPU') === null && tierLocked(ext, 'NVIDIA GeForce RTX 5080') !== null, 'Tiers: extreme is open on RTX 5090 only');
+  assert(tierLocked(ext, 'NVIDIA GeForce RTX 5090 Laptop GPU') === null && tierLocked(ext, 'NVIDIA GeForce RTX 5080') === null && tierLocked(ext, 'NVIDIA GeForce RTX 5070 Ti') !== null, 'Tiers: extreme is open on RTX 5080 and 5090 only');
   assert(tierOf(resolveValues('flagship'))?.id === 'flagship' && tierOf(resolveValues('extreme'))?.id === 'extreme', 'Tiers: flagship and extreme are told apart by the network resolution');
   assert(tierOf(resolveValues('high'))?.id === 'high' && tierOf({ ...resolveValues('high'), 'prism-core.intensity': 205 }) === undefined, 'Tiers: values name their tier, a tweak makes them custom');
   assert(/^[\x00-\x7f]*$/.test(ini0), 'Core INI: ASCII only (GetPrivateProfileString reads it as ANSI)');

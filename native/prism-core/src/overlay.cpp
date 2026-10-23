@@ -913,10 +913,10 @@ void PollInput(UINT bw, UINT bh, bool open) {
 }
 
 // ------------------------------------------------------------------ tiers (electron/shared/catalog.ts)
-struct Tier { const wchar_t* name; int cadence, passes; bool async; float intensity, guard, netScale; const wchar_t* help; bool needs5090; };
+struct Tier { const wchar_t* name; int cadence, passes; bool async; float intensity, guard, netScale; const wchar_t* help; bool needsHigh; };  // needsHigh: RTX 5080 / 5090 only
 const Tier kTiers[] = {
-    {L"极致", 1, 2, false, 2.10f, 1.0f, 1.00f, L"每帧 · 2 遍 · 原生分辨率 · 210%。画面最好，开销最大，高速运动没有拖影。", true},
-    {L"旗舰", 1, 2, false, 2.40f, 1.0f, 0.75f, L"每帧 · 2 遍 · 75% 分辨率 · 240%。RTX 5080 / 5090 的默认档位，高速运动没有拖影。", false},
+    {L"极致", 1, 2, false, 2.40f, 1.0f, 0.7655f, L"每帧 · 2 遍 · 分辨率 150% · 240%。比旗舰多算一半像素，细节最足，开销最大，高速运动没有拖影。", true},
+    {L"旗舰", 1, 2, false, 2.40f, 1.0f, 0.625f, L"每帧 · 2 遍 · 分辨率 100% · 240%。RTX 5080 / 5090 的默认档位，帧率和细节最均衡，高速运动没有拖影。", false},
     {L"高画质", 2, 2, true, 2.00f, 1.0f, 1.00f, L"每 2 帧 · 2 遍 · 200%。快速运动的物体旁可能有轻微残影。", false},
     {L"标准", 2, 1, true, 1.50f, 1.0f, 1.00f, L"每 2 帧 · 1 遍 · 150%。", false},
     {L"流畅", 4, 1, true, 1.20f, 1.0f, 1.00f, L"每 4 帧 · 1 遍 · 120%。开销最小。", false},
@@ -932,7 +932,7 @@ int TierOf(const LiveSettings& s) {
   }
   return -1;
 }
-bool TierLocked(int i) { return kTiers[i].needs5090 && gpuName.find(L"5090") == std::wstring::npos; }
+bool TierLocked(int i) { return kTiers[i].needsHigh && gpuName.find(L"5090") == std::wstring::npos && gpuName.find(L"5080") == std::wstring::npos; }
 
 // ------------------------------------------------------------------ the panel
 enum Row { kOn, kTier, kLook, kIntensity, kPasses, kCadence, kNetScale, kTarget, kGuard, kSplit, kHud, kRows };
@@ -1060,7 +1060,7 @@ std::wstring RowHelp(int r, const LiveSettings& s, int option) {
     case kTier: {
       const int i = option >= 0 ? option : TierOf(s);
       if (i < 0) return L"当前参数不属于任何档位。选一个档位会同时改掉下面的强度、遍数、节奏和网络分辨率。";
-      if (TierLocked(i)) return L"极致档只在 RTX 5090 上开放：网络每帧在原生分辨率跑两遍，其他显卡的帧率会掉得太多。可以用旗舰档。";
+      if (TierLocked(i)) return L"极致档只在 RTX 5080 / 5090 上开放：网络每帧跑两遍、分辨率 150%，其他显卡的帧率会掉得太多。可以用旗舰档。";
       return kTiers[i].help;
     }
     case kLook: {
@@ -1076,13 +1076,15 @@ std::wstring RowHelp(int r, const LiveSettings& s, int option) {
     case kPasses: return L"网络在自己的结果上再跑几遍，效果更强，开销按遍数成倍增加。3 遍以上是游乐场。";
     case kCadence: return L"每帧都跑网络，高速运动没有拖影；隔帧运行更省，快速运动的物体旁可能有残影。快捷键 F2。";
     case kNetScale:
-      return s.cadence == 1 ? L"75% 分辨率运行网络，再按画面边缘放大回原生，RTX 5090 Laptop 实测快约 17%。" : L"只在网络每帧运行时生效。先把节奏改成每帧。";
+      if (s.cadence != 1) return L"只在网络每帧运行时生效。先把节奏改成每帧。";
+      return (option >= 0 ? option : s.netScale > 0.7f ? 1 : 0) == 1 ? L"比旗舰基准多算一半像素，细节更足，开销更高。改动按原生画面的边缘放大回来。"
+                                                                     : L"旗舰的基准分辨率：网络算的像素少，改动按原生画面的边缘放大回来，帧率和细节最均衡。";
     case kTarget: {
       if (s.cadence != 1) return L"只在网络每帧运行时生效。先把节奏改成每帧。";
-      static const int targets[5] = {0, 45, 60, 90, 120};
+      static const int targets[5] = {0, 40, 50, 60, 90};
       const int t = option >= 0 ? targets[std::clamp(option, 0, 4)] : s.netAuto ? s.fpsTarget : 0;
-      if (t == 0) return L"关闭时网络始终按上一行的分辨率运行。开启后帧率不够就逐级降低网络分辨率（最低 50%），有余量再升回去，分辨率最高到上一行的设定。";
-      std::wstring msg = L"显示帧率（含帧生成）低于 " + std::to_wstring(t) + L" 时逐级降低网络分辨率（最低 50%），有余量再升回，最高到上一行。每次至少隔 3 秒，不闪烁。";
+      if (t == 0) return L"关闭时网络始终按上一行的分辨率运行。开启后渲染帧率不够就逐级降低网络分辨率（最低 50%），有余量再升回，最高到上一行的设定。";
+      std::wstring msg = L"渲染帧率低于 " + std::to_wstring(t) + L" 时逐级降低网络分辨率（最低 50%），有余量再升回，最高到上一行；降了不见效会自动退回。开 2 倍帧生成时显示帧率约为它的两倍。";
       if (option < 0) {
         LiveStats st;
         GetLiveStats(&st);
@@ -1279,7 +1281,7 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
           do { i += step; } while (i >= 0 && i < kTierCount && TierLocked(i));
           if (i >= 0 && i < kTierCount) want = i;
         }
-        if (want >= 0 && TierLocked(want)) { Toast(L"极致档只在 RTX 5090 上开放", kCaution); want = -1; }
+        if (want >= 0 && TierLocked(want)) { Toast(L"极致档只在 RTX 5080 / 5090 上开放", kCaution); want = -1; }
         if (want >= 0 && want != cur) {
           const Tier& tr = kTiers[want];
           n.cadence = tr.cadence; n.passes = tr.passes; n.async = tr.async; n.intensity = tr.intensity; n.guard = tr.guard; n.netScale = tr.netScale;
@@ -1330,19 +1332,22 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
         break;
       }
       case kNetScale: {
-        const int cur = n.netScale < 0.99f ? 1 : 0;
-        clicked = Segments(r, cx0, sy, cx1, sh, {L"原生", L"75%"}, netScaleOn ? cur : -1, netScaleOn ? 3 : 0, 0, &hover, dt);
+        // 100% is the flagship's base (62.5% a side), 150% half as many pixels again (76.55%).
+        const int cur = Near(n.netScale, 0.625f) ? 0 : Near(n.netScale, 0.7655f) ? 1 : -1;
+        if (cur < 0 && netScaleOn) TextRight(cx0 - U(10), ty + U(1), Fmt(L"%.0f%%", 100.0 * n.netScale * n.netScale / (0.625 * 0.625)), kLabel, kQuiet);
+        clicked = Segments(r, cx0, sy, cx1, sh, {L"100%", L"150%"}, netScaleOn ? cur : -1, netScaleOn ? 3 : 0, 0, &hover, dt);
         int want = netScaleOn ? clicked : -1;
         if (keyStep && netScaleOn) want = step > 0 ? 1 : 0;
-        if (focused && in.enter && netScaleOn) want = 1 - cur;
-        if (want >= 0 && want != cur) { n.netScale = want == 1 ? 0.75f : 1.0f; changed = true; }
+        if (focused && in.enter && netScaleOn) want = cur == 1 ? 0 : 1;
+        if (want >= 0 && want != cur) { n.netScale = want == 1 ? 0.7655f : 0.625f; changed = true; }
+        if (focused) panel.hoverOption = hover;
         break;
       }
       case kTarget: {
-        static const int targets[5] = {0, 45, 60, 90, 120};
+        static const int targets[5] = {0, 40, 50, 60, 90};
         int cur = 0;
         if (n.netAuto) { cur = -1; for (int i = 1; i < 5; ++i) if (targets[i] == n.fpsTarget) cur = i; }
-        clicked = Segments(r, cx0, sy, cx1, sh, {L"关", L"45", L"60", L"90", L"120"}, netScaleOn ? cur : -1, netScaleOn ? 31 : 0, 0, &hover, dt);
+        clicked = Segments(r, cx0, sy, cx1, sh, {L"关", L"40", L"50", L"60", L"90"}, netScaleOn ? cur : -1, netScaleOn ? 31 : 0, 0, &hover, dt);
         if (n.netAuto && cur < 0 && netScaleOn) TextRight(cx0 - U(10), ty + U(1), std::to_wstring(n.fpsTarget), kLabel, kQuiet);
         int want = netScaleOn ? clicked : -1;
         if (keyStep && netScaleOn) want = std::clamp((cur < 0 ? 2 : cur) + step, 0, 4);

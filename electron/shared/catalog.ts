@@ -5,6 +5,27 @@ import type { PluginDef, PresetDef } from './types';
  * Param keys use the form `<pluginId>.<uniform>`; for Prism shaders the uniform name is the
  * exact uniform in the .fx file.
  */
+/**
+ * The network's resolution, named by pixels relative to the flagship's base (100%): the network
+ * at 62.5% of the output's width and height, its edit brought back up to native. 150% has half as
+ * many pixels again (62.5% x sqrt(1.5) = 76.5% a side). Native was dropped: next to 150% it costs
+ * far more for detail the upsample already keeps. `scale` is what prism-core.ini's NetScale holds.
+ */
+export const NET_SIZES = [
+  { value: '100', label: '100%', scale: 0.625 },
+  { value: '150', label: '150%', scale: 0.7655 },
+] as const;
+
+/** NetScale for a size value (the base for anything unknown). */
+export function netScaleFor(size: unknown): number {
+  return (NET_SIZES.find((n) => n.value === String(size)) ?? NET_SIZES[0]).scale;
+}
+
+/** The size value closest to a NetScale read back from prism-core.ini. */
+export function netSizeFor(scale: number): string {
+  return NET_SIZES.reduce((a, b) => (Math.abs(b.scale - scale) < Math.abs(a.scale - scale) ? b : a)).value;
+}
+
 export const PLUGINS: PluginDef[] = [
   {
     code: 'PR-00',
@@ -28,7 +49,7 @@ export const PLUGINS: PluginDef[] = [
     params: [
       { key: 'prism-core.cadence', label: '网络节奏', help: '网络每几帧跑一次。每 2 帧是默认：和 1.1.1 的每 4 帧相比，运动中的误差少约三成、闪烁少约四成；每帧没有携带误差但开销最高。', type: 'choice', choices: [{ value: '1', label: '每帧' }, { value: '2', label: '每 2 帧' }, { value: '3', label: '每 3 帧' }, { value: '4', label: '每 4 帧' }], default: '2' },
       { key: 'prism-core.passes', label: '网络遍数', help: '每次运行网络跑几遍：第二遍在第一遍的结果上再跑一次，改动更明显，网络开销随遍数成倍增加。3 遍以上是实验性质的游乐场，不建议实际游玩。', type: 'choice', choices: [1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: `${n} 遍` })), default: '2' },
-      { key: 'prism-core.netScale', label: '网络分辨率', help: '网络在原生还是 75% 分辨率上跑。75% 的改动按原生画面的边缘放大回来，开销约降到一半多一点；只在每帧同步时生效。', type: 'choice', choices: [{ value: '100', label: '原生' }, { value: '75', label: '75%' }], default: '100' },
+      { key: 'prism-core.netSize', label: '网络分辨率', help: '网络算多少像素，再按原生画面的边缘放大回来。100% 是旗舰的基准，150% 多算一半像素，细节更足、开销更高；只在每帧同步时生效。', type: 'choice', choices: NET_SIZES.map((n) => ({ value: n.value, label: n.label })), default: '100' },
       { key: 'prism-core.look', label: '色彩风格', help: '在网络之后、游戏自己的色调映射之前调色，和档位、强度互不影响。默认是网络原样的色彩；高还原只取网络的光影、保留原画颜色；高饱和适合二次元和卡通；低饱和是美剧和电影的冷白质感；浓烈是深对比加浓郁色彩。', type: 'choice', choices: [{ value: '0', label: '默认' }, { value: '1', label: '高还原' }, { value: '2', label: '高饱和' }, { value: '3', label: '低饱和' }, { value: '4', label: '浓烈' }], default: '0' },
       { key: 'prism-core.async', label: '异步计算队列', help: '网络在独立队列上和下一帧并行跑。节奏 2 帧以上生效。', type: 'toggle', default: true },
       { key: 'prism-core.intensity', label: '改动强度', help: '100% 是网络的完整答案，高于 100% 把改动再放大，最高 300%。', type: 'range', min: 0, max: 300, step: 5, unit: '%', default: 200 },
@@ -288,24 +309,24 @@ export const PRESETS: PresetDef[] = [
     id: 'extreme',
     name: '极致',
     forTiers: [],
-    gpuLabel: '每帧 · 2 遍 · 原生 · 210%',
-    summary: '网络每帧在原生分辨率跑两遍，不复用旧结果：完全没有拖影，画面表现最好，开销也最大。谨慎开启。',
+    gpuLabel: '每帧 · 2 遍 · 分辨率 150% · 240%',
+    summary: '网络每帧跑两遍，比旗舰多算一半像素，不复用旧结果：完全没有拖影，细节最足，开销也最大。',
     nativeRoutePreference: ['prism-core'],
     plugins: ['nr-prism-core'],
-    values: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 210, 'prism-core.guard': 100, 'prism-core.netScale': '100' },
-    expectation: '地平线 6 性能测试（RTX 5090 Laptop，2560×1600，DLSS 画质 + 2× 帧生成）：关闭 Prism 109 帧，极致档 68 帧，零卡顿。',
-    requiresGpu: { pattern: '5090', reason: '极致档只在 RTX 5090 上开放：网络每帧在原生分辨率跑两遍，其他显卡的帧率会掉得太多。可以用旗舰档。' },
+    values: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 240, 'prism-core.guard': 100, 'prism-core.netSize': '150' },
+    expectation: '地平线 6 性能测试（RTX 5090 Laptop，2560×1600，DLSS 画质 + 2× 帧生成，同一时段连测）：旗舰档 76–77 帧，极致档 69 帧。',
+    requiresGpu: { pattern: '50[89]0', reason: '极致档只在 RTX 5080 / 5090 上开放：网络每帧跑两遍、分辨率 150%，其他显卡的帧率会掉得太多。可以用旗舰档。' },
   },
   {
     id: 'flagship',
     name: '旗舰',
     forTiers: ['flagship'],
-    gpuLabel: '每帧 · 2 遍 · 75% · 240%',
-    summary: '网络每帧在 75% 分辨率跑两遍，改动按原生画面的边缘放大回来：同样没有拖影，比极致快约 17%。',
+    gpuLabel: '每帧 · 2 遍 · 分辨率 100% · 240%',
+    summary: '网络每帧跑两遍，改动按原生画面的边缘放大回来：没有拖影，帧率和画质最均衡。RTX 5080 / 5090 的默认档位。',
     nativeRoutePreference: ['prism-core'],
     plugins: ['nr-prism-core'],
-    values: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 240, 'prism-core.guard': 100, 'prism-core.netScale': '75' },
-    expectation: '同一测试：极致档渲染 34–35 帧，旗舰档 40.8 帧（+17%），帧时间同样平稳。',
+    values: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 240, 'prism-core.guard': 100, 'prism-core.netSize': '100' },
+    expectation: '同一测试：旗舰档 76–77 帧，比极致档（69 帧）快约 10%，同样没有拖影。',
   },
   {
     id: 'high',
@@ -342,7 +363,7 @@ export const PRESETS: PresetDef[] = [
   },
 ];
 
-const CORE_TIER_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard', 'prism-core.netScale'];
+const CORE_TIER_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard', 'prism-core.netSize'];
 
 /** The tier whose Core values these are, or undefined for a custom mix. */
 export function tierOf(values: Record<string, number | boolean | string>): PresetDef | undefined {
