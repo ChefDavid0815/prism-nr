@@ -905,9 +905,9 @@ int Ups(Gpu& g, Ngx& ngx, const std::wstring& png, uint32_t w, uint32_t h, int d
   std::vector<Plane> ref(static_cast<size_t>(frames));
   Timer t;
   t.Init(g);
-  struct Method { const char* name; int kind; int r; float eps; };
-  const Method methods[] = {{"bilinear     ", 0, 0, 0}, {"jbu (Core)   ", 1, 0, 0}, {"gf r2 e.010  ", 2, 2, 0.010f}, {"gf r2 e.003  ", 2, 2, 0.003f}, {"gf r4 e.010  ", 2, 4, 0.010f}};
-  constexpr int kM = 5;
+  struct Method { const char* name; int kind; int r; float eps; float sr = 0.15f, ss = 1.28f; };
+  const Method methods[] = {{"bilinear     ", 0, 0, 0}, {"jbu (Core)   ", 1, 0, 0}, {"jbu sr.30    ", 1, 0, 0, 0.30f, 1.28f}, {"jbu sr.30 s2 ", 1, 0, 0, 0.30f, 2.5f}, {"jbu sr.50 s2 ", 1, 0, 0, 0.50f, 2.5f}, {"gf r2 e.010  ", 2, 2, 0.010f}};
+  constexpr int kM = 6;
   std::printf("%dx%d, pan %d px/frame, %d frames (first %d not scored); edit = log2 luminance ratio\n", w, h, dx, frames, warm);
   std::printf("size   method          error  gain-fixed  flicker  strength\n");
   for (float s : scales) {
@@ -999,8 +999,8 @@ int Ups(Gpu& g, Ngx& ngx, const std::wstring& png, uint32_t w, uint32_t h, int d
                 for (int k = -1; k <= 2; ++k) {
                   const int qx = std::clamp(bx + k, 0, int(aw) - 1), qy = std::clamp(by + j, 0, int(ah) - 1);
                   const float ddx = fx - float(bx + k), ddy = fy - float(by + j);
-                  const float rr = (gf.at(x, y) - gl.get(qx, qy)) / 0.15f;
-                  const float wt = std::exp(-(ddx * ddx + ddy * ddy) / 1.28f) * std::exp(-0.5f * rr * rr);
+                  const float rr = (gf.at(x, y) - gl.get(qx, qy)) / methods[m].sr;
+                  const float wt = std::exp(-(ddx * ddx + ddy * ddy) / methods[m].ss) * std::exp(-0.5f * rr * rr);
                   for (int c = 0; c < 3; ++c) acc[c] += el[c].get(qx, qy) * wt;
                   ws += wt;
                   if (k >= 0 && k <= 1 && j >= 0 && j <= 1) for (int c = 0; c < 3; ++c) bil[c] += el[c].get(qx, qy) * ((1 - std::fabs(ddx)) * (1 - std::fabs(ddy)));

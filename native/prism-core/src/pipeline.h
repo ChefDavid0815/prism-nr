@@ -37,6 +37,8 @@ struct LiveSettings {
   bool async = true, split = false;
   float splitPos = 0.5f;  // the split's column, as a fraction of the width
   int look = 0;           // 0 默认, 1 高还原, 2 高饱和, 3 低饱和, 4 浓烈 (look_hlsl.h)
+  bool netAuto = false;   // the network's size follows FpsTarget, up to netScale
+  int fpsTarget = 60;     // displayed frames per second (generated frames included)
 };
 LiveSettings GetLiveSettings();
 void SetLiveSettings(const LiveSettings& s);
@@ -46,7 +48,7 @@ constexpr int kFrameHistory = 240;
 struct LiveStats {
   bool running = false;        // the pipeline is built and has recorded a frame
   const char* failure = nullptr;  // why Prism stopped, if it did
-  unsigned outW = 0, outH = 0, renderW = 0, renderH = 0, netW = 0, netH = 0;
+  unsigned outW = 0, outH = 0, renderW = 0, renderH = 0, netW = 0, netH = 0;  // netW/H: this frame's
   float prismMs = 0.0f;        // Prism's GPU time on the game's queue per rendered frame
   float netMs = 0.0f;          // the asynchronous network's GPU time per launch
   float presentFps = 0.0f, renderFps = 0.0f;  // over the last second

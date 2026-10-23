@@ -112,8 +112,9 @@ cbuffer C : register(b0) {
 };
 // Flags: 1 launch frame (the in-flight warp starts here), 2 landing frame (the in-flight warp
 // becomes the landed one), 4 a landed edit exists, 8 the network gets motion from the landed warp,
-// 16 luminance-guided edit on surfaces the warp can't follow (Guided=1), 32 reduced network;
-// bits 8-10 the look (Look=0..4, see look_hlsl.h).
+// 16 luminance-guided edit on surfaces the warp can't follow (Guided=1), 32 reduced network,
+// 64 the reduced network's edit comes up through the guided filter (UpFilter=1); bits 8-10 the
+// look (Look=0..4, see look_hlsl.h).
 Texture2D<float4> Orig : register(t0);
 Texture2D<float4> Proxy : register(t1);
 Texture2D<float4> Neural : register(t2);
@@ -128,6 +129,8 @@ Texture2D<float4> WarpLHist : register(t8);   // last frame's warp to the landed
 Texture2D<float4> LandedEdit : register(t9);  // the landed network edit (rgb) and its depth (a), launch space
 Texture2D<float4> WarpLNow : register(t10);   // this frame's warp to the landed launch frame
 Texture2D<float4> Scratch : register(t11);    // Carry's edit before Fill; a < -0.5 marks a hole
+Texture2D<float4> GfA : register(t12);        // the reduced edit's guided-filter slopes (rgb), low size
+Texture2D<float4> GfB : register(t13);        // and offsets about mid grey's log2 luma
 RWTexture2D<float4> Out0 : register(u0);
 RWStructuredBuffer<float> Tiles : register(u1);
 RWStructuredBuffer<float> Exposure : register(u2);
@@ -227,6 +230,68 @@ float3 UpEdit(uint2 p, float yFull) {
   return ws > 1e-4 ? acc / ws : bil;  // nothing alike nearby: plain bilinear
 }
 
+// The fast guided filter (He & Sun 2015), the reduced network's other way up (UpFilter=1): in each
+// 5x5 window of the small picture the edit is fitted as a straight line in the proxy's log2 luma;
+// the fits are averaged over 5x5 again, brought up bilinearly and applied to the native log2 luma.
+// Against the native network's edit it is as close as the bilateral upsample and flickers about a
+// tenth less under motion (nr_bench ups: 0.0076 against 0.0086 at 75%, native 0.0067): every
+// output pixel follows the same smooth fit instead of whichever samples happen to look alike.
+// One pass: a 16x16 group loads 24x24 (guide, edit), fits 20x20 windows, averages 16x16 of them.
+// The offsets are about mid grey (kGfRef) so half floats keep them exact.
+static const float kGfRef = -2.5;
+static const float kGfEps = 0.01;
+groupshared float4 gfIE[576];
+groupshared float3 gfSA[400], gfSB[400];
+[numthreads(16, 16, 1)]
+void GuidedFit(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex) {
+  const int2 ls = int2(LowSize()), org = int2(gid.xy) * 16 - 4;
+  for (uint i = gi; i < 576; i += 256) {
+    const int2 q = clamp(org + int2(i % 24, i / 24), int2(0, 0), ls - 1);
+    const float3 pl = Dec(Scratch.Load(int3(q, 0)).rgb), nl = Dec(Neural.Load(int3(q, 0)).rgb);
+    gfIE[i] = float4(log2(max(Luma(pl), 1e-4)) - kGfRef, clamp(log2(max(nl, 1.0 / 512.0) / max(pl, 1.0 / 512.0)), -3.0, 3.0));
+  }
+  GroupMemoryBarrierWithGroupSync();
+  for (uint n = gi; n < 400; n += 256) {
+    const int c = int(n / 20 + 2) * 24 + int(n % 20 + 2);
+    float mI = 0.0, mII = 0.0;
+    float3 mP = 0.0, mIP = 0.0;
+    [unroll] for (int j = -2; j <= 2; ++j) {
+      [unroll] for (int k = -2; k <= 2; ++k) {
+        const float4 v = gfIE[c + j * 24 + k];
+        mI += v.x; mII += v.x * v.x; mP += v.yzw; mIP += v.x * v.yzw;
+      }
+    }
+    mI /= 25.0; mII /= 25.0; mP /= 25.0; mIP /= 25.0;
+    const float3 a = (mIP - mI * mP) / (max(mII - mI * mI, 0.0) + kGfEps);
+    gfSA[n] = a;
+    gfSB[n] = mP - a * mI;
+  }
+  GroupMemoryBarrierWithGroupSync();
+  const int2 t = int2(gi % 16, gi / 16), px = int2(gid.xy) * 16 + t;
+  if (any(px >= ls)) return;
+  float3 A = 0.0, B = 0.0;
+  [unroll] for (int j = 0; j <= 4; ++j) {
+    [unroll] for (int k = 0; k <= 4; ++k) { const int c = (t.y + j) * 20 + t.x + k; A += gfSA[c]; B += gfSB[c]; }
+  }
+  Out0[px] = float4(A / 25.0, 0.0);
+  NewEdit[px] = float4(B / 25.0, 0.0);
+}
+
+float3 LowBilinear(Texture2D<float4> t, float2 f) {
+  const int2 lastL = int2(LowSize()) - 1, b = int2(floor(f));
+  const float2 a = f - float2(b);
+  float3 v = 0.0;
+  [unroll] for (int j = 0; j <= 1; ++j) {
+    [unroll] for (int i = 0; i <= 1; ++i) v += t.Load(int3(clamp(b + int2(i, j), int2(0, 0), lastL), 0)).rgb * ((i ? a.x : 1.0 - a.x) * (j ? a.y : 1.0 - a.y));
+  }
+  return v;
+}
+
+float3 UpGuided(uint2 p, float yFull) {
+  const float2 f = (float2(p) + 0.5) * Span - 0.5;
+  return clamp(LowBilinear(GfA, f) * (yFull - kGfRef) + LowBilinear(GfB, f), -3.0, 3.0);
+}
+
 )" PRISM_LOOK_HLSL R"(
 // Edit = log2(neural / proxy) in the proxy's linear light; guard its chroma on skin and strong
 // colour; apply it to the game's HDR frame as a ratio, so the frame's range is untouched.
@@ -238,7 +303,8 @@ void Compose(uint3 id : SV_DispatchThreadID) {
   const float3 p = Dec(pd);
   float3 e;
   if (Flags & 32u) {
-    e = UpEdit(id.xy, log2(max(Luma(p), 1e-4))) * Intensity;
+    const float yl = log2(max(Luma(p), 1e-4));
+    e = (Flags & 64u ? UpGuided(id.xy, yl) : UpEdit(id.xy, yl)) * Intensity;
   } else {
     const float3 n = Dec(Neural[id.xy].rgb);
     e = clamp(log2(max(n, 1.0 / 512.0) / max(p, 1.0 / 512.0)), -3.0, 3.0) * Intensity;
@@ -537,6 +603,7 @@ ID3D12Device* device = nullptr;
 ID3D12RootSignature* root = nullptr;
 ID3D12PipelineState *psoReduce1 = nullptr, *psoReduce2 = nullptr, *psoEncode = nullptr, *psoCompose = nullptr, *psoCarry = nullptr, *psoBake = nullptr, *psoCopyGuides = nullptr, *psoFill = nullptr, *psoFit = nullptr;
 bool guided = false;  // the luminance-guided edit (Guided=1)
+int upFilter = 1;     // the reduced network's way up: 0 joint bilateral, 1 guided filter (UpFilter)
 int look = 0;         // the colour look (Look=0..4: 默认, 高还原, 高饱和, 低饱和, 浓烈; look_hlsl.h)
 bool netReset = false;  // NetReset=1: the network starts without its history on every run (study)
 // NetScale (0.5-1, synchronous mode only): the network's working resolution. Below 1 it runs on
@@ -544,22 +611,41 @@ bool netReset = false;  // NetReset=1: the network starts without its history on
 // textures and the network's features are made at full size and only their top-left part (the
 // active size) is used and evaluated: the cost follows the active area, and the size can change
 // from one frame to the next without making anything again.
-float netScale = 1.0f;
+float netScale = 1.0f;      // the size this frame runs at
+float netScaleUser = 1.0f;  // the size asked for (NetScale): the ceiling when NetScaleAuto is on
+// NetScaleAuto=1 with FpsTarget (displayed frames per second, generated frames included): the
+// network takes the largest size up to NetScale that keeps the frame rate at the target, down to
+// NetScaleMin. Every second the rate is checked; two short seconds step down, three seconds with
+// room for the next size (by the measured cost) step up, and a size holds at least three seconds
+// (changing it every frame makes the network flicker). A step down that did not buy at least a
+// third of the time it should have (the game is held back by something else, the CPU) is undone
+// and not tried again for half a minute.
+bool netAuto = false;
+int fpsTarget = 60;
+float netAutoMin = 0.5f;
+float netAutoScale = 1.0f;
+double autoNextCheck = 0.0, autoHoldUntil = 0.0, autoBlockUntil = 0.0;
+int autoShort = 0, autoRoom = 0;
+double autoDownFrom = 0.0, autoDownGain = 0.0;  // the frame time before the last step down, and the gain expected
 uint32_t nw = 0, nh = 0;  // the network's working size
 ID3D12Resource *proxyLow = nullptr, *neuralLow = nullptr, *midsLow[2] = {};
+ID3D12Resource *gfA = nullptr, *gfB = nullptr;  // the guided filter's coefficients (UpFilter=1)
 // What the network's passes read and write: the native textures, or the reduced ones.
 ID3D12Resource *netProxy = nullptr, *netNeural = nullptr, *netMids[2] = {};
 ID3D12PipelineState* psoDown = nullptr;
+ID3D12PipelineState* psoGuidedFit = nullptr;
 ID3D12DescriptorHeap* heap = nullptr;
 UINT inc = 0;
 constexpr UINT kRing = 8;
-// Per ring slot: SRVs t0..t11 at [0..11], then six UAV sets of u0..u5 (u1 tiles, u2 exposure,
-// u4 next warp, u5 next landed warp in all of them):
+// Per ring slot: SRVs t0..t13 at [0..13], then UAV sets of u0..u5 (u1 tiles, u2 exposure, u4 next
+// warp, u5 next landed warp in all but U):
 // P proxy, -, -, next edit; O (Carry) output, -, -, scratch; G the launch copies: motion, -, -,
 // depth; R the recorder's copies: motion, -, -, depth; B (Bake, Fit) the landed edit, -, -, the
-// launch luma; F (Compose) output, -, -, next edit; L (Fill) output, -, -, next edit, launch luma.
-constexpr UINT kSetP = 12, kSetO = 18, kSetG = 24, kSetR = 30, kSetB = 36, kSetF = 42, kSetL = 48;
-constexpr UINT kBlock = 54;
+// launch luma; F (Compose) output, -, -, next edit; L (Fill) output, -, -, next edit, launch luma;
+// U (GuidedFit) slopes, -, -, offsets.
+constexpr UINT kSrvs = 14;
+constexpr UINT kSetP = kSrvs, kSetO = kSetP + 6, kSetG = kSetO + 6, kSetR = kSetG + 6, kSetB = kSetR + 6, kSetF = kSetB + 6, kSetL = kSetF + 6, kSetU = kSetL + 6;
+constexpr UINT kBlock = kSetU + 6;
 uint32_t w = 0, h = 0, tilesX = 0, tilesY = 0;
 ID3D12Resource *origCopy = nullptr, *proxy = nullptr, *neural = nullptr, *tiles = nullptr, *exposure = nullptr;
 ID3D12Resource* edits[2] = {};  // ping-pong: last frame's edit and this frame's
@@ -729,7 +815,7 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   auto compile = (CompileFn)(void*)GetProcAddress(LoadLibraryW(L"d3dcompiler_47.dll"), "D3DCompile");
   if (!compile) return Fail("no d3dcompiler_47");
   D3D12_DESCRIPTOR_RANGE ranges[2] = {};
-  ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors = 12;
+  ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors = kSrvs;
   ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors = 6;
   D3D12_ROOT_PARAMETER rp[3] = {};
   rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[0].Constants.Num32BitValues = 16;
@@ -740,7 +826,7 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   hr = D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
   if (FAILED(hr) || FAILED(hr = device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), __uuidof(ID3D12RootSignature), (void**)&root)))
     return Fail("root signature", hr);
-  for (auto [entry, pso] : {std::pair{"Reduce1", &psoReduce1}, std::pair{"Reduce2", &psoReduce2}, std::pair{"Encode", &psoEncode}, std::pair{"Compose", &psoCompose}, std::pair{"Carry", &psoCarry}, std::pair{"Bake", &psoBake}, std::pair{"Fill", &psoFill}, std::pair{"CopyGuides", &psoCopyGuides}, std::pair{"Fit", &psoFit}, std::pair{"Down", &psoDown}}) {
+  for (auto [entry, pso] : {std::pair{"Reduce1", &psoReduce1}, std::pair{"Reduce2", &psoReduce2}, std::pair{"Encode", &psoEncode}, std::pair{"Compose", &psoCompose}, std::pair{"Carry", &psoCarry}, std::pair{"Bake", &psoBake}, std::pair{"Fill", &psoFill}, std::pair{"CopyGuides", &psoCopyGuides}, std::pair{"Fit", &psoFit}, std::pair{"Down", &psoDown}, std::pair{"GuidedFit", &psoGuidedFit}}) {
     ID3DBlob *cs = nullptr, *e = nullptr;
     if (FAILED(hr = compile(kShaders, std::strlen(kShaders), "prism", nullptr, nullptr, entry, "cs_5_1", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &cs, &e))) {
       Log("shader %s: %s", entry, e ? (const char*)e->GetBufferPointer() : "?");
@@ -789,7 +875,7 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
     sv.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; device->CreateShaderResourceView(landedEdit, &sv, Cpu(b + 9));
     device->CreateShaderResourceView(scratch, &sv, Cpu(b + 11));
     device->CreateUnorderedAccessView(scratch, nullptr, nullptr, Cpu(b + kSetO + 3));
-    for (UINT set : {kSetP, kSetO, kSetG, kSetR, kSetB, kSetF, kSetL}) { BufferUav(tiles, tilesX * tilesY * 9, b + set + 1); BufferUav(exposure, 4, b + set + 2); }
+    for (UINT set : {kSetP, kSetO, kSetG, kSetR, kSetB, kSetF, kSetL, kSetU}) { BufferUav(tiles, tilesX * tilesY * 9, b + set + 1); BufferUav(exposure, 4, b + set + 2); }
     device->CreateUnorderedAccessView(landedLuma, nullptr, nullptr, Cpu(b + kSetB + 3));
     device->CreateUnorderedAccessView(landedLuma, nullptr, nullptr, Cpu(b + kSetL + 4));
   }
@@ -867,8 +953,8 @@ bool EnsureLow() {
     ID3D12Resource* t = nullptr;
     return SUCCEEDED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, __uuidof(ID3D12Resource), (void**)&t)) ? t : nullptr;
   };
-  proxyLow = full(); neuralLow = full(); midsLow[0] = full(); midsLow[1] = full();
-  if (!proxyLow || !neuralLow || !midsLow[0] || !midsLow[1]) return Fail("reduced network resources");
+  proxyLow = full(); neuralLow = full(); midsLow[0] = full(); midsLow[1] = full(); gfA = full(); gfB = full();
+  if (!proxyLow || !neuralLow || !midsLow[0] || !midsLow[1] || !gfA || !gfB) return Fail("reduced network resources");
   return true;
 }
 
@@ -968,7 +1054,7 @@ void ReleaseAsync() {
 // released while the GPU might still use it: it waits in the graveyard for a few frames.
 void Teardown() {
   ID3D12Resource** slots[] = {&origCopy, &proxy, &neural, &tiles, &exposure, &edits[0], &edits[1], &warps[0], &warps[1], &warpsL[0], &warpsL[1], &landedEdit, &landedLuma, &scratch,
-                              &motionCopy, &depthCopy, &recMotion, &recDepth, &mids[0], &mids[1], &proxyLow, &neuralLow, &midsLow[0], &midsLow[1]};
+                              &motionCopy, &depthCopy, &recMotion, &recDepth, &mids[0], &mids[1], &proxyLow, &neuralLow, &midsLow[0], &midsLow[1], &gfA, &gfB};
   for (ID3D12Resource** r : slots) {
     Bury(*r);
     *r = nullptr;
@@ -1108,6 +1194,55 @@ void StatsTick() {
   if (frameCsv) std::fflush(frameCsv);
   clear();
   statsEnd = t + statsSec * 1000.0;
+}
+
+// NetScaleAuto: this frame's size, from the frame rates of the last second and Prism's measured
+// GPU time. The sizes are steps of 1/8 between NetScaleMin and NetScale.
+void AutoNetScale() {
+  if (!netAuto || cadence != 1) { netScale = netScaleUser; netAutoScale = netScaleUser; autoShort = autoRoom = 0; autoDownFrom = 0.0; return; }
+  const double now = NowMs();
+  if (netAutoScale > netScaleUser + 1e-3f) netAutoScale = netScaleUser;
+  netScale = netAutoScale;
+  if (now < autoNextCheck) return;
+  autoNextCheck = now + 1000.0;
+  double renderFps = 0.0, presentFps = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(statsMutex);
+    auto rate = [](const std::deque<double>& t) { return t.size() > 2 && t.back() > t.front() ? (t.size() - 1) * 1000.0 / (t.back() - t.front()) : 0.0; };
+    renderFps = rate(renderTimes); presentFps = rate(presentTimes);
+  }
+  if (renderFps <= 0.0 || now < autoHoldUntil) return;
+  // The target is in displayed frames; with frame generation each rendered frame shows as several.
+  const double shown = presentFps > renderFps ? presentFps / renderFps : 1.0;
+  const double frameMs = 1000.0 / renderFps, targetMs = 1000.0 * shown / fpsTarget;
+  // The network's cost model (bench: 0.87 ms a call + 1.11 ms per megapixel), scaled to what this
+  // GPU measured at the current size.
+  const double mp = double(w) * h / 1e6;
+  auto model = [&](float sc) { return passes * (0.87 + 1.11 * mp * sc * sc); };
+  const double k = prismMsSmooth > 0.0 ? prismMsSmooth / model(netAutoScale) : 1.0;
+  auto change = [&](float next, const char* why) {
+    Log("auto network size: %.1f%% -> %.1f%% (%.1f fps shown, target %d)%s", netAutoScale * 100.0, next * 100.0, renderFps * shown, fpsTarget, why);
+    netAutoScale = next; netScale = next; autoShort = autoRoom = 0; autoHoldUntil = now + 3000.0;
+  };
+  // The first look after a step down: did it pay?
+  if (autoDownFrom > 0.0) {
+    const double got = autoDownFrom - frameMs, want = autoDownGain;
+    autoDownFrom = 0.0;
+    if (got < want / 3.0 && netAutoScale + 0.125f <= netScaleUser + 1e-3f) {
+      autoBlockUntil = now + 30000.0;
+      change(netAutoScale + 0.125f, " (the smaller size did not help: limited elsewhere)");
+      return;
+    }
+  }
+  const float up = std::min(netScaleUser, netAutoScale + 0.125f), down = std::max(netAutoMin, netAutoScale - 0.125f);
+  autoShort = frameMs > targetMs * 1.03 ? autoShort + 1 : 0;
+  autoRoom = up > netAutoScale + 1e-3f && frameMs + k * (model(up) - model(netAutoScale)) < targetMs * 0.95 ? autoRoom + 1 : 0;
+  if (autoShort >= 2 && down < netAutoScale - 1e-3f && now >= autoBlockUntil) {
+    autoDownFrom = frameMs; autoDownGain = k * (model(netAutoScale) - model(down));
+    change(down, "");
+  } else if (autoRoom >= 3) {
+    change(up, "");
+  }
 }
 
 // The real DXGI Present (and Present1), found through a throwaway swap chain made by the system's
@@ -1314,6 +1449,7 @@ void LoadConfig() {
   passes = int(Num(L"Passes", passes, 1, kMaxPasses));
   stagger = Num(L"Stagger", stagger ? 1 : 0, 0, 1) != 0;
   guided = Num(L"Guided", guided ? 1 : 0, 0, 1) != 0;
+  upFilter = int(Num(L"UpFilter", upFilter, 0, 1));
   {
     // A number, or the look's name.
     const std::wstring lk = Get(L"Look");
@@ -1322,7 +1458,10 @@ void LoadConfig() {
     if (!lk.empty() && lk[0] >= L'0' && lk[0] <= L'9') look = std::clamp(_wtoi(lk.c_str()), 0, 4);
   }
   netReset = Num(L"NetReset", netReset ? 1 : 0, 0, 1) != 0;
-  netScale = float(Num(L"NetScale", netScale, 0.5, 1.0));
+  netScaleUser = float(Num(L"NetScale", netScaleUser, 0.5, 1.0));
+  netAuto = Num(L"NetScaleAuto", netAuto ? 1 : 0, 0, 1) != 0;
+  fpsTarget = int(Num(L"FpsTarget", fpsTarget, 20, 360));
+  netAutoMin = float(Num(L"NetScaleMin", netAutoMin, 0.5, 1.0));
   {
     const std::wstring land = Get(L"Land");
     if (!land.empty()) landPoll = !lstrcmpiW(land.c_str(), L"poll");
@@ -1471,7 +1610,8 @@ void PipelineInit(const std::wstring& dir, int createFlags, LogFn log, ID3D12Dev
 LiveSettings GetLiveSettings() {
   if (havePending) { std::lock_guard<std::mutex> lock(liveMutex); return pending; }
   LiveSettings s;
-  s.enabled = enabled; s.cadence = cadence; s.passes = passes; s.intensity = intensity; s.netScale = netScale; s.guard = guardStrength;
+  s.enabled = enabled; s.cadence = cadence; s.passes = passes; s.intensity = intensity; s.netScale = netScaleUser; s.guard = guardStrength;
+  s.netAuto = netAuto; s.fpsTarget = fpsTarget;
   s.async = asyncMode; s.split = split; s.splitPos = splitPos; s.look = look;
   return s;
 }
@@ -1497,6 +1637,8 @@ void SaveLiveSettings() {
   std::swprintf(b, 32, L"%.2f", s.intensity); put(L"Intensity", b);
   std::swprintf(b, 32, L"%.2f", s.guard); put(L"Guard", b);
   std::swprintf(b, 32, L"%.2f", s.netScale); put(L"NetScale", b);
+  put(L"NetScaleAuto", s.netAuto ? L"1" : L"0");
+  put(L"FpsTarget", std::to_wstring(s.fpsTarget));
   put(L"Split", s.split ? L"1" : L"0");
   std::swprintf(b, 32, L"%.3f", s.splitPos); put(L"SplitPos", b);
   put(L"Look", std::to_wstring(s.look));
@@ -1542,7 +1684,8 @@ void ApplyPending() {
   }
   if (s.enabled != enabled || s.cadence != cadence || s.passes != passes || s.async != asyncMode) historyValid = false;
   enabled = s.enabled; cadence = std::clamp(s.cadence, 0, 8); passes = std::clamp(s.passes, 1, kMaxPasses); asyncMode = s.async;
-  intensity = std::clamp(s.intensity, 0.0f, 3.0f); guardStrength = std::clamp(s.guard, 0.0f, 1.0f); netScale = std::clamp(s.netScale, 0.5f, 1.0f);
+  intensity = std::clamp(s.intensity, 0.0f, 3.0f); guardStrength = std::clamp(s.guard, 0.0f, 1.0f); netScaleUser = std::clamp(s.netScale, 0.5f, 1.0f);
+  netAuto = s.netAuto; fpsTarget = std::clamp(s.fpsTarget, 20, 360);
   split = s.split; splitPos = std::clamp(s.splitPos, 0.02f, 0.98f);
   look = std::clamp(s.look, 0, 4);
 }
@@ -1644,6 +1787,7 @@ bool PipelineRecord(const UpscaleCall& c) {
       builtRW = c.renderWidth; builtRH = c.renderHeight;
     }
   }
+  AutoNetScale();
   if (!SelectNetSize()) return false;
 
   liveRW = c.renderWidth; liveRH = c.renderHeight;
@@ -1906,6 +2050,13 @@ bool PipelineRecord(const UpscaleCall& c) {
     device->CreateShaderResourceView(neuralLow, &lv, Cpu(ring + 2));
     device->CreateShaderResourceView(proxyLow, &lv, Cpu(ring + 11));
     device->CreateUnorderedAccessView(proxyLow, nullptr, nullptr, Cpu(ring + kSetG));
+    if (upFilter == 1) {
+      device->CreateShaderResourceView(gfA, &lv, Cpu(ring + 12));
+      device->CreateShaderResourceView(gfB, &lv, Cpu(ring + 13));
+      device->CreateUnorderedAccessView(gfA, nullptr, nullptr, Cpu(ring + kSetU));
+      device->CreateUnorderedAccessView(gfB, nullptr, nullptr, Cpu(ring + kSetU + 3));
+      k.flags |= 64u;
+    }
     k.flags |= 32u;
     k.span = float(nw) / float(w);
     l->SetComputeRoot32BitConstants(0, 16, &k, 0);
@@ -1942,9 +2093,20 @@ bool PipelineRecord(const UpscaleCall& c) {
   l->SetComputeRootSignature(root);
   l->SetComputeRoot32BitConstants(0, 16, &k, 0);
   l->SetComputeRootDescriptorTable(1, Gpu(ring));
+  const bool fit = reduced && (k.flags & 64u);
+  if (fit) {
+    l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetU));
+    l->SetPipelineState(psoGuidedFit); l->Dispatch((nw + 15) / 16, (nh + 15) / 16, 1);
+    Barrier(l, gfA, UAV, SRV);
+    Barrier(l, gfB, UAV, SRV);
+  }
   l->SetComputeRootDescriptorTable(2, Gpu(ring + kSetF));
   l->SetPipelineState(psoCompose); l->Dispatch(tilesX, tilesY, 1);
   UavBarrier(l);
+  if (fit) {
+    Barrier(l, gfA, SRV, UAV);
+    Barrier(l, gfB, SRV, UAV);
+  }
   historyValid = true;
   if (captureAt && captureAt <= frame + 1 && !captures[0].rb) {
     const Capture list4[4] = {{origCopy, "orig"}, {proxy, "proxy"}, {netNeural, "neural"}, {c.output, "final"}};

@@ -26,7 +26,7 @@
 // ------------------------------------------------------------------ the stand-in pipeline
 namespace prism {
 namespace {
-LiveSettings live = [] { LiveSettings s; s.cadence = 1; s.passes = 2; s.async = false; s.intensity = 2.4f; s.netScale = 0.75f; s.guard = 1.0f; return s; }();
+LiveSettings live = [] { LiveSettings s; s.cadence = 1; s.passes = 2; s.async = false; s.intensity = 2.4f; s.netScale = 0.75f; s.guard = 1.0f; s.netAuto = std::getenv("PRISM_DEMO_AUTO") != nullptr; s.fpsTarget = 90; return s; }();
 std::wstring dir;
 void LogStd(const char* fmt, ...) { va_list a; va_start(a, fmt); std::vfprintf(stderr, fmt, a); va_end(a); std::fputc('\n', stderr); }
 }  // namespace

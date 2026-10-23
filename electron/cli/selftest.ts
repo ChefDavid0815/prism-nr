@@ -1,7 +1,8 @@
 /* Runs the core against this PC without Electron: system, scan, analysis, plan. Read-only. */
+import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { coreIni, setCoreDir, setShaderDir } from '../core/installer';
+import { coreIni, panelLines, setCoreDir, setShaderDir } from '../core/installer';
 import { parseVdf } from '../core/scanner';
 import { PrismService } from '../core/service';
 import { initStore } from '../core/store';
@@ -46,6 +47,11 @@ async function main(): Promise<void> {
   const kept = coreIni(resolveValues('high'), ['KeyOverlay=Insert', 'OverlayX=900', 'OverlayHud=1', 'SplitPos=0.620']);
   assert(/KeyOverlay=Insert/.test(kept) && !/KeyOverlay=Home/.test(kept) && /OverlayX=900/.test(kept) && /OverlayHud=1/.test(kept) && /SplitPos=0\.620/.test(kept),
     'Core INI: a rewrite keeps the in-game panel\'s own keys');
+  const panelIni = path.join(os.tmpdir(), 'prism-nr-selftest-panel.ini');
+  fs.writeFileSync(panelIni, 'Intensity=2.40\r\nNetScale=1.00\r\nNetScaleAuto=1\r\nFpsTarget=90\r\nOverlayHud=1\r\n');
+  const panel = panelLines(panelIni);
+  fs.rmSync(panelIni, { force: true });
+  assert(panel.join(',') === 'NetScaleAuto=1,FpsTarget=90,OverlayHud=1', 'Core INI: the panel\'s target frame rate survives a rewrite, the tier\'s own keys do not');
 
   const c5060 = nrCostFor('NVIDIA GeForce RTX 5060', false);
   assert(c5060?.source === 'published' && Math.abs(c5060.msPerMP - 4.54 * 0.56) < 1e-9 && Math.abs(c5060.fixedMs - 0.14 * 0.56) < 1e-9, 'NR cost: RTX 5060 uses the published figure');

@@ -64,8 +64,8 @@ function conflictingAddons(exeDir: string): string[] {
   }
 }
 
-/** The in-game panel's own lines in prism-core.ini (its place, its frame-rate corner, its key, the split's column). */
-const PANEL_KEY = /^(Overlay\w+|KeyOverlay|SplitPos)=/i;
+/** The in-game panel's own lines in prism-core.ini (its place, its frame-rate corner, its key, the split's column, the target frame rate). */
+const PANEL_KEY = /^(Overlay\w+|KeyOverlay|SplitPos|NetScaleAuto|NetScaleMin|FpsTarget)=/i;
 
 /** The panel's lines of an existing prism-core.ini, so a rewrite by the app keeps them. */
 export function panelLines(file: string): string[] {

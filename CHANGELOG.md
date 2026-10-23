@@ -13,8 +13,17 @@
   and clean, for anime and stylised games), 低饱和 (restrained colour, cool whites: the film and
   series look) and 浓烈 (deep contrast, rich colour). They grade in scene light before the game's
   tone mapping, keep greys neutral and skin natural, and never clip colours. In the app and the panel.
+- Target frame rate (目标帧率, in the panel: off, 45, 60, 90, 120 displayed frames per second):
+  when the game falls short, the network's resolution steps down in eighths (to 50% at most) and
+  steps back up once the measured cost says the next size fits. Each size holds at least three
+  seconds, so it never flickers from changing every frame, and a step that did not make the game
+  faster (it was held back by the CPU) is undone. It changes size without rebuilding anything.
+- Below native resolution the network's edit now comes back up through a guided filter instead
+  of the joint bilateral upsample: just as close to the native result, and about 12% less flicker
+  in motion (`UpFilter=0` restores the 1.2 behaviour).
 - Changes made in the panel are saved to `prism-core.ini` and show up in the app; the app keeps
-  the panel's own settings (its place, the frame-rate corner, its key) when it rewrites the file.
+  the panel's own settings (its place, the frame-rate corner, its key, the target frame rate)
+  when it rewrites the file.
 - Rolling back no longer reports `prism-core.ini` as changed after an install.
 
 ## 1.2.0 — 2026-10-22 · Prism Core only; no trails, flat frame times

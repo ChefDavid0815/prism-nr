@@ -935,7 +935,7 @@ int TierOf(const LiveSettings& s) {
 bool TierLocked(int i) { return kTiers[i].needs5090 && gpuName.find(L"5090") == std::wstring::npos; }
 
 // ------------------------------------------------------------------ the panel
-enum Row { kOn, kTier, kLook, kIntensity, kPasses, kCadence, kNetScale, kGuard, kSplit, kHud, kRows };
+enum Row { kOn, kTier, kLook, kIntensity, kPasses, kCadence, kNetScale, kTarget, kGuard, kSplit, kHud, kRows };
 struct Panel {
   bool open = false;
   double openedAt = 0, closedAt = -10;
@@ -1050,7 +1050,7 @@ void Cursor(float x, float y) {
 }
 
 const wchar_t* RowLabel(int r) {
-  static const wchar_t* labels[kRows] = {L"神经渲染", L"档位", L"色彩", L"强度", L"遍数", L"节奏", L"网络分辨率", L"角色守护", L"分屏对比", L"帧率角标"};
+  static const wchar_t* labels[kRows] = {L"神经渲染", L"档位", L"色彩", L"强度", L"遍数", L"节奏", L"网络分辨率", L"目标帧率", L"角色守护", L"分屏对比", L"帧率角标"};
   return labels[r];
 }
 
@@ -1077,6 +1077,19 @@ std::wstring RowHelp(int r, const LiveSettings& s, int option) {
     case kCadence: return L"每帧都跑网络，高速运动没有拖影；隔帧运行更省，快速运动的物体旁可能有残影。快捷键 F2。";
     case kNetScale:
       return s.cadence == 1 ? L"75% 分辨率运行网络，再按画面边缘放大回原生，RTX 5090 Laptop 实测快约 17%。" : L"只在网络每帧运行时生效。先把节奏改成每帧。";
+    case kTarget: {
+      if (s.cadence != 1) return L"只在网络每帧运行时生效。先把节奏改成每帧。";
+      static const int targets[5] = {0, 45, 60, 90, 120};
+      const int t = option >= 0 ? targets[std::clamp(option, 0, 4)] : s.netAuto ? s.fpsTarget : 0;
+      if (t == 0) return L"关闭时网络始终按上一行的分辨率运行。开启后帧率不够就逐级降低网络分辨率（最低 50%），有余量再升回去，分辨率最高到上一行的设定。";
+      std::wstring msg = L"显示帧率（含帧生成）低于 " + std::to_wstring(t) + L" 时逐级降低网络分辨率（最低 50%），有余量再升回，最高到上一行。每次至少隔 3 秒，不闪烁。";
+      if (option < 0) {
+        LiveStats st;
+        GetLiveStats(&st);
+        if (st.netW && st.outW) msg += L"当前" + Fmt(L" %.3g%%。", 100.0 * st.netW / st.outW);
+      }
+      return msg;
+    }
     case kGuard: return L"压住网络在肤色和高饱和颜色上的色度改动，人物肤色更自然。0% 等于不干预。";
     case kSplit: return L"左边原画，右边 Prism。面板打开时可以拖动画面上的分割线。快捷键 F4。";
     case kHud: return L"面板收起后在左上角显示帧率和帧时间。";
@@ -1231,7 +1244,7 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
   for (int r = 0; r < kRows; ++r) {
     const float ry = y + r * rowH;
     const bool focused = panel.focus == r;
-    const bool rowEnabled = r != kNetScale || netScaleOn;
+    const bool rowEnabled = (r != kNetScale && r != kTarget) || netScaleOn;
     const float ty = ry + std::round((rowH - LineHeight(kBody)) * 0.5f);
     if (focused) Fill(x0 + U(8), ry + U(10), x0 + U(8) + std::max(2.0f, U(2)), ry + rowH - U(10), kWhite);
     Text(x0 + pad, ty, RowLabel(r), kBody, !rowEnabled ? kQuiet : focused ? kWhite : kReadout);
@@ -1323,6 +1336,22 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
         if (keyStep && netScaleOn) want = step > 0 ? 1 : 0;
         if (focused && in.enter && netScaleOn) want = 1 - cur;
         if (want >= 0 && want != cur) { n.netScale = want == 1 ? 0.75f : 1.0f; changed = true; }
+        break;
+      }
+      case kTarget: {
+        static const int targets[5] = {0, 45, 60, 90, 120};
+        int cur = 0;
+        if (n.netAuto) { cur = -1; for (int i = 1; i < 5; ++i) if (targets[i] == n.fpsTarget) cur = i; }
+        clicked = Segments(r, cx0, sy, cx1, sh, {L"关", L"45", L"60", L"90", L"120"}, netScaleOn ? cur : -1, netScaleOn ? 31 : 0, 0, &hover, dt);
+        if (n.netAuto && cur < 0 && netScaleOn) TextRight(cx0 - U(10), ty + U(1), std::to_wstring(n.fpsTarget), kLabel, kQuiet);
+        int want = netScaleOn ? clicked : -1;
+        if (keyStep && netScaleOn) want = std::clamp((cur < 0 ? 2 : cur) + step, 0, 4);
+        if (want >= 0 && want != cur) {
+          n.netAuto = want > 0;
+          if (want > 0) n.fpsTarget = targets[want];
+          changed = true;
+        }
+        if (focused) panel.hoverOption = hover;
         break;
       }
     }

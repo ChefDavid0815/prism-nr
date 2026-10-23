@@ -74,10 +74,9 @@ float LkMaxChroma(float L, float2 dir) {
 // into flat patches.
 float LkFit(float L, float2 ab, float c) {
   const float ct = length(ab);
-  if (ct <= 1e-6) return ct;
-  const float cm = LkMaxChroma(L, ab / ct);
+  const float cm = LkMaxChroma(L, ab / max(ct, 1e-6));
   const float base = min(c, cm);
-  return ct <= base ? ct : base + (cm - base) * (1.0 - exp(-(ct - base) / max(cm - base, 1e-5)));
+  return ct <= base || ct <= 1e-6 ? ct : base + (cm - base) * (1.0 - exp(-(ct - base) / max(cm - base, 1e-5)));
 }
 
 struct LkParams {
