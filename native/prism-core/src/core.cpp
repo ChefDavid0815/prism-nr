@@ -163,7 +163,10 @@ ngx::Result HookCreate(ID3D12GraphicsCommandList* list, unsigned feature, void* 
     ngx::GetI(p, "DLSS.Feature.Create.Flags", &flags);
     wchar_t exe[MAX_PATH];
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    PipelineInit(ModuleDir(nullptr), flags, &Log);
+    ID3D12Device* dev = nullptr;
+    if (list) list->GetDevice(__uuidof(ID3D12Device), (void**)&dev);
+    PipelineInit(ModuleDir(nullptr), flags, &Log, dev);
+    if (dev) dev->Release();
     Log("upscale feature %u created, flags 0x%x", feature, flags);
   }
   if (depth == 0) Log("CreateFeature %u via %s -> 0x%08x", feature, hooked[I].module, r);
@@ -216,7 +219,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
     DisableThreadLibraryCalls(self);
     const std::wstring dir = ModuleDir(self);
     logFile = _wfopen((dir + L"prism-core.log").c_str(), L"w");
-    Log("Prism Core 1.2.0 (F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded");
+    Log("Prism Core 1.3.0 (Home panel, F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded");
     if (MH_Initialize() != MH_OK) { Log("MinHook init failed"); return TRUE; }
     CloseHandle(CreateThread(nullptr, 0, Watch, nullptr, 0, nullptr));
   }

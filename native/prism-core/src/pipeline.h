@@ -21,9 +21,42 @@ struct UpscaleCall {
 
 using LogFn = void (*)(const char* fmt, ...);
 
-// One-time setup: where nvngx_dlssnr.dll lives, the game's DLSS create flags, the log.
-void PipelineInit(const std::wstring& gameDir, int createFlags, LogFn log);
+// One-time setup: where nvngx_dlssnr.dll lives, the game's DLSS create flags, the log, and the
+// game's device (for the Present hook the in-game panel draws from).
+void PipelineInit(const std::wstring& gameDir, int createFlags, LogFn log, ID3D12Device* device);
 // Records Prism's passes for this frame. Returns false (and stays off) after any failure.
 bool PipelineRecord(const UpscaleCall& call);
+
+// ------------------------------------------------------------------ the in-game panel's view
+// The settings the panel shows and changes. A change applies on the next rendered frame and is
+// saved to prism-core.ini (SaveLiveSettings), so the next launch and the app keep it.
+struct LiveSettings {
+  bool enabled = true;
+  int cadence = 2, passes = 2;
+  float intensity = 1.0f, netScale = 1.0f, guard = 1.0f;
+  bool async = true, split = false;
+  float splitPos = 0.5f;  // the split's column, as a fraction of the width
+};
+LiveSettings GetLiveSettings();
+void SetLiveSettings(const LiveSettings& s);
+void SaveLiveSettings();
+
+constexpr int kFrameHistory = 240;
+struct LiveStats {
+  bool running = false;        // the pipeline is built and has recorded a frame
+  const char* failure = nullptr;  // why Prism stopped, if it did
+  unsigned outW = 0, outH = 0, renderW = 0, renderH = 0, netW = 0, netH = 0;
+  float prismMs = 0.0f;        // Prism's GPU time on the game's queue per rendered frame
+  float netMs = 0.0f;          // the asynchronous network's GPU time per launch
+  float presentFps = 0.0f, renderFps = 0.0f;  // over the last second
+  int frames = 0;              // valid entries in renderMs, oldest first
+  float renderMs[kFrameHistory] = {};  // rendered-frame intervals
+};
+void GetLiveStats(LiveStats* out);
+// A short note for the panel's toast when a hotkey or the app changed something ("" when none).
+std::wstring TakeLiveNotice();
+
+std::wstring GameDir();
+LogFn PipelineLogger();
 
 }  // namespace prism

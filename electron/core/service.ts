@@ -2,7 +2,7 @@ import { PLUGINS, PRESETS } from '../shared/catalog';
 import type { DiagnosticsReport, GameAnalysis, GameEntry, InstallPlan, InstallProgress, NvidiaDll, PlanRequest, SystemInfo } from '../shared/types';
 import { ANALYSIS_SCHEMA, analyzeGame } from './analyzer';
 import { importComponent, listComponents } from './components';
-import { buildPlan, learnAddonSettings, rollback, runInstall, updateCoreConfig, upgradeCoreInstalls } from './installer';
+import { buildPlan, learnAddonSettings, rollback, runInstall, syncCoreFromIni, updateCoreConfig, upgradeCoreInstalls } from './installer';
 import { locateNvidiaDlls } from './nvidia';
 import { leftoverDirs, manualEntry, scanAllGames } from './scanner';
 import { store } from './store';
@@ -101,6 +101,7 @@ export class PrismService {
 
   listInstalls() {
     learnAddonSettings();
+    syncCoreFromIni();
     return store.installs();
   }
 

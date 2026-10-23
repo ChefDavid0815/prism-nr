@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0 — unreleased
+
+- In-game panel: Home (or View + Y on a gamepad) opens Prism Core's own panel in the game. It
+  shows a frame-time barcode (one bar per rendered frame), the rendered and displayed frame rates,
+  the 1% low and Prism's GPU time, and changes every setting live: tier, intensity, passes,
+  cadence, network resolution, skin guard, split view (drag its line on screen) and a frame-rate
+  corner. Mouse, keyboard and gamepad all work; while the panel is open the game gets no input.
+  It draws on generated frames too, and at the same brightness in SDR, scRGB and HDR10.
+- Changes made in the panel are saved to `prism-core.ini` and show up in the app; the app keeps
+  the panel's own settings (its place, the frame-rate corner, its key) when it rewrites the file.
+- Rolling back no longer reports `prism-core.ini` as changed after an install.
+
 ## 1.2.0 — 2026-10-22 · Prism Core only; no trails, flat frame times
 
 Forza Horizon 6 benchmark, RTX 5090 Laptop, 2560×1600, DLSS Quality, 2× frame generation, SDR:

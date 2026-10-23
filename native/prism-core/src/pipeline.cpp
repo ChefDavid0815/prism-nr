@@ -5,9 +5,11 @@
 #include <dxgi1_2.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -15,6 +17,7 @@
 
 #include "MinHook.h"
 #include "ngx_param.h"
+#include "overlay.h"
 
 namespace prism {
 namespace {
@@ -25,7 +28,9 @@ int gameCreateFlags = 0;
 bool failed = false;
 bool enabled = true;
 bool split = false;
+float splitPos = 0.5f;  // the split's column as a fraction of the width (SplitPos, the panel drags it)
 bool paint = false;
+const char* failure = nullptr;  // why the pipeline stopped (the panel shows it)
 // F11 capture: one frame's original, proxy, network output and final result, read back
 // kRing frames later (by then the GPU is long done with it) and written beside the game.
 struct Capture { ID3D12Resource* src; const char* name; ID3D12Resource* rb = nullptr; D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp = {}; };
@@ -248,10 +253,10 @@ void Compose(uint3 id : SV_DispatchThreadID) {
   NewEdit[id.xy] = float4(e, DepthAt(id.xy));
   NewWarp[id.xy] = 0.0;  // a synchronous result: no launch in flight to reach
   NewWarpL[id.xy] = 0.0;
-  // Split view (F4): the original on the left half, a thin line at the split.
-  if (Split != 0u && id.x < Size.x / 2u) e = 0.0;
+  // Split view (F4): the original left of the split column (Split - 4), a thin line at it.
+  if (Split >= 4u && id.x < Split - 4u) e = 0.0;
   float3 result = o * exp2(e);
-  if (Split != 0u && (id.x == Size.x / 2u || id.x + 1u == Size.x / 2u)) result = 2.0;
+  if (Split >= 4u && (id.x == Split - 4u || id.x + 1u == Split - 4u)) result = 2.0;
   if (Split == 2u) result = float3(4.0, 0.0, 4.0);  // debug paint: proves the writes reach the screen
   Out0[id.xy] = float4(result, 1.0);
 }
@@ -419,9 +424,9 @@ void Fill(uint3 id : SV_DispatchThreadID) {
     }
   }
   NewEdit[id.xy] = float4(e, d);
-  if (Split != 0u && id.x < Size.x / 2u) e = 0.0;
+  if (Split >= 4u && id.x < Split - 4u) e = 0.0;
   float3 result = Orig[id.xy].rgb * exp2(e);
-  if (Split != 0u && (id.x == Size.x / 2u || id.x + 1u == Size.x / 2u)) result = 2.0;
+  if (Split >= 4u && (id.x == Split - 4u || id.x + 1u == Split - 4u)) result = 2.0;
   Out0[id.xy] = float4(result, 1.0);
 }
 
@@ -614,6 +619,7 @@ using ExecuteFn = void (STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12Com
 ExecuteFn realExecute = nullptr;
 
 void STDMETHODCALLTYPE HookExecute(ID3D12CommandQueue* q, UINT n, ID3D12CommandList* const* lists) {
+  OverlayNoteQueue(q);
   bool step = false, final = false, land = false;
   uint64_t sid = 0, lid = 0, did = 0;
   {
@@ -652,6 +658,9 @@ ID3D12Resource* stamps = nullptr;
 uint64_t* stampData = nullptr;
 uint64_t tsFreq = 0;
 double msSum[2] = {}, msAll = 0.0;
+double prismMsSmooth = 0.0;  // Prism's GPU time per frame on the game's queue, for the panel
+bool recorded = false;       // a frame went through the pipeline since it was built
+uint32_t liveRW = 0, liveRH = 0;  // the render size of the last frame
 uint32_t msCount[2] = {}, msTotal = 0;
 bool slotRefresh[16] = {};
 
@@ -661,6 +670,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE Gpu(UINT i) { auto h0 = heap->GetGPUDescriptorHandle
 bool Fail(const char* what, HRESULT hr = S_OK) {
   Log("pipeline off: %s (0x%08lx)", what, hr);
   failed = true;
+  failure = what;
   return false;
 }
 
@@ -687,7 +697,7 @@ void BufferUav(ID3D12Resource* b, UINT count, UINT slot) {
   device->CreateUnorderedAccessView(b, nullptr, &u, Cpu(slot));
 }
 
-void SetupPresentHook();  // below, with the frame statistics
+void SetupPresentHook(ID3D12Device* dev);  // below, with the frame statistics
 
 // Objects released kRing + 4 frames after they were last used.
 std::vector<std::pair<uint64_t, IUnknown*>> grave;
@@ -845,13 +855,23 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
     if (SUCCEEDED(device->CreateCommandQueue(&qdesc, __uuidof(ID3D12CommandQueue), (void**)&q))) { q->GetTimestampFrequency(&tsFreq); q->Release(); }
   }
   Log("pipeline ready: %ux%u, game create flags 0x%x", w, h, gameCreateFlags);
-  static bool presentHooked = false;
-  if (!presentHooked) { presentHooked = true; SetupPresentHook(); }
   return true;
 }
 
-// The compute queue, its feature, the copies of the launch frame's motion and depth, and the
-// hook on ExecuteCommandLists (every D3D12 queue of the driver shares one vtable).
+// The hook on ExecuteCommandLists, through a queue's vtable (slot 10; every D3D12 queue of the
+// driver shares one vtable): the asynchronous network rides on it, and the panel learns the
+// game's queues from it.
+bool HookExecuteOnce(ID3D12Device* dev) {
+  if (realExecute) return true;
+  ID3D12CommandQueue* probe = nullptr;
+  D3D12_COMMAND_QUEUE_DESC pd = {}; pd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+  if (FAILED(dev->CreateCommandQueue(&pd, __uuidof(ID3D12CommandQueue), (void**)&probe))) return false;
+  void* target = (*reinterpret_cast<void***>(probe))[10];
+  probe->Release();
+  return MH_CreateHook(target, (void*)&HookExecute, (void**)&realExecute) == MH_OK && MH_EnableHook(target) == MH_OK;
+}
+
+// The compute queue, its feature, the copies of the launch frame's motion and depth.
 bool SetupAsync(const UpscaleCall& c) {
   HRESULT hr;
   D3D12_COMMAND_QUEUE_DESC qd = {}; qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
@@ -893,14 +913,7 @@ bool SetupAsync(const UpscaleCall& c) {
   if (!motionCopy) motionCopy = copyOf(DXGI_FORMAT_R16G16_FLOAT);
   if (!depthCopy) depthCopy = copyOf(DXGI_FORMAT_R32_FLOAT);
   if (!motionCopy || !depthCopy) return Fail("motion/depth copies");
-  if (realExecute) { Log("async network rebuilt (%s priority)", netPriority ? "high" : "normal"); return true; }
-  // Hook ExecuteCommandLists through a queue's vtable (slot 10).
-  ID3D12CommandQueue* probe = nullptr;
-  D3D12_COMMAND_QUEUE_DESC pd = {}; pd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-  if (FAILED(device->CreateCommandQueue(&pd, __uuidof(ID3D12CommandQueue), (void**)&probe))) return Fail("probe queue");
-  void* target = (*reinterpret_cast<void***>(probe))[10];
-  probe->Release();
-  if (MH_CreateHook(target, (void*)&HookExecute, (void**)&realExecute) != MH_OK || MH_EnableHook(target) != MH_OK) return Fail("ExecuteCommandLists hook");
+  if (!HookExecuteOnce(device)) return Fail("ExecuteCommandLists hook");
   if (!netQueries) {
     D3D12_QUERY_HEAP_DESC nq = {}; nq.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP; nq.Count = 4;
     D3D12_HEAP_PROPERTIES rb = {}; rb.Type = D3D12_HEAP_TYPE_READBACK;
@@ -947,6 +960,7 @@ void Teardown() {
   recFrames.clear(); recordLeft = 0; recordDoneAt = 0;
   historyValid = false;
   haveLanded = false;
+  recorded = false;
   current = 0;
   w = h = 0;
 }
@@ -1023,10 +1037,19 @@ std::string label;
 FILE* frameCsv = nullptr;
 bool frameLog = false;
 uint32_t statLaunches = 0, statLands = 0, statAgeSum = 0, statAgeMax = 0;
+// The panel's view: the last kFrameHistory rendered-frame intervals, and one second of present
+// and render times for the live rates.
+float renderRing[kFrameHistory] = {};
+uint32_t renderRingCount = 0;
+std::deque<double> presentTimes, renderTimes;
 
 void Record(Series& sr, double t, char kind) {
+  std::deque<double>& times = kind == 'P' ? presentTimes : renderTimes;
+  times.push_back(t);
+  while (times.size() > 1 && t - times.front() > 1000.0) times.pop_front();
   if (sr.last > 0.0) {
     const double d = t - sr.last;
+    if (kind == 'R' && d < 250.0) renderRing[renderRingCount++ % kFrameHistory] = float(d);
     if (d < 250.0) sr.v.push_back(float(d));  // longer: a load or a pause
     if (frameCsv) std::fprintf(frameCsv, "%.3f,%c,%.3f\n", t, kind, d);
   }
@@ -1078,19 +1101,19 @@ void OnPresent(UINT flags) {
   Record(sPresent, NowMs(), 'P');
 }
 HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* sc, UINT sync, UINT flags) {
-  if (presentDepth++ == 0) OnPresent(flags);
+  if (presentDepth++ == 0) { OnPresent(flags); if (!(flags & DXGI_PRESENT_TEST)) OverlayPresent(sc); }
   const HRESULT hr = realPresent(sc, sync, flags);
   --presentDepth;
   return hr;
 }
 HRESULT STDMETHODCALLTYPE HookPresent1(IDXGISwapChain1* sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* pp) {
-  if (presentDepth++ == 0) OnPresent(flags);
+  if (presentDepth++ == 0) { OnPresent(flags); if (!(flags & DXGI_PRESENT_TEST)) OverlayPresent(sc); }
   const HRESULT hr = realPresent1(sc, sync, flags, pp);
   --presentDepth;
   return hr;
 }
 
-void SetupPresentHook() {
+void SetupPresentHook(ID3D12Device* dev) {
   wchar_t path[MAX_PATH];
   GetSystemDirectoryW(path, MAX_PATH);
   lstrcatW(path, L"\\dxgi.dll");
@@ -1105,12 +1128,14 @@ void SetupPresentHook() {
   DXGI_SWAP_CHAIN_DESC1 d = {};
   d.Width = 8; d.Height = 8; d.Format = DXGI_FORMAT_R8G8B8A8_UNORM; d.SampleDesc.Count = 1;
   d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; d.BufferCount = 2; d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-  if (wnd && SUCCEEDED(device->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), (void**)&q)) &&
+  if (!HookExecuteOnce(dev)) Log("panel: ExecuteCommandLists not hooked");
+  if (wnd && dev && SUCCEEDED(dev->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), (void**)&q)) &&
       SUCCEEDED(factory->CreateSwapChainForHwnd(q, wnd, &d, nullptr, nullptr, &sc))) {
     void** vt = *reinterpret_cast<void***>(sc);
     const bool ok = MH_CreateHook(vt[8], (void*)&HookPresent, (void**)&realPresent) == MH_OK && MH_EnableHook(vt[8]) == MH_OK &&
                     MH_CreateHook(vt[22], (void*)&HookPresent1, (void**)&realPresent1) == MH_OK && MH_EnableHook(vt[22]) == MH_OK;
     Log(ok ? "present timing on (DXGI Present hooked)" : "present timing off: hook failed");
+    if (ok) OverlaySetup(vt);
   } else {
     Log("present timing off: no probe swap chain");
   }
@@ -1221,6 +1246,9 @@ FILETIME configTime = {};
 int ParseKey(const std::wstring& s, int fallback) {
   if (s.empty()) return fallback;
   if (!lstrcmpiW(s.c_str(), L"none")) return 0;
+  static const std::pair<const wchar_t*, int> names[] = {{L"Home", VK_HOME}, {L"End", VK_END}, {L"Insert", VK_INSERT}, {L"Delete", VK_DELETE},
+                                                         {L"PageUp", VK_PRIOR}, {L"PageDown", VK_NEXT}, {L"Pause", VK_PAUSE}, {L"ScrollLock", VK_SCROLL}};
+  for (const auto& [name, vk] : names) if (!lstrcmpiW(s.c_str(), name)) return vk;
   if ((s[0] == L'F' || s[0] == L'f') && s.size() > 1) {
     const int n = _wtoi(s.c_str() + 1);
     return n >= 1 && n <= 24 ? VK_F1 + n - 1 : fallback;
@@ -1229,11 +1257,22 @@ int ParseKey(const std::wstring& s, int fallback) {
   return n > 0 && n < 256 ? n : fallback;
 }
 
+// The panel's changes: applied on the render thread (ApplyPending), saved by SaveLiveSettings.
+// While one is not saved yet, the file is not read back (it still holds the old values).
+std::mutex configMutex, liveMutex;
+LiveSettings pending;
+std::atomic<bool> havePending{false}, unsaved{false};
+std::wstring notice;
+void Notice(const std::wstring& s) { std::lock_guard<std::mutex> lock(liveMutex); notice = s; }
+
 void LoadConfig() {
+  if (unsaved) return;
+  std::lock_guard<std::mutex> configLock(configMutex);
   const std::wstring path = gameDir + L"prism-core.ini";
   WIN32_FILE_ATTRIBUTE_DATA fa;
   if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) return;
   if (CompareFileTime(&fa.ftLastWriteTime, &configTime) == 0) return;
+  if (configTime.dwLowDateTime || configTime.dwHighDateTime) Notice(L"已应用 Prism NR 里的设置");
   configTime = fa.ftLastWriteTime;
   auto Get = [&](const wchar_t* key) {
     wchar_t buf[64] = {};
@@ -1285,6 +1324,7 @@ void LoadConfig() {
   intensity = float(Num(L"Intensity", intensity, 0, 3));  // above 1 amplifies the network's edit
   guardStrength = float(Num(L"Guard", guardStrength, 0, 1));
   split = Num(L"Split", split ? 1 : 0, 0, 1) != 0;
+  splitPos = float(Num(L"SplitPos", splitPos, 0.02, 0.98));
   keys.toggle = ParseKey(Get(L"KeyToggle"), keys.toggle);
   keys.cadence = ParseKey(Get(L"KeyCadence"), keys.cadence);
   keys.async = ParseKey(Get(L"KeyAsync"), keys.async);
@@ -1389,11 +1429,90 @@ void WriteRecording() {
 
 }  // namespace
 
-void PipelineInit(const std::wstring& dir, int createFlags, LogFn log) {
+void PipelineInit(const std::wstring& dir, int createFlags, LogFn log, ID3D12Device* dev) {
   gameDir = dir;
   gameCreateFlags = createFlags;
   Log = log;
   LoadConfig();
+  static bool presentHooked = false;
+  if (!presentHooked && dev) { presentHooked = true; SetupPresentHook(dev); }
+}
+
+LiveSettings GetLiveSettings() {
+  if (havePending) { std::lock_guard<std::mutex> lock(liveMutex); return pending; }
+  LiveSettings s;
+  s.enabled = enabled; s.cadence = cadence; s.passes = passes; s.intensity = intensity; s.netScale = netScale; s.guard = guardStrength;
+  s.async = asyncMode; s.split = split; s.splitPos = splitPos;
+  return s;
+}
+
+void SetLiveSettings(const LiveSettings& s) {
+  std::lock_guard<std::mutex> lock(liveMutex);
+  pending = s;
+  havePending = true;
+  unsaved = true;
+}
+
+void SaveLiveSettings() {
+  if (!unsaved) return;
+  const LiveSettings s = GetLiveSettings();
+  std::lock_guard<std::mutex> configLock(configMutex);
+  const std::wstring path = gameDir + L"prism-core.ini";
+  auto put = [&](const wchar_t* k, const std::wstring& v) { WritePrivateProfileStringW(L"Prism Core", k, v.c_str(), path.c_str()); };
+  wchar_t b[32];
+  put(L"Enabled", s.enabled ? L"1" : L"0");
+  put(L"Cadence", std::to_wstring(s.cadence));
+  put(L"Passes", std::to_wstring(s.passes));
+  put(L"Async", s.async ? L"1" : L"0");
+  std::swprintf(b, 32, L"%.2f", s.intensity); put(L"Intensity", b);
+  std::swprintf(b, 32, L"%.2f", s.guard); put(L"Guard", b);
+  std::swprintf(b, 32, L"%.2f", s.netScale); put(L"NetScale", b);
+  put(L"Split", s.split ? L"1" : L"0");
+  std::swprintf(b, 32, L"%.3f", s.splitPos); put(L"SplitPos", b);
+  WIN32_FILE_ATTRIBUTE_DATA fa;
+  if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) configTime = fa.ftLastWriteTime;  // our own write: not read back
+  unsaved = false;
+  if (Log) Log("prism-core.ini: saved from the in-game panel");
+}
+
+void GetLiveStats(LiveStats* o) {
+  o->running = heap && recorded && !failed && enabled;
+  o->failure = failure;
+  o->outW = w; o->outH = h; o->netW = nw; o->netH = nh; o->renderW = liveRW; o->renderH = liveRH;
+  o->prismMs = float(prismMsSmooth);
+  o->netMs = asyncMode && computeQueue ? float(netGpuMs) : 0.0f;
+  std::lock_guard<std::mutex> lock(statsMutex);
+  auto rate = [](const std::deque<double>& t) { return t.size() > 2 && t.back() > t.front() ? float((t.size() - 1) * 1000.0 / (t.back() - t.front())) : 0.0f; };
+  o->presentFps = rate(presentTimes);
+  o->renderFps = rate(renderTimes);
+  const uint32_t n = std::min<uint32_t>(renderRingCount, kFrameHistory);
+  o->frames = int(n);
+  for (uint32_t i = 0; i < n; ++i) o->renderMs[i] = renderRing[(renderRingCount - n + i) % kFrameHistory];
+}
+
+std::wstring TakeLiveNotice() {
+  std::lock_guard<std::mutex> lock(liveMutex);
+  std::wstring s;
+  s.swap(notice);
+  return s;
+}
+
+std::wstring GameDir() { return gameDir; }
+LogFn PipelineLogger() { return Log; }
+
+// The panel's change, on the render thread: the settings the next frame records with.
+void ApplyPending() {
+  if (!havePending) return;
+  LiveSettings s;
+  {
+    std::lock_guard<std::mutex> lock(liveMutex);
+    s = pending;
+    havePending = false;
+  }
+  if (s.enabled != enabled || s.cadence != cadence || s.passes != passes || s.async != asyncMode) historyValid = false;
+  enabled = s.enabled; cadence = std::clamp(s.cadence, 0, 8); passes = std::clamp(s.passes, 1, kMaxPasses); asyncMode = s.async;
+  intensity = std::clamp(s.intensity, 0.0f, 3.0f); guardStrength = std::clamp(s.guard, 0.0f, 1.0f); netScale = std::clamp(s.netScale, 0.5f, 1.0f);
+  split = s.split; splitPos = std::clamp(s.splitPos, 0.02f, 0.98f);
 }
 
 // Rendered frame rate, measured between the game's upscale calls (one per rendered frame;
@@ -1459,10 +1578,14 @@ bool PipelineRecord(const UpscaleCall& c) {
   MeasureFrameRate(enabled ? std::max(cadence, 1) : 0);
   static uint32_t calls = 0;
   if (++calls % 60 == 0) LoadConfig();  // about once a second; a stat call when nothing changed
-  if (keys.toggle && Pressed(keys.toggle)) { enabled = !enabled; historyValid = false; Log("Prism NR %s (key)", enabled ? "on" : "off"); }
-  if (keys.cadence && Pressed(keys.cadence)) { cadence = cadence % 4 + 1; historyValid = false; Log("network every %d frame(s) (key)", cadence); }
-  if (keys.async && Pressed(keys.async)) { asyncMode = !asyncMode; historyValid = false; Log("asynchronous network %s (key)", asyncMode ? "on" : "off"); }
-  if (keys.split && Pressed(keys.split)) { split = !split; Log("split view %s (key)", split ? "on" : "off"); }
+  ApplyPending();
+  if (keys.toggle && Pressed(keys.toggle)) { enabled = !enabled; historyValid = false; Log("Prism NR %s (key)", enabled ? "on" : "off"); Notice(enabled ? L"Prism 已开启" : L"Prism 已关闭"); }
+  if (keys.cadence && Pressed(keys.cadence)) {
+    cadence = cadence % 4 + 1; historyValid = false; Log("network every %d frame(s) (key)", cadence);
+    Notice(cadence == 1 ? L"网络每帧运行" : L"网络每 " + std::to_wstring(cadence) + L" 帧运行一次");
+  }
+  if (keys.async && Pressed(keys.async)) { asyncMode = !asyncMode; historyValid = false; Log("asynchronous network %s (key)", asyncMode ? "on" : "off"); Notice(asyncMode ? L"异步网络 开" : L"异步网络 关"); }
+  if (keys.split && Pressed(keys.split)) { split = !split; Log("split view %s (key)", split ? "on" : "off"); Notice(split ? L"分屏对比 开：左边原画，右边 Prism" : L"分屏对比 关"); }
   if (keys.capture && Pressed(keys.capture) && !captureAt) { captureAt = frame + 1; Log("capture requested (key)"); }
 
   if (!enabled) return true;
@@ -1490,6 +1613,7 @@ bool PipelineRecord(const UpscaleCall& c) {
     }
   }
 
+  liveRW = c.renderWidth; liveRH = c.renderHeight;
   auto* l = c.list;
   const auto SRV = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, UAV = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
   const UINT ring = UINT(frame % kRing) * kBlock;
@@ -1549,7 +1673,9 @@ bool PipelineRecord(const UpscaleCall& c) {
   // The frames since the network's previous run (cadence 0 or poll landing make it vary).
   const float span = launchId == 0 ? float(std::max(cadence, 1)) : float(std::min<uint64_t>(frame - lastLaunchFrame, 8));
   const bool landedBefore = haveLanded || landNow;
-  Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, paint ? 2u : (split ? 1u : 0u),
+  const uint32_t splitCol = 4u + uint32_t(std::clamp(splitPos, 0.0f, 1.0f) * float(w) + 0.5f);
+  recorded = true;
+  Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, paint ? 2u : (split ? splitCol : 0u),
                  c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f,
                  (launchNow ? 1u : 0u) | (landNow ? 2u : 0u) | (landedBefore ? 4u : 0u) | (guided ? 16u : 0u), span, 1.0f - stability};
 
@@ -1561,6 +1687,7 @@ bool PipelineRecord(const UpscaleCall& c) {
       const double ms = double(b - a) * 1000.0 / double(tsFreq);
       const int kind = slotRefresh[slot] ? 1 : 0;
       msSum[kind] += ms; ++msCount[kind]; msAll += ms; ++msTotal;
+      prismMsSmooth = prismMsSmooth == 0.0 ? ms : prismMsSmooth * 0.95 + ms * 0.05;
     }
     if (msTotal == 300) {
       Log("Prism on the GPU: %.2f ms per frame on average | network frames %.2f ms (%u) | carried frames %.2f ms (%u)",

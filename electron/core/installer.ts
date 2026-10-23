@@ -64,8 +64,20 @@ function conflictingAddons(exeDir: string): string[] {
   }
 }
 
+/** The in-game panel's own lines in prism-core.ini (its place, its frame-rate corner, its key, the split's column). */
+const PANEL_KEY = /^(Overlay\w+|KeyOverlay|SplitPos)=/i;
+
+/** The panel's lines of an existing prism-core.ini, so a rewrite by the app keeps them. */
+export function panelLines(file: string): string[] {
+  try {
+    return fs.readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter((l) => PANEL_KEY.test(l));
+  } catch {
+    return [];
+  }
+}
+
 /** prism-core.ini: Prism Core reads it at start and again whenever it changes. ASCII only. */
-export function coreIni(values: Values): string {
+export function coreIni(values: Values, keep: string[] = []): string {
   const pct = (k: string, d: number, max = 100) => (Math.max(0, Math.min(max, Number(values[k] ?? d))) / 100).toFixed(2);
   const cadence = Math.max(1, Math.min(4, Math.round(Number(values['prism-core.cadence'] ?? 2))));
   // Every frame runs synchronously (the app's async switch is off there): no carry, no trail.
@@ -87,6 +99,8 @@ export function coreIni(values: Values): string {
     'KeyAsync=F3',
     'KeySplit=F4',
     'KeyCapture=F11',
+    ...(keep.some((l) => /^KeyOverlay=/i.test(l)) ? [] : ['KeyOverlay=Home']),
+    ...keep,
     '',
   ].join('\r\n');
 }
@@ -571,7 +585,8 @@ function restore(files: BackupRecord[]): string[] {
   const notes: string[] = [];
   for (const f of [...files].reverse()) {
     try {
-      if (f.sha256After && exists(f.target) && sha256File(f.target) !== f.sha256After) notes.push(`${path.basename(f.target)} 在安装后被改动过，已按备份还原。`);
+      // prism-core.ini is Prism's own: Core's in-game panel writes it too.
+      if (f.sha256After && !/prism-core\.ini$/i.test(f.target) && exists(f.target) && sha256File(f.target) !== f.sha256After) notes.push(`${path.basename(f.target)} 在安装后被改动过，已按备份还原。`);
       if (exists(f.target)) fs.chmodSync(f.target, 0o666);
       if (f.backup && exists(f.backup)) fs.copyFileSync(f.backup, f.target);
       else fs.rmSync(f.target, { force: true });
@@ -731,7 +746,7 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
         const tuned = Boolean(r.values?.['prism-core.cadenceChosen']);
         let values = !legacy ? { ...(r.values ?? {}) } : tuned ? { ...resolveValues('high'), ...r.values } : { ...(r.values ?? {}), ...resolveValues('high') };
         values = { ...values, ...Object.fromEntries(extra) };
-        const content = coreIni(values);
+        const content = coreIni(values, panelLines(ini.target));
         try {
           fs.writeFileSync(ini.target, content, 'utf8');
           ini.sha256After = sha256Text(content);
@@ -759,6 +774,46 @@ function versionNewer(a: string, b: string): boolean {
   return false;
 }
 
+/**
+ * Takes back what Core's in-game panel saved into prism-core.ini (the tier values), so the app
+ * shows the settings the game runs with. Returns whether a record changed.
+ */
+export function syncCoreFromIni(): boolean {
+  const records = store.installs();
+  let changed = false;
+  for (const r of records) {
+    if (r.status !== 'active' || r.route !== 'prism-core') continue;
+    const file = r.files.find((f) => /prism-core\.ini$/i.test(f.target));
+    if (!file || !exists(file.target)) continue;
+    let text: string;
+    try {
+      text = fs.readFileSync(file.target, 'utf8');
+    } catch {
+      continue;
+    }
+    if (file.sha256After && sha256Text(text) === file.sha256After) continue; // as the app wrote it
+    const ini: Record<string, string> = {};
+    for (const line of text.split(/\r?\n/)) {
+      const m = line.trim().match(/^(\w+)=(.*)$/);
+      if (m) ini[m[1].toLowerCase()] = m[2].trim();
+    }
+    const num = (k: string) => (ini[k] !== undefined && ini[k] !== '' && Number.isFinite(Number(ini[k])) ? Number(ini[k]) : undefined);
+    const next: Values = { ...(r.values ?? {}) };
+    const cadence = num('cadence'), passes = num('passes'), intensity = num('intensity'), guard = num('guard'), netScale = num('netscale'), async = num('async');
+    if (cadence !== undefined) next['prism-core.cadence'] = String(Math.round(cadence));
+    if (passes !== undefined) next['prism-core.passes'] = String(Math.round(passes));
+    if (intensity !== undefined) next['prism-core.intensity'] = Math.round(intensity * 100);
+    if (guard !== undefined) next['prism-core.guard'] = Math.round(guard * 100);
+    if (netScale !== undefined) next['prism-core.netScale'] = String(Math.round(netScale * 100));
+    if (async !== undefined) next['prism-core.async'] = async !== 0;
+    r.values = next;
+    file.sha256After = sha256Text(text);
+    changed = true;
+  }
+  if (changed) store.saveInstalls(records);
+  return changed;
+}
+
 /** Rewrites prism-core.ini of an active Core install; the running game re-reads it within a second. */
 export function updateCoreConfig(recordId: string, values: Values): InstallRecord {
   const records = store.installs();
@@ -767,7 +822,7 @@ export function updateCoreConfig(recordId: string, values: Values): InstallRecor
   const file = r.files.find((f) => /prism-core\.ini$/i.test(f.target));
   if (!file) throw new Error('安装记录里没有 prism-core.ini，请重新应用一次。');
   const merged = { ...resolveValues('core'), ...(r.values ?? {}), ...values, ...('prism-core.cadence' in values ? { 'prism-core.cadenceChosen': true } : {}) };
-  const content = coreIni(merged);
+  const content = coreIni(merged, panelLines(file.target));
   fs.writeFileSync(file.target, content, 'utf8');
   // Keep rollback's change check quiet: this edit is Prism's own.
   file.sha256After = sha256Text(content);

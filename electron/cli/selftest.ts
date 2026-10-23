@@ -40,6 +40,10 @@ async function main(): Promise<void> {
   assert(tierOf(resolveValues('flagship'))?.id === 'flagship' && tierOf(resolveValues('extreme'))?.id === 'extreme', 'Tiers: flagship and extreme are told apart by the network resolution');
   assert(tierOf(resolveValues('high'))?.id === 'high' && tierOf({ ...resolveValues('high'), 'prism-core.intensity': 205 }) === undefined, 'Tiers: values name their tier, a tweak makes them custom');
   assert(/^[\x00-\x7f]*$/.test(ini0), 'Core INI: ASCII only (GetPrivateProfileString reads it as ANSI)');
+  assert(/KeyOverlay=Home/.test(ini0), 'Core INI: the in-game panel opens with Home');
+  const kept = coreIni(resolveValues('high'), ['KeyOverlay=Insert', 'OverlayX=900', 'OverlayHud=1', 'SplitPos=0.620']);
+  assert(/KeyOverlay=Insert/.test(kept) && !/KeyOverlay=Home/.test(kept) && /OverlayX=900/.test(kept) && /OverlayHud=1/.test(kept) && /SplitPos=0\.620/.test(kept),
+    'Core INI: a rewrite keeps the in-game panel\'s own keys');
 
   const c5060 = nrCostFor('NVIDIA GeForce RTX 5060', false);
   assert(c5060?.source === 'published' && Math.abs(c5060.msPerMP - 4.54 * 0.56) < 1e-9 && Math.abs(c5060.fixedMs - 0.14 * 0.56) < 1e-9, 'NR cost: RTX 5060 uses the published figure');

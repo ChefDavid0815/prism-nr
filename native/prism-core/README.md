@@ -73,6 +73,8 @@ KeyCadence=F2
 KeyAsync=F3
 KeySplit=F4
 KeyCapture=F11
+KeyOverlay=Home  ; the in-game panel
+SplitPos=0.500   ; where the split view divides the picture, 0.02-0.98 (the panel drags it)
 ```
 
 Missing keys keep their defaults. Intensity and guard apply from the next network frame.
@@ -89,6 +91,45 @@ are experimental.
 | F3 | asynchronous network on / off |
 | F4 | split view: original left, Prism right |
 | F11 | capture one frame's original, input, network output and result to `prism-capture/` |
+| Home | the in-game panel (View + Y on a gamepad) |
+
+## In-game panel
+
+Home opens a panel drawn by Core itself on the swap chain, right before each present (generated
+frames included, so frame generation never smears it). It shows the last rendered frames as a
+barcode (one bar per frame, height = frame time; yellow at 1.5×, red at 2.5× the median), the
+rendered and displayed frame rates, the 1% low, Prism's own GPU time and the output, render and
+network sizes. Below are the tiers and every setting the app has (on/off, intensity, passes,
+cadence, network resolution, skin guard, split view, frame-rate corner), each with one line
+saying what it does. A change applies on the next frame and is saved to `prism-core.ini`; the
+app reads it back.
+
+Mouse, keyboard (↑↓ choose, ←→ change, Enter toggles, Esc or Home closes) and gamepad (View + Y
+opens and closes, d-pad or left stick, A toggles, B closes) all work. While it is open the game
+gets no mouse, key or gamepad input: Core answers the game's reads of keys, cursor, raw input
+and XInput with a neutral state, lets releases through so nothing stays held, and returns the
+cursor and its clip when the panel closes. Games that read pads through GameInput or
+Windows.Gaming.Input still see the pad.
+
+It draws in SDR, scRGB and HDR10 at the same apparent brightness (`OverlayNits`, 203 by default)
+and scales with the output height (1080p = 1×).
+
+```ini
+OverlayScale=1.0     ; on top of the resolution's scale, 0.5-3
+OverlayX=32          ; the panel's place (drag its title bar), in panel units
+OverlayY=32
+OverlayHud=0         ; 1: frame rate and frame time in a corner while the panel is closed
+OverlayHint=1        ; 0: no "Home opens the panel" note at start
+OverlayNits=203      ; the panel's white on HDR back buffers
+OverlayHdr=auto      ; auto, sdr, scrgb or hdr10
+OverlayMotion=1      ; 0: no wipes or slides
+OverlayBlockInput=1  ; 0: the game keeps its input while the panel is open
+OverlayPad=1         ; 0: no gamepad
+```
+
+`tests/overlay_demo.cpp` draws the panel over a still without a game and saves a PNG
+(`PRISM_OVERLAY_TEST=open,focus=N,pad,toast,hud,split` picks the state); `overlay_demo <still> live`
+opens a window to try it in.
 
 ## Build
 
@@ -103,8 +144,11 @@ bash native/prism-core/build.sh
 | `src/proxy/` | the `version.dll` loader |
 | `src/core.cpp` | NGX hooks (create / evaluate), feature tracking, logging |
 | `src/pipeline.cpp` | exposure, encode, network (sync and async), carry, bake, fill, guard, compose, recorder |
+| `src/overlay.cpp` | the in-game panel: its D3D12 renderer, DirectWrite glyph atlas, input, layout |
+| `src/font_mono_*.h` | JetBrains Mono (SIL OFL 1.1, `licenses/JetBrainsMono-OFL.txt`), made by `tools/font/woff2h.cjs` |
 | `src/ngx_param.h` | NGX parameter blocks by MSVC vtable slot |
 | `tests/nr_bench.cpp` | drives the signed network outside any game: cost, sequences, async overlap |
+| `tests/overlay_demo.cpp` | the in-game panel over a still, without a game |
 | `tests/nets_harness.cpp` | GPU check of the NETS shaders against the CPU reference |
 | `tests/shader_check.cpp` | compiles every runtime shader entry point at build time |
 | `tests/ab_run.cjs` | A/B runner: switches prism-core.ini settings in a running game and collects the statistics |
