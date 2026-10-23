@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.1 — 2026-10-23 · Denuvo games, steadier characters, sharper hair
+
+- Games protected by Denuvo Anti-Tamper (Crimson Desert crashed at start with Prism installed)
+  now work alongside it. The app recognises them by their executable's section names and loads
+  Prism Core late: nothing is loaded at start-up, and on the first press of Home in the game,
+  PrismLaunch.exe (set once as the game's Steam launch option) loads Core into the running game
+  the ordinary way and the panel opens. No game file is changed and the protection is not
+  touched. The app shows the launch option to copy, and reminds you to clear it after a rollback.
+  Other games install as before.
+- Fast-moving characters flicker less: last frame's edit, followed along the motion vectors and
+  checked by depth, is blended in within a narrow band around this frame's, so frame-to-frame
+  jitter is damped without trails (Steady, SteadyBand).
+- Hair, lashes and thin strands stay sharp at the 100% and 150% sizes: the edit may no longer
+  take away more than 15% of the native picture's fine contrast (DetailKeep).
+- Upgrading from before 1.2: every-frame installs without a resolution setting keep native-like
+  detail (150%) instead of dropping to 62.5%.
+
 ## 1.3.0 — 2026-10-23 · in-game panel, colour looks, 旗舰 at 100% (+30% against RenoDX 8.5)
 
 - In-game panel: Home (or View + Y on a gamepad) opens Prism Core's own panel in the game. It

@@ -70,6 +70,8 @@ export interface GameProfile {
    * from the folder (removed, bypassed, or the game not fully installed).
    */
   antiCheatKnown?: string;
+  /** Prism Core loads late in this game (it refuses a proxy DLL at start), whatever the EXE shows. */
+  coreLate?: boolean;
 }
 
 /**
@@ -84,6 +86,10 @@ export const PROFILES: GameProfile[] = [
     // on every frame, 2 passes, 75%): no carry, no trail; 1 pass looked washed out even at 280%.
     coreTier: 'flagship',
     coreNotes: ['地平线 6 专项：默认旗舰档，网络每帧跑 2 遍、不复用旧结果，高速时车身周围不会拖影。建议在游戏里开 2× 帧生成。隔帧的档位（高画质及以下）在这款游戏里会有拖影。'],
+  },
+  {
+    key: 'crimson-desert', title: '红色沙漠', steamAppIds: [], names: /crimson\s*desert|红色沙漠/i, style: 'realistic', preset: 'core', values: {}, notes: [],
+    coreLate: true, coreNotes: ['红色沙漠的 D 加密不接受游戏目录里的加载器（会闪退），Prism Core 改为游戏启动后再加载：按提示设置 Steam 启动项，进游戏后按 Home。'],
   },
   { key: 'f1-25', title: 'F1 25', steamAppIds: ['3059520'], names: /^f1[^a-z0-9]*25\b/i, style: 'realistic', preset: 'flagship', values: {}, notes: [], antiCheatKnown: 'EA Javelin' },
   { key: 'fc26', title: 'EA SPORTS FC 26', steamAppIds: [], names: /\bfc\s*26\b/i, style: 'realistic', preset: 'flagship', values: {}, notes: [], antiCheatKnown: 'EA Javelin' },

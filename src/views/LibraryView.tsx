@@ -262,6 +262,8 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justDone, setJustDone] = useState(false);
+  // After rolling back a late-loading install: the Steam launch option must go too.
+  const [leftover, setLeftover] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [tierNonce, setTierNonce] = useState(0);
   // Prism Core settings: start from what is installed, so the panel shows the game's live values.
@@ -317,6 +319,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
     if (!record) return;
     try {
       await api.rollback(record.id);
+      setLeftover(record.launchOption ?? null);
       setJustDone(false);
       onProgress(null);
       onRolledBack();
@@ -474,12 +477,16 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
           </div>
         )}
         {error && <p className="foot-error" role="alert">{error}</p>}
+        {leftover && !record && (
+          <p className="foot-error" role="status">已还原。请到 Steam 里把这个游戏的启动选项清空（原来填的是 {leftover}），否则 Steam 会找不到启动器、游戏打不开。</p>
+        )}
         {(justDone || record) && !busy && (
           <div className="ready">
             <p className="ready-title">
               <i style={{ background: TONE_COLOR.ready }} />
               已就绪{record ? `：${recordName}` : ''}
             </p>
+            {(plan?.lateLoad?.launchOption ?? record?.launchOption) && <LaunchOption value={(plan?.lateLoad?.launchOption ?? record?.launchOption)!} />}
             {plan?.manualSteps.length ? (
               <ol className="ready-steps">
                 {plan.manualSteps.map((s) => (
@@ -503,6 +510,26 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
         </div>
       </footer>
     </aside>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** The Steam launch option of a late-loading (Denuvo) install, ready to copy. */
+function LaunchOption({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    });
+  };
+  return (
+    <div className="launch-option">
+      <span className="launch-option-label">Steam 启动选项</span>
+      <code className="launch-option-value">{value}</code>
+      <button className="btn btn-line btn-small" onClick={copy}>{copied ? '已复制' : '复制'}</button>
+    </div>
   );
 }
 

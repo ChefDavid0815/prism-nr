@@ -18,7 +18,8 @@ g++ -std=c++20 -O2 -Wall -Wextra -Wno-cast-function-type -shared -o build/prism_
   -Isrc -Iexternal/minhook/include -ld3d12 -ldxgi -ldwrite -static -static-libgcc -static-libstdc++ 2>&1
 g++ -std=c++20 -O2 -Wall -Wno-cast-function-type -shared -o build/version.dll src/proxy/version.cpp src/proxy/version.def \
   -static -static-libgcc -static-libstdc++ 2>&1
-echo "built build/prism_nvngx.dll build/version.dll"
+g++ -std=c++20 -O2 -Wall -Wextra -municode -mwindows -o build/PrismLaunch.exe src/launch/prism_launch.cpp -static -static-libgcc -static-libstdc++ 2>&1
+echo "built build/prism_nvngx.dll build/version.dll build/PrismLaunch.exe"
 # Runtime shaders: compile every entry point now, so errors show at build time.
 g++ -std=c++20 -O1 -o build/shader_check.exe tests/shader_check.cpp -static -static-libgcc -static-libstdc++ 2>&1
 node tools/extract_shaders.cjs

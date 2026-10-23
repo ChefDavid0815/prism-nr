@@ -81,6 +81,12 @@ export interface GameAnalysis {
   dlssFrameGen: boolean;
   /** The executable imports VERSION.dll, so Prism Core's loader is picked up at start-up. */
   importsVersionDll?: boolean;
+  /**
+   * Denuvo Anti-Tamper found in the executable (its section names). Such games may refuse a proxy
+   * DLL in their folder, so Prism Core loads late (PrismLaunch.exe) instead; nothing about the
+   * protection is touched.
+   */
+  denuvo?: { sections: string[] };
   antiCheat: AntiCheatHit[];
   /** Anti-cheat this game lets players avoid offline: installable after the user accepts the risk. */
   antiCheatOptIn?: { names: string[]; how: string };
@@ -208,6 +214,8 @@ export interface InstallPlan {
   profileNotes: string[];
   /** Set for games with anti-cheat that can be avoided offline: install needs the user's consent. */
   riskConsent?: { names: string[]; how: string; accepted: boolean };
+  /** Prism Core loads late in this game (Denuvo): the Steam launch option the user sets. */
+  lateLoad?: { launchOption: string; why: string };
 }
 
 export interface InstallProgress {
@@ -243,6 +251,8 @@ export interface InstallRecord {
   rollbackNotes?: string[];
   /** When the user accepted the anti-cheat risk for this install. */
   riskAcceptedAt?: string;
+  /** Late-loading install (Denuvo): the Steam launch option it needs, to remove on rollback. */
+  launchOption?: string;
 }
 
 export interface DiagnosticsReport {

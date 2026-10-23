@@ -2,11 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AntiCheatHit, GameAnalysis, GameEntry, GraphicsApi, Route } from '../shared/types';
 import { matchProfile } from '../shared/profiles';
-import { readPe } from './pe';
+import { denuvoSections, readPe } from './pe';
 import { exists, log, psJson, psQuote, walk } from './util';
 
 /** Bumped when the analysis gains a field or a route, so cached analyses are redone. */
-export const ANALYSIS_SCHEMA = 4;
+export const ANALYSIS_SCHEMA = 5;
 
 // Executables that are never the game itself.
 const NOT_GAME_EXE =
@@ -197,6 +197,7 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
     dlssFrameGen,
     antiCheatOptIn: optInApplies ? optIn : undefined,
     importsVersionDll: pe ? pe.imports.includes('version.dll') : undefined,
+    denuvo: pe && denuvoSections(pe).length ? { sections: denuvoSections(pe) } : undefined,
     antiCheat,
     existing,
     routes,

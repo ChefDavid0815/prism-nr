@@ -2,7 +2,8 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { coreIni, panelLines, setCoreDir, setShaderDir, upgradeCoreInstalls } from '../core/installer';
+import { coreIni, launchOptionFor, panelLines, setCoreDir, setShaderDir, upgradeCoreInstalls } from '../core/installer';
+import { denuvoSections } from '../core/pe';
 import { store } from '../core/store';
 import type { InstallRecord } from '../shared/types';
 import { parseVdf } from '../core/scanner';
@@ -74,6 +75,10 @@ async function main(): Promise<void> {
   initStore(path.join(os.tmpdir(), 'prism-nr-selftest'));
   setShaderDir(path.join(__dirname, '..', '..', 'plugins', 'prism-shaders', 'Shaders'));
   setCoreDir(path.join(__dirname, '..', '..', 'native', 'prism-core', 'build'));
+  // Denuvo games load Core late: told by the EXE's section names.
+  assert(denuvoSections({ bitness: 'x64', imports: [], isGui: true, sections: ['.text', '.xtext', '.rdata', '.xtls'] }).join(',') === '.xtext,.xtls' &&
+    denuvoSections({ bitness: 'x64', imports: [], isGui: true, sections: ['.text', '.rdata', '.detourc', '.xbld'] }).length === 0, 'Denuvo: found by its section names, and only by them');
+  assert(launchOptionFor('E:\\Games\\Crimson Desert\\bin64') === '"E:\\Games\\Crimson Desert\\bin64\\PrismLaunch.exe" %command%', 'Late load: the Steam launch option quotes the launcher path');
   // 1.2 installs keep working in 1.3: the old network resolution key moves to the new sizes.
   {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-nr-upgrade-'));
@@ -88,6 +93,10 @@ async function main(): Promise<void> {
       rec('old-extreme', 'extreme', { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 210, 'prism-core.guard': 100, 'prism-core.netScale': '100' }),
       rec('old-flagship', 'flagship', { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 240, 'prism-core.guard': 100, 'prism-core.netScale': '75' }),
       rec('old-custom', 'flagship', { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '3', 'prism-core.intensity': 180, 'prism-core.guard': 50, 'prism-core.netScale': '100' }),
+      // From before 1.2: no resolution key at all; Core ran native then.
+      rec('pre12-extreme', 'high', { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 210, 'prism-core.guard': 100 }),
+      rec('pre12-every', 'high', { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '1', 'prism-core.intensity': 280, 'prism-core.guard': 100 }),
+      rec('pre12-async', 'high', { 'prism-core.cadence': '2', 'prism-core.async': true, 'prism-core.passes': '2', 'prism-core.intensity': 200, 'prism-core.guard': 100 }),
     ]);
     upgradeCoreInstalls([]);
     const after = Object.fromEntries(store.installs().map((r) => [r.id, r]));
@@ -95,6 +104,9 @@ async function main(): Promise<void> {
     assert(tierOf(after['old-extreme'].values!)?.id === 'extreme' && /NetScale=0\.7655/.test(ini('old-extreme')) && /Intensity=2\.40/.test(ini('old-extreme')), 'Upgrade: a 1.2 极致 install becomes 1.3 极致 (150%)');
     assert(tierOf(after['old-flagship'].values!)?.id === 'flagship' && /NetScale=0\.6250/.test(ini('old-flagship')), 'Upgrade: a 1.2 旗舰 install becomes 1.3 旗舰 (100%)');
     assert(after['old-custom'].values!['prism-core.netSize'] === '150' && after['old-custom'].values!['prism-core.passes'] === '3' && after['old-custom'].values!['prism-core.netScale'] === undefined, 'Upgrade: tuned values stay, native becomes 150%');
+    assert(tierOf(after['pre12-extreme'].values!)?.id === 'extreme' && /NetScale=0\.7655/.test(ini('pre12-extreme')), 'Upgrade: a pre-1.2 every-frame 极致 (no resolution key) becomes 1.3 极致');
+    assert(after['pre12-every'].values!['prism-core.netSize'] === '150' && Number(after['pre12-every'].values!['prism-core.intensity']) === 280 && /NetScale=0\.7655/.test(ini('pre12-every')), 'Upgrade: a pre-1.2 tuned every-frame install keeps its values at 150%, not 62.5%');
+    assert(after['pre12-async'].values!['prism-core.netSize'] === undefined && /NetScale=1\.00/.test(ini('pre12-async')), 'Upgrade: asynchronous installs are left as they are (native)');
     store.saveInstalls(before);
     fs.rmSync(dir, { recursive: true, force: true });
   }

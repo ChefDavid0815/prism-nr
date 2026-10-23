@@ -1,6 +1,8 @@
-// Prism Core (prism_nvngx.dll): loaded by the version.dll proxy. Finds the NGX modules as they
-// load, hooks their D3D12 create / evaluate entry points, and sees every DLSS evaluation the
-// game makes: colour, output, motion vectors, depth, sizes, jitter, reset.
+// Prism Core (prism_nvngx.dll): loaded by the version.dll proxy at start-up, or late, by
+// PrismLaunch.exe into a game that is already running (games whose anti-tamper refuses a proxy DLL
+// in their folder; nothing about the protection is touched). Finds the NGX modules as they load
+// (or already loaded), hooks their D3D12 create / evaluate entry points, and sees every DLSS
+// evaluation the game makes: colour, output, motion vectors, depth, sizes, jitter, reset.
 //
 // Stage 1: observe and log only. The picture is not touched.
 #include <windows.h>
@@ -61,6 +63,8 @@ std::mutex featureMutex;
 std::unordered_map<const ngx::Handle*, unsigned> featureOf;
 thread_local int depth = 0;  // nested NGX calls (module copies forward into each other)
 std::atomic<uint64_t> srEvaluations{0};
+std::atomic<bool> pipelineStarted{false};  // PipelineInit ran (at the game's upscale create, or late)
+bool lateLoad = false;                     // loaded into a game that had already started its renderer
 
 const char* FormatName(DXGI_FORMAT f) {
   switch (f) {
@@ -91,16 +95,41 @@ std::string Describe(const void* p, const char* key) {
   return buf;
 }
 
-void Observe(const char* module, ID3D12GraphicsCommandList* list, const ngx::Handle* h, const void* p) {
-  unsigned feature = 0;
+bool IsUpscale(unsigned f) { return f == ngx::kFeatureSuperSampling || f == ngx::kFeatureRayReconstruction; }
+
+unsigned FeatureOf(const ngx::Handle* h) {
+  std::lock_guard<std::mutex> lock(featureMutex);
+  auto it = featureOf.find(h);
+  return it != featureOf.end() ? it->second : (h ? h->id : 0);
+}
+
+// Super resolution (1) or ray reconstruction (13, DLSS-D): both upscale the frame and carry
+// colour, output, motion vectors and depth. An evaluation whose create Core never saw (loaded late,
+// or created through another module copy) is told by exactly those inputs; the network's own
+// keys are DLSSNR.*.
+bool Upscale(const ngx::Handle* h, const void* p) {
   {
     std::lock_guard<std::mutex> lock(featureMutex);
     auto it = featureOf.find(h);
-    feature = it != featureOf.end() ? it->second : (h ? h->id : 0);
+    if (it != featureOf.end()) return IsUpscale(it->second);
   }
-  // Super resolution (1) or ray reconstruction (13, DLSS-D): both upscale the frame and carry
-  // colour, output, motion vectors and depth.
-  if (feature != ngx::kFeatureSuperSampling && feature != ngx::kFeatureRayReconstruction) return;
+  ID3D12Resource* r = nullptr;
+  return ngx::GetRes(p, "Color", &r) && ngx::GetRes(p, "Output", &r) && ngx::GetRes(p, "MotionVectors", &r) && ngx::GetRes(p, "Depth", &r);
+}
+
+// The game's DLSS create flags (depth inverted, low-resolution motion vectors, ...) when Core
+// arrives after the create: games that reuse one parameter block still carry them; otherwise
+// LateCreateFlags from prism-core.ini, or the common reverse-Z, low-resolution-vector setup.
+int LateCreateFlags(const void* p) {
+  int flags = 0;
+  if (ngx::GetI(p, "DLSS.Feature.Create.Flags", &flags) && flags) return flags;
+  const std::wstring ini = ModuleDir(nullptr) + L"prism-core.ini";
+  return int(GetPrivateProfileIntW(L"Prism Core", L"LateCreateFlags", (1 << 1) | (1 << 3), ini.c_str()));
+}
+
+void Observe(const char* module, ID3D12GraphicsCommandList* list, const ngx::Handle* h, const void* p) {
+  if (!Upscale(h, p)) return;
+  const unsigned feature = FeatureOf(h);
   const uint64_t n = ++srEvaluations;
   if (n > 5 && n % 1000 != 0) return;
   unsigned w = 0, hh = 0, ow = 0, oh = 0;
@@ -118,17 +147,18 @@ void Observe(const char* module, ID3D12GraphicsCommandList* list, const ngx::Han
       Describe(p, "MotionVectors").c_str(), Describe(p, "Depth").c_str());
 }
 
-bool IsUpscale(unsigned f) { return f == ngx::kFeatureSuperSampling || f == ngx::kFeatureRayReconstruction; }
-
-unsigned FeatureOf(const ngx::Handle* h) {
-  std::lock_guard<std::mutex> lock(featureMutex);
-  auto it = featureOf.find(h);
-  return it != featureOf.end() ? it->second : (h ? h->id : 0);
-}
-
 // After the game's upscale: hand the frame to Prism's pipeline.
 void Process(ID3D12GraphicsCommandList* list, const ngx::Handle* h, const void* p) {
-  if (!IsUpscale(FeatureOf(h)) || !list) return;
+  if (!list || !Upscale(h, p)) return;
+  if (!pipelineStarted.exchange(true)) {
+    // Core arrived after the game created its upscale (late load): start from this evaluation.
+    const int flags = LateCreateFlags(p);
+    ID3D12Device* dev = nullptr;
+    list->GetDevice(__uuidof(ID3D12Device), (void**)&dev);
+    PipelineInit(ModuleDir(nullptr), flags, &Log, dev);
+    if (dev) dev->Release();
+    Log("upscale already running when Core arrived: starting from its evaluation, create flags 0x%x", flags);
+  }
   UpscaleCall c = {};
   c.list = list;
   ID3D12Resource* color = nullptr;
@@ -166,6 +196,7 @@ ngx::Result HookCreate(ID3D12GraphicsCommandList* list, unsigned feature, void* 
     ID3D12Device* dev = nullptr;
     if (list) list->GetDevice(__uuidof(ID3D12Device), (void**)&dev);
     PipelineInit(ModuleDir(nullptr), flags, &Log, dev);
+    pipelineStarted = true;
     if (dev) dev->Release();
     Log("upscale feature %u created, flags 0x%x", feature, flags);
   }
@@ -219,7 +250,10 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
     DisableThreadLibraryCalls(self);
     const std::wstring dir = ModuleDir(self);
     logFile = _wfopen((dir + L"prism-core.log").c_str(), L"w");
-    Log("Prism Core 1.3.0 (Home panel, F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded");
+    // Late: the game had already created its renderer and loaded NGX before Core.
+    lateLoad = GetModuleHandleW(L"d3d12.dll") && (GetModuleHandleA("_nvngx.dll") || GetModuleHandleA("nvngx_dlss.dll"));
+    Log("Prism Core 1.3.1 (Home panel, F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded%s",
+        lateLoad ? " late, into a running game" : "");
     if (MH_Initialize() != MH_OK) { Log("MinHook init failed"); return TRUE; }
     CloseHandle(CreateThread(nullptr, 0, Watch, nullptr, 0, nullptr));
   }

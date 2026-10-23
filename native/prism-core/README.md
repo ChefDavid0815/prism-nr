@@ -52,6 +52,26 @@ Prism Core preset, apply. Rolling back in the app removes everything. By hand:
 
 To remove it, delete the two DLLs (and `prism-core.ini` if you made one).
 
+### Games with Denuvo Anti-Tamper: late loading
+
+Some Denuvo-protected games refuse a proxy DLL in their folder and crash at start (Crimson
+Desert). Core coexists with the protection by not being there at start-up; nothing about the
+protection is touched and no game file is changed. The app recognises these games (the EXE carries
+Denuvo's `.xtext` / `.xcode` / `.xtls` / `.sxdata` sections) and installs this way by itself. By hand:
+
+1. Copy `PrismLaunch.exe`, `prism_nvngx.dll`, `nvngx_dlssnr.dll` and `prism-core.ini` next to the
+   game's executable. Not `version.dll`.
+2. Steam: right-click the game → Properties → General → Launch Options:
+   `"<game folder>\PrismLaunch.exe" %command%`
+3. Start the game as usual. Once in play, press Home: PrismLaunch.exe loads `prism_nvngx.dll` into
+   the running game with `LoadLibraryW` (it shows in the game's module list like any DLL) and the
+   panel opens. `prism-launch.log` beside it says what happened.
+
+Core then starts from the game's next DLSS evaluation instead of its create. Its create flags come
+from the evaluation's parameters where the game reuses them, otherwise `LateCreateFlags` (default
+`10`: low-resolution motion vectors, inverted depth). To remove it, clear the launch option first,
+then delete the files.
+
 ## Settings: prism-core.ini
 
 Core reads `prism-core.ini` beside the game at start and again whenever the file changes (it checks
@@ -74,6 +94,10 @@ UpFilter=1       ; how it comes back: 1 guided filter (flickers least), 0 joint 
 NetScaleAuto=0   ; 1: the resolution follows FpsTarget, from NetScale down to NetScaleMin
 FpsTarget=60     ; rendered frames per second (the panel's 目标帧率); frame generation multiplies what is shown
 NetScaleMin=0.50
+Steady=0.5       ; temporal steadying: the weight of last frame's edit (motion-followed, depth-checked), 0 off
+SteadyBand=0.06  ; how far (stops) last frame's edit may pull this frame's: the most a trail could be
+DetailKeep=0.85  ; the share of fine contrast (hair, lashes) the reduced edit must leave, 0-1
+LateCreateFlags=10 ; late loading only: the game's DLSS create flags when its evaluation does not carry them
 KeyToggle=F8     ; F1-F24, a virtual-key number, or none
 KeyCadence=F2
 KeyAsync=F3

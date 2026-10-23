@@ -5,6 +5,16 @@ export interface PeInfo {
   bitness: Bitness;
   imports: string[];
   isGui: boolean;
+  /** Section names, as the section table spells them (.text, .rdata, ...). */
+  sections: string[];
+}
+
+/** Section names that Denuvo Anti-Tamper's protected executables carry. */
+const DENUVO_SECTIONS = ['.xtext', '.xcode', '.xtls', '.sxdata'];
+
+/** Denuvo's sections among a PE's (empty when there are none). */
+export function denuvoSections(pe: PeInfo): string[] {
+  return pe.sections.filter((s) => DENUVO_SECTIONS.includes(s.toLowerCase()));
 }
 
 function readAt(fd: number, offset: number, length: number): Buffer {
@@ -52,10 +62,14 @@ export function readPe(file: string): PeInfo | null {
     const secOff = optOff + optSize;
     const secs = readAt(fd, secOff, numSections * 40);
     const sections: { va: number; vsize: number; raw: number; rawSize: number }[] = [];
+    const names: string[] = [];
     for (let i = 0; i < numSections; i++) {
       const b = i * 40;
       if (b + 40 > secs.length) break;
       sections.push({ vsize: secs.readUInt32LE(b + 8), va: secs.readUInt32LE(b + 12), rawSize: secs.readUInt32LE(b + 16), raw: secs.readUInt32LE(b + 20) });
+      const raw = secs.subarray(b, b + 8);
+      const end = raw.indexOf(0);
+      names.push(raw.subarray(0, end < 0 ? 8 : end).toString('latin1'));
     }
     const rvaToOff = (rva: number): number | null => {
       for (const s of sections) {
@@ -92,7 +106,7 @@ export function readPe(file: string): PeInfo | null {
       }
     }
     const bitness: Bitness = machine === 0x8664 || machine === 0xaa64 ? 'x64' : machine === 0x14c ? 'x86' : is64 ? 'x64' : 'unknown';
-    return { bitness, imports, isGui: subsystem === 2 };
+    return { bitness, imports, isGui: subsystem === 2, sections: names };
   } catch {
     return null;
   } finally {

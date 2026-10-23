@@ -31,6 +31,7 @@ function createPreviewApi(): PrismApi {
     { id: 'g8', name: 'Apex Legends', store: 'steam', installDir: 'D:\\Games\\Apex' },
     { id: 'g9', name: 'Downloads', store: 'manual', installDir: 'C:\\Users\\me\\Downloads' },
     { id: 'g10', name: 'NBA 2K27', store: 'steam', installDir: 'E:\\Steam\\steamapps\\common\\NBA 2K27' },
+    { id: 'g11', name: 'Crimson Desert', store: 'steam', installDir: 'E:\\Steam\\steamapps\\common\\Crimson Desert' },
   ];
   const a = (id: string, partial: Partial<GameAnalysis>): GameAnalysis => ({
     gameId: id,
@@ -59,6 +60,7 @@ function createPreviewApi(): PrismApi {
     g6: a('g6', { exe: 'D:\\Epic\\AlanWake2\\AlanWake2.exe' }),
     g7: a('g7', { exe: 'AceCombat8.exe', apis: ['dx12'], nativeDlss: { present: false }, antiCheat: [{ name: 'Easy Anti-Cheat', evidence: 'EasyAntiCheat' }], routes: [], recommendedRoute: 'blocked', routeReason: '检测到 Easy Anti-Cheat。注入 DLL 可能导致封号，Prism 不会在这个游戏里安装。' }),
     g9: a('g9', { exe: null, apis: [], nativeDlss: { present: false }, streamline: false, dlssFrameGen: false, routes: [], recommendedRoute: 'unknown', routeReason: '没有识别出图形 API。可能是启动器而不是游戏本体。' }),
+    g11: a('g11', { exe: 'E:\\Steam\\steamapps\\common\\Crimson Desert\\bin64\\CrimsonDesert.exe', denuvo: { sections: ['.xtext', '.xtls'] } }),
     g10: a('g10', { exe: 'NBA2K27.exe', antiCheat: [{ name: 'Easy Anti-Cheat', evidence: 'EasyAntiCheat' }], antiCheatOptIn: { names: ['Easy Anti-Cheat'], how: '只在离线模式下使用：不要进入 MyCAREER 在线、公园、排位、MyTEAM 等任何联网模式。要联网玩之前，先在 Prism 里点"还原"。' }, routeReason: '检测到 Easy Anti-Cheat，这款游戏可以离线玩、不启动反作弊。了解并接受风险后才能启用。' }),
     g8: a('g8', { exe: 'r5apex.exe', apis: ['dx12', 'dx11'], nativeDlss: { present: false }, antiCheat: [{ name: 'Easy Anti-Cheat', evidence: 'EasyAntiCheat' }], routes: [], recommendedRoute: 'blocked', routeReason: '检测到 Easy Anti-Cheat。注入 DLL 可能导致封号，Prism 不会在这个游戏里安装。' }),
   };
@@ -108,6 +110,7 @@ function createPreviewApi(): PrismApi {
         warnings: [...an.warnings, ...(Number(values['prism-core.passes']) >= 3 ? ['3 遍以上是实验性质的游乐场：开销成倍增加，画面容易过度，不建议实际游玩。'] : []), 'Prism Core 是实验性预览，目前在 CONTROL Resonant 和地平线 6 上实测过。'],
         profileNotes: profile?.coreNotes ?? [],
         riskConsent: an.antiCheatOptIn ? { ...an.antiCheatOptIn, accepted: req.acceptRisk === true } : undefined,
+        lateLoad: an.denuvo && an.exe ? { launchOption: `"${an.exe.slice(0, an.exe.lastIndexOf('\\') + 1)}PrismLaunch.exe" %command%`, why: '检测到 D 加密' } : undefined,
       };
       return plan;
     },
@@ -122,7 +125,7 @@ function createPreviewApi(): PrismApi {
         await delay(420);
       }
       listeners.forEach((l) => l({ gameId: plan.gameId, stage: 'done', message: '已就绪，可以直接启动游戏', fraction: 1 }));
-      const rec: InstallRecord = { id: String(Date.now()), gameId: plan.gameId, gameName: plan.gameName, installDir: '', route: plan.route, preset: plan.preset, plugins: plan.plugins, values: plan.values, files: new Array(17).fill(0).map((_, i) => ({ target: `file${i}`, backup: i < 3 ? 'b' : null, sha256After: '' })), installedAt: new Date().toISOString(), status: 'active' };
+      const rec: InstallRecord = { launchOption: plan.lateLoad?.launchOption, id: String(Date.now()), gameId: plan.gameId, gameName: plan.gameName, installDir: '', route: plan.route, preset: plan.preset, plugins: plan.plugins, values: plan.values, files: new Array(17).fill(0).map((_, i) => ({ target: `file${i}`, backup: i < 3 ? 'b' : null, sha256After: '' })), installedAt: new Date().toISOString(), status: 'active' };
       installs = [rec, ...installs.map((r) => (r.gameId === plan.gameId && r.status === 'active' ? { ...r, status: 'superseded' as const } : r))];
       return rec;
     },

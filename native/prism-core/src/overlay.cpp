@@ -1563,6 +1563,12 @@ void OverlayPresent(IDXGISwapChain* sc) {
     HMODULE xi = LoadLibraryW(L"xinput1_4.dll");
     if (xi) padRead = (PadStateFn)(void*)GetProcAddress(xi, "XInputGetState");
     panel.startedAt = Now();
+    // Loaded late by PrismLaunch.exe on a press of the panel key: that press was for the panel.
+    {
+      wchar_t name[64];
+      std::swprintf(name, 64, L"Local\\PrismCoreOpenPanel-%lu", GetCurrentProcessId());
+      if (HANDLE e = OpenEventW(SYNCHRONIZE, FALSE, name)) { CloseHandle(e); panel.open = true; panel.openedAt = Now(); panel.hinted = true; }
+    }
     TestSetup();
     LOG("panel ready (%ls opens it, View + Y on a gamepad)", KeyName(cfg.key));
   }

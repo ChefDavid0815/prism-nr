@@ -42,6 +42,15 @@ const PRESET_FILE = 'PrismNR.ini';
 const SHADER_SUBDIR = path.join('reshade-shaders', 'Shaders', 'PrismNR');
 const CORE_INI = 'prism-core.ini';
 const CORE_FILES = ['version.dll', 'prism_nvngx.dll'];
+/** Late loading (Denuvo games): the launcher instead of the version.dll loader. */
+const LATE_FILES = ['PrismLaunch.exe', 'prism_nvngx.dll'];
+/** Every Core file an install may carry, lower case (what an upgrade refreshes). */
+const CORE_ALL = ['version.dll', 'prism_nvngx.dll', 'prismlaunch.exe'];
+
+/** The Steam launch option a late-loading install needs. */
+export function launchOptionFor(exeDir: string): string {
+  return `"${path.join(exeDir, 'PrismLaunch.exe')}" %command%`;
+}
 
 /** A version.dll that loads prism_nvngx.dll is Prism Core's loader; anything else belongs to another mod. */
 function isPrismLoader(file: string): boolean {
@@ -204,14 +213,24 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const lock = tierLocked(PRESETS.find((p) => p.id === preset)!, gpu?.name);
   if (lock) blockers.push(lock);
   if (Number(values['prism-core.passes'] ?? 2) >= 3) warnings.push('3 遍以上是实验性质的游乐场：开销成倍增加，画面容易过度，不建议实际游玩。');
+  // Denuvo games may refuse a proxy DLL in their folder (Crimson Desert crashes at start with it):
+  // Core loads late there, after the game has started, through PrismLaunch.exe. Nothing about the
+  // protection is touched.
+  const late = route === 'prism-core' && Boolean(analysis.denuvo || profile?.coreLate);
+  let lateLoad: InstallPlan['lateLoad'];
   if (route === 'prism-core' && analysis.exe) {
     const exeDir = path.dirname(analysis.exe);
     const loader = path.join(exeDir, 'version.dll');
-    if (exists(loader) && !isPrismLoader(loader))
+    if (!late && exists(loader) && !isPrismLoader(loader))
       blockers.push('游戏目录里已有别的 version.dll（可能是其他 Mod）。Prism Core 的加载器也叫这个名字，为避免弄坏那个 Mod，这次不安装。');
-    if (CORE_FILES.some((f) => !exists(path.join(coreDir, f)))) blockers.push('这个 Prism NR 安装包里缺少 Prism Core 文件，请重新安装 Prism NR。');
-    if (analysis.importsVersionDll === false)
+    if ((late ? LATE_FILES : CORE_FILES).some((f) => !exists(path.join(coreDir, f)))) blockers.push('这个 Prism NR 安装包里缺少 Prism Core 文件，请重新安装 Prism NR。');
+    if (!late && analysis.importsVersionDll === false)
       warnings.push('主程序没有直接导入 version.dll，Prism Core 可能不会被加载。启用后进一次游戏，游戏目录里出现 prism-core.log 就说明加载成功。');
+    if (late) {
+      const why = analysis.denuvo ? `检测到 D 加密（Denuvo，主程序里有 ${analysis.denuvo.sections.join('、')} 段）` : '这个游戏已知不接受游戏目录里的加载器';
+      lateLoad = { launchOption: launchOptionFor(exeDir), why };
+      warnings.push(`${why}。为了和它共存，Prism Core 不在游戏启动时加载，改为进游戏后按 Home 再加载（不改游戏文件、不碰 D 加密）。启用后需要在 Steam 里设置一次启动项，下方会给出要填的内容。`);
+    }
     const ours = new Set(store.installs().filter((r) => r.gameId === game.id && r.status === 'active').flatMap((r) => r.files.map((x) => x.target.toLowerCase())));
     const addons = conflictingAddons(exeDir).filter((a) => !ours.has(a.toLowerCase()));
     if (addons.length) warnings.push(`检测到 ${addons.map((a) => path.basename(a)).join('、')}，它和 Prism Core 挂钩同一个 DLSS 调用。启用时会先移走，还原时放回。`);
@@ -227,10 +246,14 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const needs: PlanNeed[] = [];
   if (existsAnyPrevious(game.id)) steps.push('还原这个游戏上一次的 Prism 安装');
   steps.push('备份游戏目录里会被覆盖的文件');
-  steps.push('部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini');
+  steps.push(late ? '部署 Prism Core（PrismLaunch.exe 启动器和 prism_nvngx.dll，游戏启动时不加载任何文件），写入 prism-core.ini' : '部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini');
   steps.push(`复制${nr?.bundled ? ' Prism NR 自带的' : '本机的'} NVIDIA 签名版 nvngx_dlssnr.dll${nr?.version ? `（${nr.version}）` : ''}`);
   steps.push('写入安装清单，之后可以一键还原');
 
+  if (lateLoad) {
+    manualSteps.push(`在 Steam 库里右键这个游戏 → 属性 → 通用 → 启动选项，填入：${lateLoad.launchOption}`);
+    manualSteps.push('正常启动游戏，进入游戏画面后按一次 Home：Prism Core 这时才加载，面板会自动打开。');
+  }
   manualSteps.push('在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。');
   if (plugins.includes('framegen') && values['framegen.mode'] !== 'off') manualSteps.push(`在游戏设置或 NVIDIA App 里开启 ${values['framegen.mode']} 帧生成。`);
   manualSteps.push('游戏里按 F8 开关 Prism Core、F4 分屏对比原画。档位、遍数和强度在这里调，游戏运行中约 1 秒内生效。');
@@ -252,6 +275,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
     blockers,
     warnings,
     profileNotes: profile?.coreNotes ?? [],
+    lateLoad,
   };
 }
 
@@ -454,7 +478,7 @@ function buildOps(plan: InstallPlan, analysis: GameAnalysis, comps: Components, 
   ops.push({ kind: 'copy', from: nr.path, to: path.join(exeDir, 'nvngx_dlssnr.dll'), label: 'NVIDIA 神经渲染运行库' });
 
   if (plan.route === 'prism-core') {
-    for (const f of CORE_FILES) ops.push({ kind: 'copy', from: path.join(coreDir, f), to: path.join(exeDir, f), label: `Prism Core：${f}` });
+    for (const f of plan.lateLoad ? LATE_FILES : CORE_FILES) ops.push({ kind: 'copy', from: path.join(coreDir, f), to: path.join(exeDir, f), label: `Prism Core：${f}` });
     ops.push({ kind: 'write', to: path.join(exeDir, CORE_INI), content: coreIni(plan.values), label: 'Prism Core 设置' });
     for (const a of conflictingAddons(exeDir)) ops.push({ kind: 'remove', to: a, label: `移走 ${path.basename(a)}` });
     return { ops, warnings };
@@ -679,12 +703,13 @@ export async function runInstall(
     status: 'active',
     rollbackNotes: warnings.length ? warnings : undefined,
     riskAcceptedAt: plan.riskConsent?.accepted ? new Date().toISOString() : undefined,
+    launchOption: plan.lateLoad?.launchOption,
   };
   store.saveInstalls([record, ...records]);
   const settings = store.settings();
   settings.styles[game.id] = plan.style;
   store.saveSettings(settings);
-  emit('done', '已就绪，可以直接启动游戏', 1);
+  emit('done', plan.lateLoad ? '已就绪：先在 Steam 里设置启动项，再启动游戏' : '已就绪，可以直接启动游戏', 1);
   log(`install ${game.name}: ${files.length} files, route ${plan.route}`);
   return record;
 }
@@ -719,7 +744,7 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
     const notes: string[] = [];
     for (const f of r.files) {
       const name = path.basename(f.target).toLowerCase();
-      const from = CORE_FILES.includes(name) ? path.join(coreDir, name) : name === 'nvngx_dlssnr.dll' && nr ? nr.path : null;
+      const from = CORE_ALL.includes(name) ? path.join(coreDir, name) : name === 'nvngx_dlssnr.dll' && nr ? nr.path : null;
       if (!from || !exists(from) || !exists(f.target)) continue;
       const want = sha256File(from);
       if (want === sha256File(f.target)) continue;
@@ -743,7 +768,10 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
     const legacy = r.preset === 'core';
     // 1.2's network resolution (prism-core.netScale: native or 75%) becomes 1.3's size by pixels
     // (prism-core.netSize): 旗舰 and 极致 take their new tier values, a tuned install the nearest size.
-    const oldScale = r.values?.['prism-core.netScale'];
+    // An every-frame install from before 1.2 has neither key and ran native (Core's old default; 1.3's
+    // is the 100% base), so it counts as native rather than quietly dropping to 62.5%.
+    const unsized = r.values?.['prism-core.netScale'] === undefined && r.values?.['prism-core.netSize'] === undefined && String(r.values?.['prism-core.cadence']) === '1';
+    const oldScale = unsized ? '100' : r.values?.['prism-core.netScale'];
     if (oldScale !== undefined && r.values) {
       const { ['prism-core.netScale']: _old, ...rest } = r.values;
       // 1.2's every-frame tiers: 2 passes, guard 100%; 极致 native at 210%, 旗舰 75% at 240%.

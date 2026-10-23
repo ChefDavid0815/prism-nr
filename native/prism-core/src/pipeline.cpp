@@ -114,7 +114,9 @@ cbuffer C : register(b0) {
 // becomes the landed one), 4 a landed edit exists, 8 the network gets motion from the landed warp,
 // 16 luminance-guided edit on surfaces the warp can't follow (Guided=1), 32 reduced network,
 // 64 the reduced network's edit comes up through the guided filter (UpFilter=1); bits 8-10 the
-// look (Look=0..4, see look_hlsl.h).
+// look (Look=0..4, see look_hlsl.h); bits 12-15 the steadying weight (Steady x 15) and bits 16-23
+// its band (SteadyBand x 100), see Steady(); bits 24-31 how much fine contrast the reduced edit may
+// take away ((1 - DetailKeep) x 255), see GuidedFit.
 Texture2D<float4> Orig : register(t0);
 Texture2D<float4> Proxy : register(t1);
 Texture2D<float4> Neural : register(t2);
@@ -262,7 +264,12 @@ void GuidedFit(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex) {
       }
     }
     mI /= 25.0; mII /= 25.0; mP /= 25.0; mIP /= 25.0;
-    const float3 a = (mIP - mI * mP) / (max(mII - mI * mI, 0.0) + kGfEps);
+    // Fine detail keeps its contrast: a falling slope means the edit flattens the picture inside
+    // this window (the network, at its smaller size, softens hair, lashes and thin strands, and the
+    // fit would carry that softening to native resolution as blur). The slope may take away at most
+    // the share bits 24-31 allow (DetailKeep); raising contrast is never limited.
+    const float aMin = -float((Flags >> 24u) & 255u) / 255.0;
+    const float3 a = max((mIP - mI * mP) / (max(mII - mI * mI, 0.0) + kGfEps), aMin);
     gfSA[n] = a;
     gfSB[n] = mP - a * mI;
   }
@@ -292,6 +299,36 @@ float3 UpGuided(uint2 p, float yFull) {
   return clamp(LowBilinear(GfA, f) * (yFull - kGfRef) + LowBilinear(GfB, f), -3.0, 3.0);
 }
 
+// Temporal steadying (Steady=, every frame the network runs): on fast-moving characters and fine
+// detail the network's answer jitters from one frame to the next, which shows as flicker. Last
+// frame's edit, followed along this frame's motion vectors and admitted only on the same surface
+// (depth), is blended in, but only within a narrow band around this frame's edit: whatever differs
+// by more than the band (newly revealed, really changed) is this frame's answer, so it can never
+// draw a trail. At most weight x band of the old edit survives (0.5 x 0.06 stops: about 2%).
+float3 Steady(uint2 p, float3 e) {
+  const float w = float((Flags >> 12u) & 15u) / 15.0;
+  const float2 toOut = float2(Size) / float2(RenderSize);
+  const float2 mv = Motion.Load(int3(RenderPixel(p), 0)) * MotionScale * toOut;
+  const float2 pos = float2(p) + mv;  // last frame's position, pixel-centre space minus 0.5
+  const int2 last = int2(Size) - 1, b = int2(floor(pos));
+  const float2 f = pos - float2(b);
+  const float d = DepthAt(p), tol = DepthTolerance * max(abs(d), 1e-4);
+  float3 h = 0.0;
+  float ws = 0.0;
+  [unroll] for (int j = 0; j <= 1; ++j) {
+    [unroll] for (int i = 0; i <= 1; ++i) {
+      const float4 hv = History.Load(int3(clamp(b + int2(i, j), int2(0, 0), last), 0));
+      const float wt = (i ? f.x : 1.0 - f.x) * (j ? f.y : 1.0 - f.y) * (abs(hv.a - d) <= tol ? 1.0 : 0.0);
+      h += hv.rgb * wt;
+      ws += wt;
+    }
+  }
+  // Off, off screen last frame, or mostly another surface then: this frame's answer.
+  const bool use = w > 0.0 && all(pos >= -0.5) && all(pos <= float2(last) + 0.5) && ws >= 0.5;
+  const float band = float((Flags >> 16u) & 255u) / 100.0 + 0.15 * abs(Luma(e));
+  return use ? e + clamp(h / max(ws, 1e-4) - e, -band, band) * (w * ws) : e;
+}
+
 )" PRISM_LOOK_HLSL R"(
 // Edit = log2(neural / proxy) in the proxy's linear light; guard its chroma on skin and strong
 // colour; apply it to the game's HDR frame as a ratio, so the frame's range is untouched.
@@ -319,6 +356,7 @@ void Compose(uint3 id : SV_DispatchThreadID) {
   const float y = Luma(e);
   const float3 kept = (e - y) * (1.0 - w);
   e = y + kept + (clamp(kept, -0.08, 0.08) - kept) * w;
+  e = Steady(id.xy, e);
   NewEdit[id.xy] = float4(e, DepthAt(id.xy));
   NewWarp[id.xy] = 0.0;  // a synchronous result: no launch in flight to reach
   NewWarpL[id.xy] = 0.0;
@@ -665,6 +703,9 @@ ID3D12Resource* scratch = nullptr;     // Carry's edit with its holes, before Fi
 bool haveLanded = false;
 bool exactMotion = true;  // the network gets its motion from the landed warp (NetMotion=exact)
 float stability = 0.3f;   // how much of last frame's edit stays where a landed edit is sampled (0..0.9)
+float steady = 0.5f;      // Steady: the weight of last frame's edit in Compose's temporal steadying (0 off, 0..0.9)
+float steadyBand = 0.06f; // SteadyBand: how far (stops) last frame's edit may pull this frame's (0.01..0.5)
+float detailKeep = 0.85f; // DetailKeep: the share of fine contrast (hair, lashes) the reduced edit must leave (0..1)
 int current = 0;
 bool historyValid = false;
 int cadence = 2;  // the network every N frames (F2 cycles 1-4); 0: adaptive (see Adapt)
@@ -1480,6 +1521,9 @@ void LoadConfig() {
   }
   fpsCap = int(Num(L"FpsCap", fpsCap, -1, 500));  // -1: automatic (see Pace)
   stability = float(Num(L"Stability", stability, 0, 0.9));
+  steady = float(Num(L"Steady", steady, 0, 0.9));
+  steadyBand = float(Num(L"SteadyBand", steadyBand, 0.01, 0.5));
+  detailKeep = float(Num(L"DetailKeep", detailKeep, 0, 1));
   {
     const int asked = int(Num(L"Record", 0, 0, 240));
     if (asked != recordAsked) { recordAsked = asked; if (asked > 0 && recFrames.empty()) recordLeft = asked; }
@@ -1866,7 +1910,11 @@ bool PipelineRecord(const UpscaleCall& c) {
   recorded = true;
   Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, paint ? 2u : (split ? splitCol : 0u),
                  c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f,
-                 (launchNow ? 1u : 0u) | (landNow ? 2u : 0u) | (landedBefore ? 4u : 0u) | (guided ? 16u : 0u) | (uint32_t(look & 7) << 8), span, 1.0f - stability};
+                 (launchNow ? 1u : 0u) | (landNow ? 2u : 0u) | (landedBefore ? 4u : 0u) | (guided ? 16u : 0u) | (uint32_t(look & 7) << 8) |
+                     // Steadying needs last frame's edit: none on the first frame, after a reset or a cut.
+                     (historyValid && !c.reset ? (uint32_t(std::lround(steady * 15.0f)) << 12) | (uint32_t(std::lround(steadyBand * 100.0f)) << 16) : 0u) |
+                     (uint32_t(std::lround((1.0f - detailKeep) * 255.0f)) << 24),
+                 span, 1.0f - stability};
 
   const UINT slot = UINT(frame % kRing);
   // The slot written kRing frames ago is long finished: read it before reusing it.
