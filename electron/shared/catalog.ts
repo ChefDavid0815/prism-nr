@@ -314,7 +314,7 @@ export const PRESETS: PresetDef[] = [
     nativeRoutePreference: ['prism-core'],
     plugins: ['nr-prism-core'],
     values: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 240, 'prism-core.guard': 100, 'prism-core.netSize': '150' },
-    expectation: '地平线 6 性能测试（RTX 5090 Laptop，2560×1600，DLSS 画质 + 2× 帧生成，同一时段连测）：旗舰档 76–77 帧，极致档 69 帧。',
+    expectation: '地平线 6 性能测试（RTX 5090 Laptop，2560×1600，DLSS 画质 + 2× 帧生成，同一时段连测）：RenoDX DLSS 5 8.5.0-rc10（原生、2 遍）67 帧，极致档 77 帧，旗舰档 87 帧，都没有卡顿。',
     requiresGpu: { pattern: '50[89]0', reason: '极致档只在 RTX 5080 / 5090 上开放：网络每帧跑两遍、分辨率 150%，其他显卡的帧率会掉得太多。可以用旗舰档。' },
   },
   {
@@ -326,7 +326,7 @@ export const PRESETS: PresetDef[] = [
     nativeRoutePreference: ['prism-core'],
     plugins: ['nr-prism-core'],
     values: { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 240, 'prism-core.guard': 100, 'prism-core.netSize': '100' },
-    expectation: '同一测试：旗舰档 76–77 帧，比极致档（69 帧）快约 10%，同样没有拖影。',
+    expectation: '同一测试：旗舰档 87 帧，比极致档（77 帧）快约 13%，比 RenoDX 8.5（67 帧）快约 30%，延迟 68.6 ms 对 88.3 ms。',
   },
   {
     id: 'high',
