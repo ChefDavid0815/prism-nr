@@ -144,20 +144,20 @@ float3 LkGrade(float3 x, LkParams p) {
 // The frame with the network's edit e (log2 ratio per channel) and the chosen look. o is the
 // game's linear frame; exposure brings its mean to mid grey.
 float3 LookApply(float3 o, float3 e, uint look, float exposure) {
+  float3 result = o * exp2(e);  // 默认
+  const float s = max(exposure, 1e-8);
   if (look == 1u) {
     // 高还原: one ratio for all three channels keeps the original's chromaticity exactly; strong
     // edits are eased (to at most about 1.5 stops) and skin, where an edit shows first, takes less.
     // A gentle film contrast (one ratio too) gives it the same tonal depth as the other looks.
-    const float s1 = max(exposure, 1e-8);
-    const float skin = LkSkin(LkOklab(max(o, 0.0) * s1));
+    const float skin = LkSkin(LkOklab(max(o, 0.0) * s));
     const float y = 1.5 * tanh(LkY(e) / 1.5) * (1.0 - 0.3 * skin);
     const float3 x = o * exp2(y);
-    const float l = log2(max(0.5 * (LkY(x) + max(x.r, max(x.g, x.b))) * s1, 1e-7) / kLkMidGrey);
-    return x * exp2(0.10 * 2.5 * tanh(l / 2.5));
+    const float l = log2(max(0.5 * (LkY(x) + max(x.r, max(x.g, x.b))) * s, 1e-7) / kLkMidGrey);
+    result = x * exp2(0.10 * 2.5 * tanh(l / 2.5));
+  } else if (look >= 2u && look <= 4u) {
+    result = LkGrade(result * s, LkFor(look)) / s;
   }
-  const float3 x = o * exp2(e);
-  if (look == 0u || look > 4u) return x;
-  const float s = max(exposure, 1e-8);
-  return LkGrade(x * s, LkFor(look)) / s;
+  return result;
 }
 )"
