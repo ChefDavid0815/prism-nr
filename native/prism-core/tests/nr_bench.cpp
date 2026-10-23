@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -140,8 +141,10 @@ NgxResult AllocateOwned(void** out) {
 }
 
 // The runtime asks for the scaling ratio of the low-resolution input contract; it is always 1.
+// PRISM_RATIO overrides it (probe: does the runtime run the network smaller and guide it back up?).
+float EnvF(const char* k, float d) { const char* v = std::getenv(k); return v ? float(std::atof(v)) : d; }
 NgxResult ScalingRatioCallback(void* parameters) {
-  SetF(parameters, "DLSSNR.ScalingRatio", 1.f);
+  SetF(parameters, "DLSSNR.ScalingRatio", EnvF("PRISM_RATIO", 1.f));
   return kNgxSuccess;
 }
 
@@ -342,16 +345,21 @@ void CreateFeature(Gpu& g, Ngx& ngx, Feature& f, uint32_t w, uint32_t h) {
   f.h = h;
   if (ngx.allocate(&f.params) != kNgxSuccess || !f.params) { std::fprintf(stderr, "AllocateParameters failed\n"); std::exit(1); }
   void* p = f.params;
-  SetUI(p, "Width", w);
-  SetUI(p, "Height", h);
+  const float in = EnvF("PRISM_IN", 1.f);  // probe: a smaller input than output
+  const uint32_t iw = uint32_t(w * in), ih = uint32_t(h * in);
+  SetUI(p, "Width", iw);
+  SetUI(p, "Height", ih);
   SetUI(p, "OutWidth", w);
   SetUI(p, "OutHeight", h);
-  for (const char* k : {"DLSSNR.Width", "DLSSNR.InputWidth", "DLSSNR.OutputWidth", "DLSSNR.Output.Width"}) SetUI(p, k, w);
-  for (const char* k : {"DLSSNR.Height", "DLSSNR.InputHeight", "DLSSNR.OutputHeight", "DLSSNR.Output.Height"}) SetUI(p, k, h);
-  SetF(p, "DLSSNR.ScalingRatio", 1.f);
-  SetF(p, "DLSSNR.Scale", 1.f);
-  SetPtr(p, "DLSSNRComputeScalingRatioCallback", reinterpret_cast<void*>(&ScalingRatioCallback));
-  SetI(p, "PerfQualityValue", 0);
+  for (const char* k : {"DLSSNR.Width", "DLSSNR.OutputWidth", "DLSSNR.Output.Width"}) SetUI(p, k, w);
+  for (const char* k : {"DLSSNR.Height", "DLSSNR.OutputHeight", "DLSSNR.Output.Height"}) SetUI(p, k, h);
+  SetUI(p, "DLSSNR.InputWidth", iw);
+  SetUI(p, "DLSSNR.InputHeight", ih);
+  SetF(p, "DLSSNR.ScalingRatio", EnvF("PRISM_RATIO", 1.f));
+  SetF(p, "DLSSNR.Scale", EnvF("PRISM_RATIO", 1.f));
+  if (!std::getenv("PRISM_NOCB")) SetPtr(p, "DLSSNRComputeScalingRatioCallback", reinterpret_cast<void*>(&ScalingRatioCallback));
+  SetI(p, "PerfQualityValue", int(EnvF("PRISM_PQ", 0)));
+  if (std::getenv("PRISM_PRESET")) SetI(p, "DLSSNR.Hint.Render.Preset", int(EnvF("PRISM_PRESET", 0)));
   SetI(p, "DLSS.Feature.Create.Flags", 0);
   SetUI(p, "CreationNodeMask", 1);
   SetUI(p, "VisibilityNodeMask", 1);
