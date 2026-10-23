@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.4.0 — 2026-10-23 · a grading desk, games without DLSS, more loaders
+
+- 自定义 (Look=5): a custom look with 66 controls over six pages — tone (exposure, contrast and
+  its pivot, highlights, shadows, whites, blacks, midtones), curves (luminance, red, green and blue,
+  five points each), colour (white balance, saturation, vibrance, skin protection and alignment,
+  overall mix), three-way wheels, hue by hue (turn, saturation, lightness for six hues) and film
+  (dye density, highlight hue path, sky, desaturation, vignette, grain). Three slots; any preset
+  loads as a starting point (and matches it exactly). The five presets stay as they were.
+- The in-game panel opens a grading desk beside itself for the custom look: a tone curve drawn as
+  bars and a hue ring (spoke length is saturation, turn is hue, markers are the wheels), both
+  draggable, every control by mouse, keyboard (Shift for fine steps) or gamepad (LB / RB pages).
+- The app has the same desk, full screen, with a live preview that runs the same grade (a WebGL
+  port of the shader) on a colour chart or a screenshot of your own. Both desks write the same
+  lines in prism-core.ini; the app no longer drops what the panel saved.
+- Present mode: DX12 games without DLSS now install. Core runs on the frame as it is presented
+  (SDR, scRGB or HDR10), with no motion vectors: the network starts fresh every frame and the UI
+  goes through it with the picture. The app picks it by itself for those games.
+- More loaders: where the game does not import version.dll, Core loads through winmm.dll,
+  dinput8.dll, dxgi.dll or d3d12.dll (whichever the EXE imports; dxgi.dll otherwise). A file of
+  another mod by that name is backed up, overwritten, and put back on rollback.
+- 低饱和 no longer looks milky: it sits a fifth of a stop lower with deeper blacks and keeps a
+  little colour in the highlights.
+- Every tier now defaults to 100% intensity (the network's own answer) with 2 passes.
+
 ## 1.3.1 — 2026-10-23 · Denuvo games, steadier characters, sharper hair
 
 - Games protected by Denuvo Anti-Tamper (Crimson Desert crashed at start with Prism installed)

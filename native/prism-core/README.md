@@ -52,6 +52,22 @@ Prism Core preset, apply. Rolling back in the app removes everything. By hand:
 
 To remove it, delete the two DLLs (and `prism-core.ini` if you made one).
 
+Where the executable does not import `version.dll`, the app uses the first of `winmm.dll`,
+`dinput8.dll`, `dxgi.dll` and `d3d12.dll` it imports (`dxgi.dll` when it imports none): the
+loaders in `loaders/` pass every export through to the system's own DLL and load Core the same
+way. A file of another mod by that name is backed up and overwritten, and put back on rollback.
+
+### Games without DLSS: present mode
+
+`Present=1` runs Core on the frame as the game presents it, for DX12 games with no DLSS of their
+own (the app sets it for them). Core hooks Present by itself once D3D12 and DXGI are loaded, takes
+the back buffer to scene light (SDR through the inverse of the preview's shoulder; scRGB and HDR10
+by their own curves, paper white at 1), runs the same pipeline with motion vectors of zero and a
+constant depth, and writes the result back before the panel draws. Without motion vectors the
+network starts fresh every frame (`PresentReset=0` keeps its history, at the cost of trails on
+anything that moves), and the game's UI goes through the network with the picture. It switches
+itself off for as long as the game calls DLSS.
+
 ### Games with Denuvo Anti-Tamper: late loading
 
 Some Denuvo-protected games refuse a proxy DLL in their folder and crash at start (Crimson
@@ -103,7 +119,13 @@ KeyCadence=F2
 KeyAsync=F3
 KeySplit=F4
 KeyCapture=F11
-Look=0           ; colour: 0 默认, 1 高还原, 2 高饱和, 3 低饱和, 4 浓烈 (or default, faithful, vivid, muted, punchy)
+Look=0           ; colour: 0 默认, 1 高还原, 2 高饱和, 3 低饱和, 4 浓烈, 5 自定义 (or default, faithful, vivid, muted, punchy, custom)
+Grade=           ; the custom look, slot 1: Key:value pairs that differ from neutral (Contrast:24,Saturation:-34,...)
+Grade2=          ; slot 2
+Grade3=          ; slot 3
+GradeSlot=0      ; the slot Look=5 uses, 0-2
+Present=0        ; 1: present mode, for games without DLSS (see above)
+PresentReset=1   ; present mode: the network starts fresh every frame (0 keeps its history)
 KeyOverlay=Home  ; the in-game panel
 SplitPos=0.500   ; where the split view divides the picture, 0.02-0.98 (the panel drags it)
 ```
@@ -143,8 +165,19 @@ lightness instead of being clipped.
 | 3 低饱和 | chroma ×0.58, greens and yellows lower still, cool whites and teal shadows, skin keeps most of its colour; the modern film and series look |
 | 4 浓烈 | contrast 1.42 at mid grey, chroma ×1.5, teal shadows and warm highlights |
 
+| 5 自定义 | every control below, from the panel's grading desk or the app's (`src/grade.h`) |
+
+The custom look has 66 controls over six pages, in three slots: tone (exposure, contrast and its
+pivot, highlights, shadows, whites, blacks, midtones), curves (five points each for luminance, red,
+green and blue, in stops from mid grey), colour (temperature, tint, saturation, vibrance, skin
+protection and alignment, overall mix), three-way wheels (a hue and an amount for shadows, mid
+tones and highlights), hue by hue (turn, saturation and lightness for six hues) and film (dye
+density, highlight hue path, sky, highlight and shadow desaturation, vignette, per-frame grain).
+Any preset can be loaded as a starting point. Core reads them from a constant buffer (b1).
+
 `tests/look_preview.cpp` runs the same HLSL on an F11 capture pair or a generated colour chart
-and saves a contact sheet of all five.
+and saves a contact sheet of all five (`--grade=` or `--preset=` puts the custom look in the
+last tile).
 
 ## In-game panel
 
@@ -194,7 +227,7 @@ bash native/prism-core/build.sh
 
 | Path | What |
 |---|---|
-| `src/proxy/` | the `version.dll` loader |
+| `src/proxy/` | the loaders: `version.dll`, and `dxgi` / `d3d12` / `winmm` / `dinput8` from `tools/proxy/gen.cjs` |
 | `src/core.cpp` | NGX hooks (create / evaluate), feature tracking, logging |
 | `src/pipeline.cpp` | exposure, encode, network (sync and async), carry, bake, fill, guard, compose, recorder |
 | `src/overlay.cpp` | the in-game panel: its D3D12 renderer, DirectWrite glyph atlas, input, layout |
@@ -203,6 +236,8 @@ bash native/prism-core/build.sh
 | `tests/nr_bench.cpp` | drives the signed network outside any game: cost, sequences, async overlap |
 | `tests/overlay_demo.cpp` | the in-game panel over a still, without a game |
 | `src/look_hlsl.h` | the colour looks (HLSL shared by Core and the preview) |
+| `src/grade.h` | the custom look's controls, ini lines and shader packing (`electron/shared/grade.ts` mirrors it) |
+| `tests/present_demo.cpp` | present mode end to end: the real Core on a swap chain presenting a still |
 | `tests/look_preview.cpp` | contact sheet of the looks on a capture pair or a colour chart |
 | `tests/nets_harness.cpp` | GPU check of the NETS shaders against the CPU reference |
 | `tests/shader_check.cpp` | compiles every runtime shader entry point at build time |
@@ -211,7 +246,8 @@ bash native/prism-core/build.sh
 
 ## Limits
 
-- One game tested. Games without DLSS need another source of motion vectors and depth.
+- Tested in CONTROL Resonant and Forza Horizon 6. Present mode (games without DLSS) has no motion
+  vectors or depth and processes the UI with the picture; tested end to end on a still only.
 - Frame pacing spreads the network frame's cost over the others; the asynchronous mode removes most
   of it at a cadence of 4, not at 2.
 - Not for games with anti-cheat.
