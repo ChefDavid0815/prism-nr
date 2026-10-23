@@ -47,10 +47,12 @@ float LkHue(float h, float centre, float width) {
   return d < width ? 0.5 + 0.5 * cos(kLkPi * d / width) : 0.0;
 }
 
-// Skin: warm hues around 55 degrees in Oklab, moderate chroma, not in deep shadow.
+// Skin: warm hues between red and yellow (Oklab 40-64 degrees from pale to deep, the vectorscope's
+// skin line at about 50), moderate chroma, not in deep shadow.
+static const float kLkSkinHue = 0.873;  // 50 degrees
 float LkSkin(float3 lab) {
   const float c = length(lab.yz);
-  return LkHue(atan2(lab.z, lab.y), 0.96, 0.52) * smoothstep(0.018, 0.045, c) * (1.0 - smoothstep(0.15, 0.22, c)) * smoothstep(0.22, 0.38, lab.x);
+  return LkHue(atan2(lab.z, lab.y), kLkSkinHue, 0.52) * smoothstep(0.018, 0.045, c) * (1.0 - smoothstep(0.15, 0.22, c)) * smoothstep(0.22, 0.38, lab.x);
 }
 
 // The largest Oklab chroma at lightness L along a hue direction that has no negative channel. With
@@ -66,6 +68,18 @@ float LkMaxChroma(float L, float2 dir) {
   return c0;
 }
 
+// Into gamut (no negative light), softly: the chroma of ab at lightness L, where chroma gained
+// beyond the input's (c) approaches the most this lightness and hue can hold without reaching it,
+// so colours already at the edge (a pure blue) stay put instead of jumping, and nothing is clipped
+// into flat patches.
+float LkFit(float L, float2 ab, float c) {
+  const float ct = length(ab);
+  if (ct <= 1e-6) return ct;
+  const float cm = LkMaxChroma(L, ab / ct);
+  const float base = min(c, cm);
+  return ct <= base ? ct : base + (cm - base) * (1.0 - exp(-(ct - base) / max(cm - base, 1e-5)));
+}
+
 struct LkParams {
   float contrast;   // slope at mid grey; eases back to 1 a few stops away
   float sat;        // chroma scale
@@ -76,24 +90,30 @@ struct LkParams {
   float hue[6];     // chroma scale by hue: red, yellow, green, cyan, blue, magenta
   float2 tintLo;    // Oklab (a, b) offsets, relative to lightness, in shadows
   float2 tintHi;    // and in highlights
+  float density;    // subtractive saturation: lightness given up per unit of chroma gained (film dyes)
+  float skinAlign;  // the share of the way skin's hue moves toward the skin line
+  float skyDeepen;  // lightness taken from bright blues and cyans (a polariser's sky)
 };
 
 LkParams LkFor(uint look) {
   LkParams p;
   p.contrast = 1.0; p.sat = 1.0; p.vibrance = 0.0; p.skinKeep = 1.0; p.hiDesat = 0.0; p.loDesat = 0.0;
   p.hue[0] = 1.0; p.hue[1] = 1.0; p.hue[2] = 1.0; p.hue[3] = 1.0; p.hue[4] = 1.0; p.hue[5] = 1.0;
-  p.tintLo = 0.0; p.tintHi = 0.0;
+  p.tintLo = 0.0; p.tintHi = 0.0; p.density = 0.0; p.skinAlign = 0.0; p.skyDeepen = 0.0;
   if (look == 2u) {  // 高饱和
     p.contrast = 1.10; p.sat = 1.38; p.vibrance = 0.55; p.skinKeep = 0.40; p.hiDesat = 0.10; p.loDesat = 0.08;
     p.hue[0] = 0.92; p.hue[1] = 1.08; p.hue[2] = 1.12; p.hue[3] = 1.15; p.hue[4] = 1.00; p.hue[5] = 1.05;
+    p.density = 0.35; p.skinAlign = 0.25; p.skyDeepen = 0.04;
   } else if (look == 3u) {  // 低饱和
     p.contrast = 1.14; p.sat = 0.58; p.vibrance = 0.0; p.skinKeep = 0.45; p.hiDesat = 0.25; p.loDesat = 0.25;
     p.hue[0] = 0.95; p.hue[1] = 0.85; p.hue[2] = 0.78; p.hue[3] = 1.00; p.hue[4] = 1.00; p.hue[5] = 0.85;
     p.tintLo = float2(-0.010, -0.016); p.tintHi = float2(-0.004, -0.014);
+    p.skinAlign = 0.30;
   } else if (look == 4u) {  // 浓烈
     p.contrast = 1.42; p.sat = 1.50; p.vibrance = 0.35; p.skinKeep = 0.40; p.hiDesat = 0.10; p.loDesat = 0.0;
     p.hue[0] = 0.95; p.hue[1] = 1.05; p.hue[2] = 1.08; p.hue[3] = 1.12; p.hue[4] = 1.08; p.hue[5] = 1.02;
     p.tintLo = float2(-0.008, -0.014); p.tintHi = float2(0.004, 0.012);
+    p.density = 0.55; p.skinAlign = 0.35; p.skyDeepen = 0.07;
   }
   return p;
 }
@@ -124,20 +144,25 @@ float3 LkGrade(float3 x, LkParams p) {
   k *= lerp(1.0, 1.0 - p.hiDesat, smoothstep(1.5, 4.5, l2));
   k *= lerp(1.0, 1.0 - p.loDesat, smoothstep(-3.0, -6.0, l2));
   float3 lab = float3(lab0.x, lab0.yz * k);
+  // Skin toward the skin line: a turn of its hue, the share by how much it reads as skin (too red
+  // looks blotchy, too yellow pale).
+  if (p.skinAlign > 0.0 && skin > 0.0) {
+    float dh = kLkSkinHue - h;
+    dh = dh > kLkPi ? dh - 2.0 * kLkPi : dh < -kLkPi ? dh + 2.0 * kLkPi : dh;
+    const float turn = dh * p.skinAlign * skin, cs = cos(turn), sn = sin(turn);
+    lab.yz = float2(lab.y * cs - lab.z * sn, lab.y * sn + lab.z * cs);
+  }
   // Split toning, growing with lightness so black stays black; skin keeps its own hue.
   const float hi = smoothstep(-0.5, 2.5, l2), lo = 1.0 - smoothstep(-4.0, -0.5, l2);
   lab.yz += (p.tintHi * hi + p.tintLo * lo) * (1.0 - 0.75 * skin) * min(lab0.x, 1.2);
-  // Into gamut (no negative light), softly: chroma gained beyond the input's approaches the most
-  // this lightness and hue can hold without reaching it, so colours already at the edge (a pure
-  // blue) stay put instead of jumping, and nothing is clipped into flat patches.
+  // Subtractive saturation: the chroma a colour really gains (what the gamut lets it keep) is paid
+  // for in lightness, the way film dyes darken as they grow denser, so a richer colour reads deeper
+  // instead of neon. Bright blues and cyans give a little lightness too (a polarised sky).
+  const float gained = max(LkFit(lab0.x, lab.yz, c) - c, 0.0);
+  const float sky = LkHue(h, -1.676, 0.9) * smoothstep(0.03, 0.10, c) * smoothstep(0.55, 0.85, lab0.x);
+  lab.x = lab0.x - p.density * gained * (1.0 - 0.5 * skin) - p.skyDeepen * sky * lab0.x;
   const float ct = length(lab.yz);
-  if (ct > 1e-6) {
-    const float2 dir = lab.yz / ct;
-    const float cm = LkMaxChroma(lab0.x, dir);
-    const float base = min(c, cm);
-    const float co = ct <= base ? ct : base + (cm - base) * (1.0 - exp(-(ct - base) / max(cm - base, 1e-5)));
-    lab.yz = dir * co;
-  }
+  if (ct > 1e-6) lab.yz *= LkFit(lab.x, lab.yz, c) / ct;
   return max(LkLinear(lab), 0.0);
 }
 
