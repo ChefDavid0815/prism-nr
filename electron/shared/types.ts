@@ -81,6 +81,8 @@ export interface GameAnalysis {
   dlssFrameGen: boolean;
   /** The executable imports VERSION.dll, so Prism Core's loader is picked up at start-up. */
   importsVersionDll?: boolean;
+  /** Which of the DLLs Prism Core can load through (version, winmm, dinput8, dxgi, d3d12) the executable imports. */
+  loaderImports?: string[];
   /**
    * Denuvo Anti-Tamper found in the executable (its section names). Such games may refuse a proxy
    * DLL in their folder, so Prism Core loads late (PrismLaunch.exe) instead; nothing about the
@@ -216,6 +218,8 @@ export interface InstallPlan {
   riskConsent?: { names: string[]; how: string; accepted: boolean };
   /** Prism Core loads late in this game (Denuvo): the Steam launch option the user sets. */
   lateLoad?: { launchOption: string; why: string };
+  /** The proxy DLL Prism Core loads through at start-up (version.dll, winmm.dll, ... beside the EXE). */
+  loader?: string;
 }
 
 export interface InstallProgress {

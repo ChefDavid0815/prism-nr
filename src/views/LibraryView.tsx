@@ -680,7 +680,7 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
       </label>
 
       <div className="core-field">
-        <TickRange label="改动强度" value={Number(values['prism-core.intensity'] ?? 200)} min={0} max={300} step={5} unit="%" help="100% 是网络的完整答案；调低更接近原画，调高会把网络的改动再放大，最高 300%。档位用的是 120%～240%，250% 以上容易过度。" onChange={(v) => set({ 'prism-core.intensity': v })} />
+        <TickRange label="改动强度" value={Number(values['prism-core.intensity'] ?? 200)} min={0} max={300} step={5} unit="%" help="100% 是网络的完整答案；调低更接近原画，调高会把网络的改动再放大，最高 300%。档位默认都是 100%（网络原样的答案），250% 以上容易过度。" onChange={(v) => set({ 'prism-core.intensity': v })} />
         <TickRange label="角色守护" value={Number(values['prism-core.guard'] ?? 100)} min={0} max={100} step={5} unit="%" help="压住肤色和高饱和颜色上的色度改动。0% 等于不干预。" onChange={(v) => set({ 'prism-core.guard': v })} />
       </div>
 

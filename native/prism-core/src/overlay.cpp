@@ -973,11 +973,11 @@ void PollInput(UINT bw, UINT bh, bool open) {
 // ------------------------------------------------------------------ tiers (electron/shared/catalog.ts)
 struct Tier { const wchar_t* name; int cadence, passes; bool async; float intensity, guard, netScale; const wchar_t* help; bool needsHigh; };  // needsHigh: RTX 5080 / 5090 only
 const Tier kTiers[] = {
-    {L"极致", 1, 2, false, 2.40f, 1.0f, 0.7655f, L"每帧 · 2 遍 · 分辨率 150% · 240%。比旗舰多算一半像素，细节最足，开销最大，高速运动没有拖影。", true},
-    {L"旗舰", 1, 2, false, 2.40f, 1.0f, 0.625f, L"每帧 · 2 遍 · 分辨率 100% · 240%。RTX 5080 / 5090 的默认档位，帧率和细节最均衡，高速运动没有拖影。", false},
-    {L"高画质", 2, 2, true, 2.00f, 1.0f, 1.00f, L"每 2 帧 · 2 遍 · 200%。快速运动的物体旁可能有轻微残影。", false},
-    {L"标准", 2, 1, true, 1.50f, 1.0f, 1.00f, L"每 2 帧 · 1 遍 · 150%。", false},
-    {L"流畅", 4, 1, true, 1.20f, 1.0f, 1.00f, L"每 4 帧 · 1 遍 · 120%。开销最小。", false},
+    {L"极致", 1, 2, false, 1.00f, 1.0f, 0.7655f, L"每帧 · 2 遍 · 分辨率 150% · 100%。比旗舰多算一半像素，细节最足，开销最大，高速运动没有拖影。", true},
+    {L"旗舰", 1, 2, false, 1.00f, 1.0f, 0.625f, L"每帧 · 2 遍 · 分辨率 100% · 100%。RTX 5080 / 5090 的默认档位，帧率和细节最均衡，高速运动没有拖影。", false},
+    {L"高画质", 2, 2, true, 1.00f, 1.0f, 1.00f, L"每 2 帧 · 2 遍 · 100%。快速运动的物体旁可能有轻微残影。", false},
+    {L"标准", 2, 1, true, 1.00f, 1.0f, 1.00f, L"每 2 帧 · 1 遍 · 100%。", false},
+    {L"流畅", 4, 1, true, 1.00f, 1.0f, 1.00f, L"每 4 帧 · 1 遍 · 100%。开销最小。", false},
 };
 constexpr int kTierCount = 5;
 bool Near(float a, float b) { return std::fabs(a - b) < 0.005f; }

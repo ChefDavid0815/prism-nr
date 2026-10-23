@@ -2,7 +2,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { coreIni, launchOptionFor, panelLines, setCoreDir, setShaderDir, upgradeCoreInstalls } from '../core/installer';
+import { coreIni, launchOptionFor, panelLines, pickLoader, setCoreDir, setShaderDir, upgradeCoreInstalls } from '../core/installer';
 import { denuvoSections } from '../core/pe';
 import { store } from '../core/store';
 import type { InstallRecord } from '../shared/types';
@@ -35,9 +35,9 @@ async function main(): Promise<void> {
   const ini2 = coreIni({ 'prism-core.intensity': 400, 'prism-core.passes': '9' });
   assert(/Intensity=3\.00/.test(ini2) && /Passes=5/.test(ini2), 'Core INI: intensity goes up to 300%, passes up to 5');
   const extreme = coreIni(resolveValues('extreme'));
-  assert(/Cadence=1/.test(extreme) && /Async=0/.test(extreme) && /Intensity=2\.40/.test(extreme) && /Passes=2/.test(extreme), 'Core INI: the extreme tier is every frame, 2 passes, 240%');
+  assert(/Cadence=1/.test(extreme) && /Async=0/.test(extreme) && /Intensity=1\.00/.test(extreme) && /Passes=2/.test(extreme), 'Core INI: the extreme tier is every frame, 2 passes, 100%');
   const flagship = coreIni(resolveValues('flagship'));
-  assert(/Cadence=1/.test(flagship) && /Async=0/.test(flagship) && /Passes=2/.test(flagship) && /Intensity=2\.40/.test(flagship) && /NetScale=0\.6250/.test(flagship), 'Core INI: the flagship tier is every frame, 2 passes, the base size (62.5%), 240%');
+  assert(/Cadence=1/.test(flagship) && /Async=0/.test(flagship) && /Passes=2/.test(flagship) && /Intensity=1\.00/.test(flagship) && /NetScale=0\.6250/.test(flagship), 'Core INI: the flagship tier is every frame, 2 passes, the base size (62.5%), 100%');
   assert(/NetScale=0\.7655/.test(extreme), 'Core INI: the extreme tier runs the network at 150% of the base\'s pixels');
   assert(/NetScale=1\.00/.test(coreIni(resolveValues('high'))), 'Core INI: the asynchronous tiers run the network native');
   assert(netSizeFor(0.75) === '150' && netSizeFor(0.63) === '100' && Math.abs(netScaleFor('150') ** 2 / netScaleFor('100') ** 2 - 1.5) < 0.002, 'Net sizes: 150% is half as many pixels again as 100%');
@@ -79,6 +79,8 @@ async function main(): Promise<void> {
   assert(denuvoSections({ bitness: 'x64', imports: [], isGui: true, sections: ['.text', '.xtext', '.rdata', '.xtls'] }).join(',') === '.xtext,.xtls' &&
     denuvoSections({ bitness: 'x64', imports: [], isGui: true, sections: ['.text', '.rdata', '.detourc', '.xbld'] }).length === 0, 'Denuvo: found by its section names, and only by them');
   assert(launchOptionFor('E:\\Games\\Crimson Desert\\bin64') === '"E:\\Games\\Crimson Desert\\bin64\\PrismLaunch.exe" %command%', 'Late load: the Steam launch option quotes the launcher path');
+  assert(pickLoader(['dxgi', 'version', 'd3d12']) === 'version.dll' && pickLoader(['d3d12', 'winmm']) === 'winmm.dll' && pickLoader(['d3d12']) === 'd3d12.dll' && pickLoader([]) === 'dxgi.dll' && pickLoader(undefined) === 'dxgi.dll',
+    'Loaders: version.dll first, then what the EXE imports, dxgi.dll when it imports none of them');
   // 1.2 installs keep working in 1.3: the old network resolution key moves to the new sizes.
   {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-nr-upgrade-'));
@@ -101,7 +103,7 @@ async function main(): Promise<void> {
     upgradeCoreInstalls([]);
     const after = Object.fromEntries(store.installs().map((r) => [r.id, r]));
     const ini = (id: string) => fs.readFileSync(path.join(dir, id, 'prism-core.ini'), 'utf8');
-    assert(tierOf(after['old-extreme'].values!)?.id === 'extreme' && /NetScale=0\.7655/.test(ini('old-extreme')) && /Intensity=2\.40/.test(ini('old-extreme')), 'Upgrade: a 1.2 极致 install becomes 1.3 极致 (150%)');
+    assert(tierOf(after['old-extreme'].values!)?.id === 'extreme' && /NetScale=0\.7655/.test(ini('old-extreme')) && /Intensity=1\.00/.test(ini('old-extreme')), 'Upgrade: a 1.2 极致 install becomes 1.3 极致 (150%)');
     assert(tierOf(after['old-flagship'].values!)?.id === 'flagship' && /NetScale=0\.6250/.test(ini('old-flagship')), 'Upgrade: a 1.2 旗舰 install becomes 1.3 旗舰 (100%)');
     assert(after['old-custom'].values!['prism-core.netSize'] === '150' && after['old-custom'].values!['prism-core.passes'] === '3' && after['old-custom'].values!['prism-core.netScale'] === undefined, 'Upgrade: tuned values stay, native becomes 150%');
     assert(tierOf(after['pre12-extreme'].values!)?.id === 'extreme' && /NetScale=0\.7655/.test(ini('pre12-extreme')), 'Upgrade: a pre-1.2 every-frame 极致 (no resolution key) becomes 1.3 极致');

@@ -42,10 +42,24 @@ const PRESET_FILE = 'PrismNR.ini';
 const SHADER_SUBDIR = path.join('reshade-shaders', 'Shaders', 'PrismNR');
 const CORE_INI = 'prism-core.ini';
 const CORE_FILES = ['version.dll', 'prism_nvngx.dll'];
+/**
+ * The DLLs Prism Core can load through, in order of preference: the first the game's EXE imports
+ * is used (version.dll, the original loader, first); with none imported, dxgi.dll, which DX12 games
+ * load by name (the game's folder is searched first). A file of another mod by that name is
+ * overwritten (backed up first, put back on rollback).
+ */
+const LOADERS = ['version.dll', 'winmm.dll', 'dinput8.dll', 'dxgi.dll', 'd3d12.dll'];
+export function pickLoader(imports: string[] | undefined): string {
+  return LOADERS.find((l) => (imports ?? []).includes(l.replace('.dll', ''))) ?? 'dxgi.dll';
+}
+/** Where the app keeps a loader: version.dll beside Core, the others in loaders/. */
+function loaderSource(name: string): string {
+  return name.toLowerCase() === 'version.dll' ? path.join(coreDir, 'version.dll') : path.join(coreDir, 'loaders', name.toLowerCase());
+}
 /** Late loading (Denuvo games): the launcher instead of the version.dll loader. */
 const LATE_FILES = ['PrismLaunch.exe', 'prism_nvngx.dll'];
 /** Every Core file an install may carry, lower case (what an upgrade refreshes). */
-const CORE_ALL = ['version.dll', 'prism_nvngx.dll', 'prismlaunch.exe'];
+const CORE_ALL = ['version.dll', 'winmm.dll', 'dinput8.dll', 'dxgi.dll', 'd3d12.dll', 'prism_nvngx.dll', 'prismlaunch.exe'];
 
 /** The Steam launch option a late-loading install needs. */
 export function launchOptionFor(exeDir: string): string {
@@ -218,14 +232,16 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   // protection is touched.
   const late = route === 'prism-core' && Boolean(analysis.denuvo || profile?.coreLate);
   let lateLoad: InstallPlan['lateLoad'];
+  const loaderName = late ? undefined : pickLoader(analysis.loaderImports ?? (analysis.importsVersionDll ? ['version'] : undefined));
   if (route === 'prism-core' && analysis.exe) {
     const exeDir = path.dirname(analysis.exe);
-    const loader = path.join(exeDir, 'version.dll');
-    if (!late && exists(loader) && !isPrismLoader(loader))
-      blockers.push('游戏目录里已有别的 version.dll（可能是其他 Mod）。Prism Core 的加载器也叫这个名字，为避免弄坏那个 Mod，这次不安装。');
-    if ((late ? LATE_FILES : CORE_FILES).some((f) => !exists(path.join(coreDir, f)))) blockers.push('这个 Prism NR 安装包里缺少 Prism Core 文件，请重新安装 Prism NR。');
-    if (!late && analysis.importsVersionDll === false)
-      warnings.push('主程序没有直接导入 version.dll，Prism Core 可能不会被加载。启用后进一次游戏，游戏目录里出现 prism-core.log 就说明加载成功。');
+    if (loaderName) {
+      const at = path.join(exeDir, loaderName);
+      if (exists(at) && !isPrismLoader(at))
+        warnings.push(`游戏目录里已有别的 ${loaderName}（可能是 ReShade 等其他 Mod）。Prism Core 会用它的位置加载，启用时先备份再覆盖，还原时放回。`);
+    }
+    if ((late ? [...LATE_FILES.map((f) => path.join(coreDir, f))] : [loaderSource(loaderName!), path.join(coreDir, 'prism_nvngx.dll')]).some((f) => !exists(f)))
+      blockers.push('这个 Prism NR 安装包里缺少 Prism Core 文件，请重新安装 Prism NR。');
     if (late) {
       const why = analysis.denuvo ? `检测到 D 加密（Denuvo，主程序里有 ${analysis.denuvo.sections.join('、')} 段）` : '这个游戏已知不接受游戏目录里的加载器';
       lateLoad = { launchOption: launchOptionFor(exeDir), why };
@@ -246,7 +262,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const needs: PlanNeed[] = [];
   if (existsAnyPrevious(game.id)) steps.push('还原这个游戏上一次的 Prism 安装');
   steps.push('备份游戏目录里会被覆盖的文件');
-  steps.push(late ? '部署 Prism Core（PrismLaunch.exe 启动器和 prism_nvngx.dll，游戏启动时不加载任何文件），写入 prism-core.ini' : '部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini');
+  steps.push(late ? '部署 Prism Core（PrismLaunch.exe 启动器和 prism_nvngx.dll，游戏启动时不加载任何文件），写入 prism-core.ini' : `部署 Prism Core（${loaderName} 加载器和 prism_nvngx.dll），写入 prism-core.ini`);
   steps.push(`复制${nr?.bundled ? ' Prism NR 自带的' : '本机的'} NVIDIA 签名版 nvngx_dlssnr.dll${nr?.version ? `（${nr.version}）` : ''}`);
   steps.push('写入安装清单，之后可以一键还原');
 
@@ -276,6 +292,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
     warnings,
     profileNotes: profile?.coreNotes ?? [],
     lateLoad,
+    loader: loaderName,
   };
 }
 
@@ -478,7 +495,12 @@ function buildOps(plan: InstallPlan, analysis: GameAnalysis, comps: Components, 
   ops.push({ kind: 'copy', from: nr.path, to: path.join(exeDir, 'nvngx_dlssnr.dll'), label: 'NVIDIA 神经渲染运行库' });
 
   if (plan.route === 'prism-core') {
-    for (const f of plan.lateLoad ? LATE_FILES : CORE_FILES) ops.push({ kind: 'copy', from: path.join(coreDir, f), to: path.join(exeDir, f), label: `Prism Core：${f}` });
+    if (plan.lateLoad) for (const f of LATE_FILES) ops.push({ kind: 'copy', from: path.join(coreDir, f), to: path.join(exeDir, f), label: `Prism Core：${f}` });
+    else {
+      const loader = plan.loader ?? 'version.dll';
+      ops.push({ kind: 'copy', from: loaderSource(loader), to: path.join(exeDir, loader), label: `Prism Core 加载器：${loader}` });
+      ops.push({ kind: 'copy', from: path.join(coreDir, 'prism_nvngx.dll'), to: path.join(exeDir, 'prism_nvngx.dll'), label: 'Prism Core：prism_nvngx.dll' });
+    }
     ops.push({ kind: 'write', to: path.join(exeDir, CORE_INI), content: coreIni(plan.values), label: 'Prism Core 设置' });
     for (const a of conflictingAddons(exeDir)) ops.push({ kind: 'remove', to: a, label: `移走 ${path.basename(a)}` });
     return { ops, warnings };
@@ -744,7 +766,9 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
     const notes: string[] = [];
     for (const f of r.files) {
       const name = path.basename(f.target).toLowerCase();
-      const from = CORE_ALL.includes(name) ? path.join(coreDir, name) : name === 'nvngx_dlssnr.dll' && nr ? nr.path : null;
+      // A loader is refreshed only where it is Prism's (another mod's dxgi.dll it replaced is in the backup).
+      const loaderFile = LOADERS.includes(name);
+      const from = loaderFile ? (isPrismLoader(f.target) ? loaderSource(name) : null) : CORE_ALL.includes(name) ? path.join(coreDir, name) : name === 'nvngx_dlssnr.dll' && nr ? nr.path : null;
       if (!from || !exists(from) || !exists(f.target)) continue;
       const want = sha256File(from);
       if (want === sha256File(f.target)) continue;
@@ -780,8 +804,17 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
       r.values = was ? { ...rest, ...resolveValues(was) } : { ...rest, 'prism-core.netSize': Number(oldScale) >= 99 ? '150' : '100' };
     }
     const resized = oldScale !== undefined;
+    // 1.4: every tier defaults to 100%. An install still on its 1.3 tier's own intensity (untuned)
+    // follows; a tuned one keeps its value.
+    const OLD_TIER_INTENSITY: Record<string, number> = { extreme: 240, flagship: 240, high: 200, standard: 150, light: 120 };
+    let retuned = false;
+    if (r.values && !resized && OLD_TIER_INTENSITY[r.preset] !== undefined && Number(r.values['prism-core.intensity']) === OLD_TIER_INTENSITY[r.preset]) {
+      const tier = resolveValues(r.preset);
+      const same = ['prism-core.cadence', 'prism-core.passes', 'prism-core.guard'].every((k) => String(r.values![k]) === String(tier[k]));
+      if (same) { r.values = { ...r.values, 'prism-core.intensity': 100 }; retuned = true; }
+    }
     const extra = Object.entries(matchProfile(r.gameName)?.coreValues ?? {}).filter(([k]) => r.values?.[k] === undefined);
-    if (legacy || resized || extra.length) {
+    if (legacy || resized || retuned || extra.length) {
       const ini = r.files.find((f) => /prism-core\.ini$/i.test(f.target));
       if (ini && exists(ini.target)) {
         const tuned = Boolean(r.values?.['prism-core.cadenceChosen']);
@@ -793,7 +826,7 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
           ini.sha256After = sha256Text(content);
           r.values = values;
           if (legacy) r.preset = 'high';
-          notes.push([legacy ? (tuned ? 'passes 2' : 'tier high') : '', resized ? '网络分辨率' : '', ...extra.map(([k]) => k.replace('prism-core.', ''))].filter(Boolean).join(' + '));
+          notes.push([legacy ? (tuned ? 'passes 2' : 'tier high') : '', resized ? '网络分辨率' : '', retuned ? '强度 100%' : '', ...extra.map(([k]) => k.replace('prism-core.', ''))].filter(Boolean).join(' + '));
         } catch (e) {
           log(`upgrade ${r.gameName}: prism-core.ini busy (${(e as Error).message})`);
         }

@@ -6,7 +6,7 @@ import { denuvoSections, readPe } from './pe';
 import { exists, log, psJson, psQuote, walk } from './util';
 
 /** Bumped when the analysis gains a field or a route, so cached analyses are redone. */
-export const ANALYSIS_SCHEMA = 5;
+export const ANALYSIS_SCHEMA = 6;
 
 // Executables that are never the game itself.
 const NOT_GAME_EXE =
@@ -197,6 +197,7 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
     dlssFrameGen,
     antiCheatOptIn: optInApplies ? optIn : undefined,
     importsVersionDll: pe ? pe.imports.includes('version.dll') : undefined,
+    loaderImports: pe ? ['version', 'winmm', 'dinput8', 'dxgi', 'd3d12'].filter((n) => pe.imports.includes(n + '.dll')) : undefined,
     denuvo: pe && denuvoSections(pe).length ? { sections: denuvoSections(pe) } : undefined,
     antiCheat,
     existing,

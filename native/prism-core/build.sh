@@ -19,7 +19,13 @@ g++ -std=c++20 -O2 -Wall -Wextra -Wno-cast-function-type -shared -o build/prism_
 g++ -std=c++20 -O2 -Wall -Wno-cast-function-type -shared -o build/version.dll src/proxy/version.cpp src/proxy/version.def \
   -static -static-libgcc -static-libstdc++ 2>&1
 g++ -std=c++20 -O2 -Wall -Wextra -municode -mwindows -o build/PrismLaunch.exe src/launch/prism_launch.cpp -static -static-libgcc -static-libstdc++ 2>&1
-echo "built build/prism_nvngx.dll build/version.dll build/PrismLaunch.exe"
+# The other loaders (dxgi, d3d12, winmm, dinput8): exports read from the system's own DLLs.
+node tools/proxy/gen.cjs >/dev/null && mkdir -p build/loaders
+for n in dxgi d3d12 winmm dinput8; do
+  g++ -std=c++20 -O2 -Wall -shared -o build/loaders/$n.dll src/proxy/proxy.cpp build/proxy/${n}_thunks.S build/proxy/$n.def \
+    -DPRISM_PROXY_NAME="L\"$n.dll\"" -DPRISM_PROXY_TABLE="\"../../build/proxy/${n}_table.inc\"" -static -static-libgcc -static-libstdc++ 2>&1
+done
+echo "built build/prism_nvngx.dll build/version.dll build/PrismLaunch.exe build/loaders/{dxgi,d3d12,winmm,dinput8}.dll"
 # Runtime shaders: compile every entry point now, so errors show at build time.
 g++ -std=c++20 -O1 -o build/shader_check.exe tests/shader_check.cpp -static -static-libgcc -static-libstdc++ 2>&1
 node tools/extract_shaders.cjs

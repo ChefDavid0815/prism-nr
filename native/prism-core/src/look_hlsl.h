@@ -85,6 +85,7 @@ struct LkParams {
   float density;    // subtractive saturation: lightness given up per unit of chroma gained (film dyes)
   float skinAlign;  // the share of the way skin's hue moves toward the skin line
   float skyDeepen;  // lightness taken from bright blues and cyans (a polariser's sky)
+  float bias;       // stops of exposure after the contrast (a restrained look sits lower, not milky)
   float hiTwist;    // radians: bright reds turn toward yellow and bright blues toward cyan (film)
 };
 
@@ -92,15 +93,17 @@ LkParams LkFor(uint look) {
   LkParams p;
   p.contrast = 1.0; p.sat = 1.0; p.vibrance = 0.0; p.skinKeep = 1.0; p.hiDesat = 0.0; p.loDesat = 0.0;
   p.hue[0] = 1.0; p.hue[1] = 1.0; p.hue[2] = 1.0; p.hue[3] = 1.0; p.hue[4] = 1.0; p.hue[5] = 1.0;
-  p.tintLo = 0.0; p.tintHi = 0.0; p.density = 0.0; p.skinAlign = 0.0; p.skyDeepen = 0.0; p.hiTwist = 0.0;
+  p.tintLo = 0.0; p.tintHi = 0.0; p.density = 0.0; p.skinAlign = 0.0; p.skyDeepen = 0.0; p.hiTwist = 0.0; p.bias = 0.0;
   if (look == 2u) {  // 高饱和
     p.contrast = 1.10; p.sat = 1.38; p.vibrance = 0.55; p.skinKeep = 0.40; p.hiDesat = 0.10; p.loDesat = 0.08;
     p.hue[0] = 0.92; p.hue[1] = 1.08; p.hue[2] = 1.12; p.hue[3] = 1.15; p.hue[4] = 1.00; p.hue[5] = 1.05;
     p.density = 0.35; p.skinAlign = 0.25; p.skyDeepen = 0.04; p.hiTwist = 0.10;
   } else if (look == 3u) {  // 低饱和
-    p.contrast = 1.14; p.sat = 0.58; p.vibrance = 0.0; p.skinKeep = 0.45; p.hiDesat = 0.25; p.loDesat = 0.25;
+    // Restrained, not washed out: taking colour away brightens how a picture reads, so it sits
+    // a fifth of a stop lower with deeper blacks, and highlights keep some of their colour.
+    p.contrast = 1.24; p.sat = 0.66; p.vibrance = 0.0; p.skinKeep = 0.45; p.hiDesat = 0.12; p.loDesat = 0.25; p.bias = -0.2;
     p.hue[0] = 0.95; p.hue[1] = 0.85; p.hue[2] = 0.78; p.hue[3] = 1.00; p.hue[4] = 1.00; p.hue[5] = 0.85;
-    p.tintLo = float2(-0.010, -0.016); p.tintHi = float2(-0.004, -0.014);
+    p.tintLo = float2(-0.010, -0.016); p.tintHi = float2(-0.002, -0.007);
     p.skinAlign = 0.30; p.hiTwist = 0.08;
   } else if (look == 4u) {  // 浓烈
     p.contrast = 1.42; p.sat = 1.50; p.vibrance = 0.35; p.skinKeep = 0.40; p.hiDesat = 0.10; p.loDesat = 0.0;
@@ -119,7 +122,7 @@ float3 LkGrade(float3 x, LkParams p) {
   // or red (bright to the eye, low in luminance) would be pushed down with the shadows.
   const float l = log2(max(0.5 * (LkY(x) + max(x.r, max(x.g, x.b))), 1e-7) / kLkMidGrey);
   const float l2 = l + (p.contrast - 1.0) * 2.5 * tanh(l / 2.5);
-  x *= exp2(l2 - l);
+  x *= exp2(l2 - l + p.bias);
   // Chroma in Oklab.
   const float3 dIn = LkDist(x);
   const float3 lab0 = LkOklab(x);

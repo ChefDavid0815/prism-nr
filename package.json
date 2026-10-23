@@ -66,6 +66,13 @@
         ]
       },
       {
+        "from": "native/prism-core/build/loaders",
+        "to": "prism-core/loaders",
+        "filter": [
+          "*.dll"
+        ]
+      },
+      {
         "from": "vendor-nvidia",
         "to": "nvidia",
         "filter": [
