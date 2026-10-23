@@ -741,8 +741,19 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
     // Installs from before the tiers move to the recommended tier, unless the user tuned them; a
     // game-specific build (profile coreValues) is added where the install lacks it.
     const legacy = r.preset === 'core';
+    // 1.2's network resolution (prism-core.netScale: native or 75%) becomes 1.3's size by pixels
+    // (prism-core.netSize): 旗舰 and 极致 take their new tier values, a tuned install the nearest size.
+    const oldScale = r.values?.['prism-core.netScale'];
+    if (oldScale !== undefined && r.values) {
+      const { ['prism-core.netScale']: _old, ...rest } = r.values;
+      // 1.2's every-frame tiers: 2 passes, guard 100%; 极致 native at 210%, 旗舰 75% at 240%.
+      const v = r.values, every = String(v['prism-core.cadence']) === '1' && String(v['prism-core.passes']) === '2' && Number(v['prism-core.guard']) === 100;
+      const was = every && Number(oldScale) >= 99 && Number(v['prism-core.intensity']) === 210 ? 'extreme' : every && Number(oldScale) === 75 && Number(v['prism-core.intensity']) === 240 ? 'flagship' : null;
+      r.values = was ? { ...rest, ...resolveValues(was) } : { ...rest, 'prism-core.netSize': Number(oldScale) >= 99 ? '150' : '100' };
+    }
+    const resized = oldScale !== undefined;
     const extra = Object.entries(matchProfile(r.gameName)?.coreValues ?? {}).filter(([k]) => r.values?.[k] === undefined);
-    if (legacy || extra.length) {
+    if (legacy || resized || extra.length) {
       const ini = r.files.find((f) => /prism-core\.ini$/i.test(f.target));
       if (ini && exists(ini.target)) {
         const tuned = Boolean(r.values?.['prism-core.cadenceChosen']);
@@ -754,7 +765,7 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
           ini.sha256After = sha256Text(content);
           r.values = values;
           if (legacy) r.preset = 'high';
-          notes.push([legacy ? (tuned ? 'passes 2' : 'tier high') : '', ...extra.map(([k]) => k.replace('prism-core.', ''))].filter(Boolean).join(' + '));
+          notes.push([legacy ? (tuned ? 'passes 2' : 'tier high') : '', resized ? '网络分辨率' : '', ...extra.map(([k]) => k.replace('prism-core.', ''))].filter(Boolean).join(' + '));
         } catch (e) {
           log(`upgrade ${r.gameName}: prism-core.ini busy (${(e as Error).message})`);
         }

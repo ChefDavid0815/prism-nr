@@ -1,13 +1,14 @@
 # Changelog
 
-## 1.3.0 — unreleased
+## 1.3.0 — 2026-10-23 · in-game panel, colour looks, 旗舰 at 100% (+30% against RenoDX 8.5)
 
 - In-game panel: Home (or View + Y on a gamepad) opens Prism Core's own panel in the game. It
   shows a frame-time barcode (one bar per rendered frame), the rendered and displayed frame rates,
   the 1% low and Prism's GPU time, and changes every setting live: tier, intensity, passes,
   cadence, network resolution, skin guard, split view (drag its line on screen) and a frame-rate
   corner. Mouse, keyboard and gamepad all work; while the panel is open the game gets no input.
-  It draws on generated frames too, and at the same brightness in SDR, scRGB and HDR10.
+  It draws on generated frames too, and at the same brightness in SDR, scRGB and HDR10. Verified
+  in Forza Horizon 6 with 2x frame generation.
 - Colour looks (色彩风格), on top of tier and intensity: 默认 (the network as it is), 高还原 (the
   original's colour with only the network's light and shade: the least AI-looking), 高饱和 (vivid
   and clean, for anime and stylised games), 低饱和 (restrained colour, cool whites: the film and

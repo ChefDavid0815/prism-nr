@@ -2,7 +2,9 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { coreIni, panelLines, setCoreDir, setShaderDir } from '../core/installer';
+import { coreIni, panelLines, setCoreDir, setShaderDir, upgradeCoreInstalls } from '../core/installer';
+import { store } from '../core/store';
+import type { InstallRecord } from '../shared/types';
 import { parseVdf } from '../core/scanner';
 import { PrismService } from '../core/service';
 import { initStore } from '../core/store';
@@ -72,6 +74,30 @@ async function main(): Promise<void> {
   initStore(path.join(os.tmpdir(), 'prism-nr-selftest'));
   setShaderDir(path.join(__dirname, '..', '..', 'plugins', 'prism-shaders', 'Shaders'));
   setCoreDir(path.join(__dirname, '..', '..', 'native', 'prism-core', 'build'));
+  // 1.2 installs keep working in 1.3: the old network resolution key moves to the new sizes.
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-nr-upgrade-'));
+    const rec = (id: string, preset: string, values: Record<string, number | boolean | string>) => {
+      fs.mkdirSync(path.join(dir, id));
+      const target = path.join(dir, id, 'prism-core.ini');
+      fs.writeFileSync(target, coreIni(values));
+      return { id, gameId: id, gameName: id, installDir: dir, route: 'prism-core', preset, plugins: ['nr-prism-core'], values, files: [{ target, sha256After: '' }], installedAt: '', status: 'active' } as unknown as InstallRecord;
+    };
+    const before = store.installs();
+    store.saveInstalls([
+      rec('old-extreme', 'extreme', { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 210, 'prism-core.guard': 100, 'prism-core.netScale': '100' }),
+      rec('old-flagship', 'flagship', { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '2', 'prism-core.intensity': 240, 'prism-core.guard': 100, 'prism-core.netScale': '75' }),
+      rec('old-custom', 'flagship', { 'prism-core.cadence': '1', 'prism-core.async': false, 'prism-core.passes': '3', 'prism-core.intensity': 180, 'prism-core.guard': 50, 'prism-core.netScale': '100' }),
+    ]);
+    upgradeCoreInstalls([]);
+    const after = Object.fromEntries(store.installs().map((r) => [r.id, r]));
+    const ini = (id: string) => fs.readFileSync(path.join(dir, id, 'prism-core.ini'), 'utf8');
+    assert(tierOf(after['old-extreme'].values!)?.id === 'extreme' && /NetScale=0\.7655/.test(ini('old-extreme')) && /Intensity=2\.40/.test(ini('old-extreme')), 'Upgrade: a 1.2 极致 install becomes 1.3 极致 (150%)');
+    assert(tierOf(after['old-flagship'].values!)?.id === 'flagship' && /NetScale=0\.6250/.test(ini('old-flagship')), 'Upgrade: a 1.2 旗舰 install becomes 1.3 旗舰 (100%)');
+    assert(after['old-custom'].values!['prism-core.netSize'] === '150' && after['old-custom'].values!['prism-core.passes'] === '3' && after['old-custom'].values!['prism-core.netScale'] === undefined, 'Upgrade: tuned values stay, native becomes 150%');
+    store.saveInstalls(before);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   const svc = new PrismService();
   const sys = await svc.getSystem();
   console.log('GPU:', sys.gpus.map((g) => `${g.name} tier=${g.tier} nr=${g.nrSupport} driver=${g.driver}`).join(' | '));

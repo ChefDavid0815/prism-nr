@@ -92,6 +92,10 @@ const wchar_t* KeyName(int vk) {
 
 std::wstring IniPath() { return GameDir() + L"prism-core.ini"; }
 
+int queueMode = 0;      // OverlayQueue (troubleshooting): 0 automatic, 1 the presenting thread's last queue, 2+ direct queue N-2
+int queueDepth = -1;    // where the queue was found (logged)
+bool requeue = false;   // OverlayQueue changed: look again
+
 void LoadPanelConfig() {
   const std::wstring path = IniPath();
   WIN32_FILE_ATTRIBUTE_DATA fa;
@@ -112,6 +116,8 @@ void LoadPanelConfig() {
   cfg.motion = num(L"OverlayMotion", 1, 0, 1) != 0;
   cfg.block = num(L"OverlayBlockInput", 1, 0, 1) != 0;
   cfg.pad = num(L"OverlayPad", 1, 0, 1) != 0;
+  const int qm = int(num(L"OverlayQueue", 0, 0, 33));
+  if (qm != queueMode) { queueMode = qm; requeue = true; }
 }
 
 void SavePanelValue(const wchar_t* key, const std::wstring& v) {
@@ -621,6 +627,7 @@ struct Chain {
   IDXGISwapChain* sc = nullptr;
   ID3D12CommandQueue* queue = nullptr;
   bool unsupported = false;
+  int tries = 0;  // looks for its queue that came up empty
 } chain;
 std::unordered_map<IDXGISwapChain*, Chain> chains;  // every swap chain seen: its queue, or unsupported (D3D11, another device)
 std::mutex colourMutex;
@@ -637,28 +644,61 @@ std::wstring gpuName;
 // The game's direct queues, as they execute (no references held: only compared with pointers).
 std::mutex queueMutex;
 std::vector<ID3D12CommandQueue*> directQueues;
+thread_local ID3D12CommandQueue* threadQueue = nullptr;  // the presenting thread's last direct queue
 
 // The queue a swap chain presents with: DXGI keeps it inside the swap chain object, at an offset
 // that changes between Windows builds, so look for one of the game's direct queues in there.
+// A swap chain wrapped by another layer (frame generation's, an overlay's) keeps the real one, and
+// its queue, one pointer further in: the objects it points to are searched too.
+bool Readable(const void* a, size_t bytes, uintptr_t* end) {
+  MEMORY_BASIC_INFORMATION mbi;
+  if (!VirtualQuery(a, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) ||
+      !(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)))
+    return false;
+  *end = uintptr_t(mbi.BaseAddress) + mbi.RegionSize;
+  return uintptr_t(a) + bytes <= *end;
+}
+ID3D12CommandQueue* ScanFor(const void* obj, const std::vector<ID3D12CommandQueue*>& known, int depth) {
+  uintptr_t end = 0;
+  if (!Readable(obj, sizeof(uintptr_t), &end)) return nullptr;
+  const uintptr_t* p = reinterpret_cast<const uintptr_t*>(obj);
+  const int n = depth == 0 ? 1024 : 256;
+  for (int i = 0; i < n && uintptr_t(p + i + 1) <= end; ++i)
+    for (ID3D12CommandQueue* q : known)
+      if (p[i] == uintptr_t(q)) return q;
+  if (depth == 0)
+    for (int i = 1; i < 64 && uintptr_t(p + i + 1) <= end; ++i)  // skip the vtable
+      if (p[i] > 0x10000 && (p[i] & 7) == 0)
+        if (ID3D12CommandQueue* q = ScanFor(reinterpret_cast<const void*>(p[i]), known, 1)) return q;
+  return nullptr;
+}
 ID3D12CommandQueue* FindQueue(IDXGISwapChain* sc) {
   std::vector<ID3D12CommandQueue*> known;
   { std::lock_guard<std::mutex> lock(queueMutex); known = directQueues; }
   if (known.empty()) return nullptr;
-  MEMORY_BASIC_INFORMATION mbi;
-  if (!VirtualQuery(sc, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) return nullptr;
-  const uintptr_t end = uintptr_t(mbi.BaseAddress) + mbi.RegionSize;
+  if (queueMode == 1) { queueDepth = 9; return threadQueue; }
+  if (queueMode >= 2) { queueDepth = 8; return size_t(queueMode - 2) < known.size() ? known[size_t(queueMode - 2)] : nullptr; }
+  // In the swap chain itself; else the queue the presenting thread last executed on (Forza Horizon 6:
+  // the swap chain holds a queue of its own that never executes, and one object further in sits the
+  // wrong one of the game's two); else one object further in.
+  uintptr_t end = 0;
   const uintptr_t* p = reinterpret_cast<const uintptr_t*>(sc);
-  for (int i = 0; i < 1024 && uintptr_t(p + i + 1) <= end; ++i)
-    for (ID3D12CommandQueue* q : known)
-      if (p[i] == uintptr_t(q)) return q;
-  return nullptr;
+  if (Readable(sc, sizeof(uintptr_t), &end))
+    for (int i = 0; i < 1024 && uintptr_t(p + i + 1) <= end; ++i)
+      for (ID3D12CommandQueue* q : known)
+        if (p[i] == uintptr_t(q)) { queueDepth = 0; return q; }
+  if (threadQueue && std::find(known.begin(), known.end(), threadQueue) != known.end()) { queueDepth = 9; return threadQueue; }
+  queueDepth = 1;
+  return ScanFor(sc, known, 0);
 }
 
 bool Bind(IDXGISwapChain* sc) {
   auto known = chains.find(sc);
   if (known != chains.end() && (known->second.queue || known->second.unsupported)) { chain = known->second; return !chain.unsupported; }
+  const int tries = known != chains.end() ? known->second.tries : 0;
   chain = Chain{};
   chain.sc = sc;
+  chain.tries = tries;
   ID3D12Device* d = nullptr;
   if (FAILED(sc->GetDevice(__uuidof(ID3D12Device), (void**)&d)) || !d) {  // D3D11 or another API: not ours
     chain.unsupported = true; chains[sc] = chain;
@@ -666,7 +706,15 @@ bool Bind(IDXGISwapChain* sc) {
     return false;
   }
   ID3D12CommandQueue* q = FindQueue(sc);
-  if (!q) { d->Release(); chains[sc] = chain; return false; }  // its queue has not executed yet: try again
+  if (!q) {  // its queue has not executed yet: try again
+    d->Release();
+    if (++chain.tries == 40) {
+      std::lock_guard<std::mutex> lock(queueMutex);
+      LOG("panel: no queue found for swap chain %p yet (%zu direct queues seen); still looking", (void*)sc, directQueues.size());
+    }
+    chains[sc] = chain;
+    return false;
+  }
   q->AddRef();
   if (!gpu.ok && !gpu.failed) {
     InitGpu(d);
@@ -690,7 +738,14 @@ bool Bind(IDXGISwapChain* sc) {
     gameWnd = desc.OutputWindow;
     gameProc = (WNDPROC)SetWindowLongPtrW(gameWnd, GWLP_WNDPROC, (LONG_PTR)&HkWndProc);
   }
-  LOG("panel: drawing on the swap chain's queue (%ls)", gpuName.c_str());
+  {
+    size_t n = 0, at = 0;
+    { std::lock_guard<std::mutex> lock(queueMutex); n = directQueues.size(); at = size_t(std::find(directQueues.begin(), directQueues.end(), q) - directQueues.begin()); }
+    DXGI_SWAP_CHAIN_DESC sd = {};
+    sc->GetDesc(&sd);
+    LOG("panel: drawing on the swap chain's queue (%ls) | queue %p #%zu of %zu, mode %d depth %d | chain %p %ux%u fmt %d buffers %u effect %d flags 0x%x",
+        gpuName.c_str(), (void*)q, at, n, queueMode, queueDepth, (void*)sc, sd.BufferDesc.Width, sd.BufferDesc.Height, int(sd.BufferDesc.Format), sd.BufferCount, int(sd.SwapEffect), sd.Flags);
+  }
   return true;
 }
 
@@ -723,15 +778,18 @@ int ColourMode(IDXGISwapChain* sc, DXGI_FORMAT f) {
 
 bool Submit(IDXGISwapChain* sc, UINT bw, UINT bh, DXGI_FORMAT fmt) {
   IDXGISwapChain3* sc3 = nullptr;
-  if (FAILED(sc->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&sc3))) return false;
+  static bool said3 = false, saidBuf = false, saidPso = false;
+  if (FAILED(sc->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&sc3))) { if (!said3) { said3 = true; LOG("panel: no IDXGISwapChain3 on %p", (void*)sc); } return false; }
   const UINT index = sc3->GetCurrentBackBufferIndex();
   ID3D12Resource* bb = nullptr;
   const HRESULT hr = sc3->GetBuffer(index, __uuidof(ID3D12Resource), (void**)&bb);
   const int mode = ColourMode(sc, fmt);
   sc3->Release();
-  if (FAILED(hr) || !bb) return false;
+  if (FAILED(hr) || !bb) { if (!saidBuf) { saidBuf = true; LOG("panel: GetBuffer(%u) failed 0x%08lx", index, hr); } return false; }
   ID3D12PipelineState* pso = PsoFor(fmt);
-  if (!pso) { bb->Release(); return false; }
+  if (!pso) { if (!saidPso) { saidPso = true; LOG("panel: no pipeline for format %d", int(fmt)); } bb->Release(); return false; }
+  static uint32_t submits = 0;
+  if (++submits == 1 || submits == 600) LOG("panel: submit #%u to buffer %u of %p on queue %p", submits, index, (void*)sc, (void*)chain.queue);
 
   Slot& s = gpu.slots[gpu.slot];
   gpu.slot = (gpu.slot + 1) % kSlots;
@@ -1478,6 +1536,7 @@ void OverlaySetup(void** vt) {
 
 void OverlayNoteQueue(ID3D12CommandQueue* q) {
   static thread_local ID3D12CommandQueue* last = nullptr;
+  if (q && q->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT) threadQueue = q;
   if (q == last || !q) return;
   last = q;
   std::lock_guard<std::mutex> lock(queueMutex);
@@ -1507,7 +1566,9 @@ void OverlayPresent(IDXGISwapChain* sc) {
     TestSetup();
     LOG("panel ready (%ls opens it, View + Y on a gamepad)", KeyName(cfg.key));
   }
-  if (sc != chain.sc) Bind(sc);
+  if (requeue) { requeue = false; chains.clear(); chain = Chain{}; }
+  static uint32_t lookTick = 0;
+  if (sc != chain.sc || (!chain.queue && !chain.unsupported && ++lookTick % 30 == 0)) Bind(sc);
   if (chain.unsupported || !chain.queue) return;
 
   static double last = Now();
