@@ -506,7 +506,17 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
 
 // ---------------------------------------------------------------------------
 
-const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.netScale', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard'];
+const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.netScale', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard', 'prism-core.look'];
+/** The look is its own choice: tiers neither set nor reset it. */
+const TIER_KEYS = CORE_KEYS.filter((k) => k !== 'prism-core.look');
+
+const LOOKS: { value: string; label: string; note: string }[] = [
+  { value: '0', label: '默认', note: '网络原样的色彩。' },
+  { value: '1', label: '高还原', note: '保留原画的颜色，只取网络的光影和质感；强改动被柔和压住，皮肤上更克制。AI 味最低，适合原画党。' },
+  { value: '2', label: '高饱和', note: '颜色更鲜更干净：越灰的颜色加得越多，灰和白保持中性，皮肤只跟一小部分。适合二次元和卡通风格。' },
+  { value: '3', label: '低饱和', note: '收住颜色，白色微冷，暗部微青，像美剧和电影的质感，皮肤保留自然血色。适合科技和现代题材。' },
+  { value: '4', label: '浓烈', note: '深对比加浓郁色彩，暗部偏青、高光微暖。真正的重度渲染。' },
+];
 
 function pickCore(values: CoreValues): CoreValues {
   return Object.fromEntries(Object.entries(values).filter(([k]) => CORE_KEYS.includes(k)));
@@ -547,7 +557,8 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
   const netScale = String(values['prism-core.netScale'] ?? '100');
   const async = values['prism-core.async'] !== false;
   const defaults = resolveValues(tier.id);
-  const changed = CORE_KEYS.some((k) => String(values[k]) !== String(defaults[k]));
+  const look = String(values['prism-core.look'] ?? '0');
+  const changed = TIER_KEYS.some((k) => String(values[k]) !== String(defaults[k]));
 
   useEffect(() => () => {
     if (pending.current) clearTimeout(pending.current);
@@ -578,6 +589,18 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
   return (
     <section className="block">
       <h2 className="block-title">微调</h2>
+
+      <div className="core-field">
+        <span className="core-field-label" id="core-look-label">色彩风格</span>
+        <div className="segmented" role="radiogroup" aria-labelledby="core-look-label">
+          {LOOKS.map((l) => (
+            <button key={l.value} role="radio" aria-checked={look === l.value} className={look === l.value ? 'is-on' : ''} onClick={() => set({ 'prism-core.look': l.value })}>
+              {l.label}
+            </button>
+          ))}
+        </div>
+        <p className="block-note">{(LOOKS.find((l) => l.value === look) ?? LOOKS[0]).note}</p>
+      </div>
 
       <div className="core-field">
         <span className="core-field-label" id="core-cadence-label">网络节奏</span>
@@ -645,7 +668,7 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
                   : '这些设置已经写在游戏目录里。改动会直接写入，游戏运行中约 1 秒内生效。'}
         </p>
         {changed && (
-          <button className="btn btn-line btn-small" onClick={() => set({ ...pickCore(defaults) })}>
+          <button className="btn btn-line btn-small" onClick={() => set({ ...pickCore(defaults), 'prism-core.look': look })}>
             恢复{tier.name}档
           </button>
         )}

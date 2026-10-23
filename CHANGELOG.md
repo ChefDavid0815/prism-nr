@@ -8,6 +8,11 @@
   cadence, network resolution, skin guard, split view (drag its line on screen) and a frame-rate
   corner. Mouse, keyboard and gamepad all work; while the panel is open the game gets no input.
   It draws on generated frames too, and at the same brightness in SDR, scRGB and HDR10.
+- Colour looks (色彩风格), on top of tier and intensity: 默认 (the network as it is), 高还原 (the
+  original's colour with only the network's light and shade: the least AI-looking), 高饱和 (vivid
+  and clean, for anime and stylised games), 低饱和 (restrained colour, cool whites: the film and
+  series look) and 浓烈 (deep contrast, rich colour). They grade in scene light before the game's
+  tone mapping, keep greys neutral and skin natural, and never clip colours. In the app and the panel.
 - Changes made in the panel are saved to `prism-core.ini` and show up in the app; the app keeps
   the panel's own settings (its place, the frame-rate corner, its key) when it rewrites the file.
 - Rolling back no longer reports `prism-core.ini` as changed after an install.

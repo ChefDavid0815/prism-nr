@@ -36,6 +36,7 @@ struct LiveSettings {
   float intensity = 1.0f, netScale = 1.0f, guard = 1.0f;
   bool async = true, split = false;
   float splitPos = 0.5f;  // the split's column, as a fraction of the width
+  int look = 0;           // 0 默认, 1 高还原, 2 高饱和, 3 低饱和, 4 浓烈 (look_hlsl.h)
 };
 LiveSettings GetLiveSettings();
 void SetLiveSettings(const LiveSettings& s);

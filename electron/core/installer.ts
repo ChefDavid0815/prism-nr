@@ -94,6 +94,7 @@ export function coreIni(values: Values, keep: string[] = []): string {
     `Passes=${passes}`,
     `Guided=${values['prism-core.guided'] === true || values['prism-core.guided'] === 1 || values['prism-core.guided'] === '1' ? 1 : 0}`,
     `NetScale=${(Math.max(50, Math.min(100, Number(values['prism-core.netScale'] ?? 100))) / 100).toFixed(2)}`,
+    `Look=${Math.max(0, Math.min(4, Math.round(Number(values['prism-core.look'] ?? 0)) || 0))}`,
     'KeyToggle=F8',
     'KeyCadence=F2',
     'KeyAsync=F3',
@@ -799,13 +800,14 @@ export function syncCoreFromIni(): boolean {
     }
     const num = (k: string) => (ini[k] !== undefined && ini[k] !== '' && Number.isFinite(Number(ini[k])) ? Number(ini[k]) : undefined);
     const next: Values = { ...(r.values ?? {}) };
-    const cadence = num('cadence'), passes = num('passes'), intensity = num('intensity'), guard = num('guard'), netScale = num('netscale'), async = num('async');
+    const cadence = num('cadence'), passes = num('passes'), intensity = num('intensity'), guard = num('guard'), netScale = num('netscale'), async = num('async'), look = num('look');
     if (cadence !== undefined) next['prism-core.cadence'] = String(Math.round(cadence));
     if (passes !== undefined) next['prism-core.passes'] = String(Math.round(passes));
     if (intensity !== undefined) next['prism-core.intensity'] = Math.round(intensity * 100);
     if (guard !== undefined) next['prism-core.guard'] = Math.round(guard * 100);
     if (netScale !== undefined) next['prism-core.netScale'] = String(Math.round(netScale * 100));
     if (async !== undefined) next['prism-core.async'] = async !== 0;
+    if (look !== undefined) next['prism-core.look'] = String(Math.max(0, Math.min(4, Math.round(look))));
     r.values = next;
     file.sha256After = sha256Text(text);
     changed = true;

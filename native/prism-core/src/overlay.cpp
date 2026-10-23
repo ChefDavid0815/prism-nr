@@ -935,7 +935,7 @@ int TierOf(const LiveSettings& s) {
 bool TierLocked(int i) { return kTiers[i].needs5090 && gpuName.find(L"5090") == std::wstring::npos; }
 
 // ------------------------------------------------------------------ the panel
-enum Row { kOn, kTier, kIntensity, kPasses, kCadence, kNetScale, kGuard, kSplit, kHud, kRows };
+enum Row { kOn, kTier, kLook, kIntensity, kPasses, kCadence, kNetScale, kGuard, kSplit, kHud, kRows };
 struct Panel {
   bool open = false;
   double openedAt = 0, closedAt = -10;
@@ -1050,7 +1050,7 @@ void Cursor(float x, float y) {
 }
 
 const wchar_t* RowLabel(int r) {
-  static const wchar_t* labels[kRows] = {L"神经渲染", L"档位", L"强度", L"遍数", L"节奏", L"网络分辨率", L"肤色保护", L"分屏对比", L"帧率角标"};
+  static const wchar_t* labels[kRows] = {L"神经渲染", L"档位", L"色彩", L"强度", L"遍数", L"节奏", L"网络分辨率", L"角色守护", L"分屏对比", L"帧率角标"};
   return labels[r];
 }
 
@@ -1063,12 +1063,21 @@ std::wstring RowHelp(int r, const LiveSettings& s, int option) {
       if (TierLocked(i)) return L"极致档只在 RTX 5090 上开放：网络每帧在原生分辨率跑两遍，其他显卡的帧率会掉得太多。可以用旗舰档。";
       return kTiers[i].help;
     }
+    case kLook: {
+      static const wchar_t* looks[5] = {
+          L"网络原样的色彩。",
+          L"保留原画的颜色，只取网络的光影和质感；强改动被柔和压住，皮肤上更克制。AI 味最低，适合原画党。",
+          L"颜色更鲜更干净：越灰的颜色加得越多，灰和白保持中性，皮肤只跟一小部分。适合二次元和卡通风格。",
+          L"收住颜色，白色微冷，暗部微青，像美剧和电影的质感，皮肤保留自然血色。适合科技和现代题材。",
+          L"深对比加浓郁色彩，暗部偏青、高光微暖。真正的重度渲染。"};
+      return looks[std::clamp(option >= 0 ? option : s.look, 0, 4)];
+    }
     case kIntensity: return L"网络改动的放大倍数，100% 是网络原样输出。250% 以上是游乐场，画面容易过度。";
     case kPasses: return L"网络在自己的结果上再跑几遍，效果更强，开销按遍数成倍增加。3 遍以上是游乐场。";
     case kCadence: return L"每帧都跑网络，高速运动没有拖影；隔帧运行更省，快速运动的物体旁可能有残影。快捷键 F2。";
     case kNetScale:
       return s.cadence == 1 ? L"75% 分辨率运行网络，再按画面边缘放大回原生，RTX 5090 Laptop 实测快约 17%。" : L"只在网络每帧运行时生效。先把节奏改成每帧。";
-    case kGuard: return L"减少网络对皮肤和高饱和颜色的改动，人物肤色更自然。";
+    case kGuard: return L"压住网络在肤色和高饱和颜色上的色度改动，人物肤色更自然。0% 等于不干预。";
     case kSplit: return L"左边原画，右边 Prism。面板打开时可以拖动画面上的分割线。快捷键 F4。";
     case kHud: return L"面板收起后在左上角显示帧率和帧时间。";
   }
@@ -1263,6 +1272,14 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
           n.cadence = tr.cadence; n.passes = tr.passes; n.async = tr.async; n.intensity = tr.intensity; n.guard = tr.guard; n.netScale = tr.netScale;
           changed = true;
         }
+        if (focused) panel.hoverOption = hover;
+        break;
+      }
+      case kLook: {
+        clicked = Segments(r, cx0, sy, cx1, sh, {L"默认", L"高还原", L"高饱和", L"低饱和", L"浓烈"}, std::clamp(n.look, 0, 4), 31, 0, &hover, dt);
+        int want = clicked;
+        if (keyStep) want = std::clamp(n.look + step, 0, 4);
+        if (want >= 0 && want != n.look) { n.look = want; changed = true; }
         if (focused) panel.hoverOption = hover;
         break;
       }

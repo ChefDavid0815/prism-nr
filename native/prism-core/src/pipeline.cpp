@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "MinHook.h"
+#include "look_hlsl.h"
 #include "ngx_param.h"
 #include "overlay.h"
 
@@ -111,7 +112,8 @@ cbuffer C : register(b0) {
 };
 // Flags: 1 launch frame (the in-flight warp starts here), 2 landing frame (the in-flight warp
 // becomes the landed one), 4 a landed edit exists, 8 the network gets motion from the landed warp,
-// 16 luminance-guided edit on surfaces the warp can't follow (Guided=1).
+// 16 luminance-guided edit on surfaces the warp can't follow (Guided=1), 32 reduced network;
+// bits 8-10 the look (Look=0..4, see look_hlsl.h).
 Texture2D<float4> Orig : register(t0);
 Texture2D<float4> Proxy : register(t1);
 Texture2D<float4> Neural : register(t2);
@@ -225,6 +227,7 @@ float3 UpEdit(uint2 p, float yFull) {
   return ws > 1e-4 ? acc / ws : bil;  // nothing alike nearby: plain bilinear
 }
 
+)" PRISM_LOOK_HLSL R"(
 // Edit = log2(neural / proxy) in the proxy's linear light; guard its chroma on skin and strong
 // colour; apply it to the game's HDR frame as a ratio, so the frame's range is untouched.
 [numthreads(16, 16, 1)]
@@ -253,9 +256,10 @@ void Compose(uint3 id : SV_DispatchThreadID) {
   NewEdit[id.xy] = float4(e, DepthAt(id.xy));
   NewWarp[id.xy] = 0.0;  // a synchronous result: no launch in flight to reach
   NewWarpL[id.xy] = 0.0;
-  // Split view (F4): the original left of the split column (Split - 4), a thin line at it.
-  if (Split >= 4u && id.x < Split - 4u) e = 0.0;
-  float3 result = o * exp2(e);
+  // Split view (F4): the original left of the split column (Split - 4), a thin line at it. The
+  // look (Flags bits 8-10) colours the result.
+  const bool original = Split >= 4u && id.x < Split - 4u;
+  float3 result = original ? o : LookApply(o, e, (Flags >> 8u) & 7u, Exposure[0]);
   if (Split >= 4u && (id.x == Split - 4u || id.x + 1u == Split - 4u)) result = 2.0;
   if (Split == 2u) result = float3(4.0, 0.0, 4.0);  // debug paint: proves the writes reach the screen
   Out0[id.xy] = float4(result, 1.0);
@@ -424,8 +428,8 @@ void Fill(uint3 id : SV_DispatchThreadID) {
     }
   }
   NewEdit[id.xy] = float4(e, d);
-  if (Split >= 4u && id.x < Split - 4u) e = 0.0;
-  float3 result = Orig[id.xy].rgb * exp2(e);
+  const bool original = Split >= 4u && id.x < Split - 4u;
+  float3 result = original ? Orig[id.xy].rgb : LookApply(Orig[id.xy].rgb, e, (Flags >> 8u) & 7u, Exposure[0]);
   if (Split >= 4u && (id.x == Split - 4u || id.x + 1u == Split - 4u)) result = 2.0;
   Out0[id.xy] = float4(result, 1.0);
 }
@@ -533,6 +537,7 @@ ID3D12Device* device = nullptr;
 ID3D12RootSignature* root = nullptr;
 ID3D12PipelineState *psoReduce1 = nullptr, *psoReduce2 = nullptr, *psoEncode = nullptr, *psoCompose = nullptr, *psoCarry = nullptr, *psoBake = nullptr, *psoCopyGuides = nullptr, *psoFill = nullptr, *psoFit = nullptr;
 bool guided = false;  // the luminance-guided edit (Guided=1)
+int look = 0;         // the colour look (Look=0..4: 默认, 高还原, 高饱和, 低饱和, 浓烈; look_hlsl.h)
 bool netReset = false;  // NetReset=1: the network starts without its history on every run (study)
 // NetScale (0.5-1, synchronous mode only): the network's working resolution. Below 1 it runs on
 // a reduced proxy and Compose brings its edit back with a joint bilateral upsample.
@@ -1291,6 +1296,13 @@ void LoadConfig() {
   passes = int(Num(L"Passes", passes, 1, kMaxPasses));
   stagger = Num(L"Stagger", stagger ? 1 : 0, 0, 1) != 0;
   guided = Num(L"Guided", guided ? 1 : 0, 0, 1) != 0;
+  {
+    // A number, or the look's name.
+    const std::wstring lk = Get(L"Look");
+    static const wchar_t* names[] = {L"default", L"faithful", L"vivid", L"muted", L"punchy"};
+    for (int i = 0; i < 5; ++i) if (!lstrcmpiW(lk.c_str(), names[i])) look = i;
+    if (!lk.empty() && lk[0] >= L'0' && lk[0] <= L'9') look = std::clamp(_wtoi(lk.c_str()), 0, 4);
+  }
   netReset = Num(L"NetReset", netReset ? 1 : 0, 0, 1) != 0;
   netScale = float(Num(L"NetScale", netScale, 0.5, 1.0));
   {
@@ -1331,7 +1343,7 @@ void LoadConfig() {
   keys.split = ParseKey(Get(L"KeySplit"), keys.split);
   keys.capture = ParseKey(Get(L"KeyCapture"), keys.capture);
   if (cadence != oldCadence || passes != oldPasses || asyncMode != oldAsync || enabled != oldEnabled) historyValid = false;
-  if (Log) Log("prism-core.ini: %s, network every %d frame(s) x%d pass(es), async %s, land %s, %s priority, cap %d fps, intensity %.2f, guard %.2f [%s]", enabled ? "on" : "off", cadence, passes, asyncMode ? "on" : "off", landPoll ? "poll" : "wait", netPriority ? "high" : "normal", fpsCap, intensity, guardStrength, label.c_str());
+  if (Log) Log("prism-core.ini: %s, network every %d frame(s) x%d pass(es), async %s, land %s, %s priority, cap %d fps, intensity %.2f, guard %.2f, look %d [%s]", enabled ? "on" : "off", cadence, passes, asyncMode ? "on" : "off", landPoll ? "poll" : "wait", netPriority ? "high" : "normal", fpsCap, intensity, guardStrength, look, label.c_str());
 }
 
 ID3D12Resource* Readback(ID3D12Resource* src, D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp) {
@@ -1442,7 +1454,7 @@ LiveSettings GetLiveSettings() {
   if (havePending) { std::lock_guard<std::mutex> lock(liveMutex); return pending; }
   LiveSettings s;
   s.enabled = enabled; s.cadence = cadence; s.passes = passes; s.intensity = intensity; s.netScale = netScale; s.guard = guardStrength;
-  s.async = asyncMode; s.split = split; s.splitPos = splitPos;
+  s.async = asyncMode; s.split = split; s.splitPos = splitPos; s.look = look;
   return s;
 }
 
@@ -1469,6 +1481,7 @@ void SaveLiveSettings() {
   std::swprintf(b, 32, L"%.2f", s.netScale); put(L"NetScale", b);
   put(L"Split", s.split ? L"1" : L"0");
   std::swprintf(b, 32, L"%.3f", s.splitPos); put(L"SplitPos", b);
+  put(L"Look", std::to_wstring(s.look));
   WIN32_FILE_ATTRIBUTE_DATA fa;
   if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) configTime = fa.ftLastWriteTime;  // our own write: not read back
   unsaved = false;
@@ -1513,6 +1526,7 @@ void ApplyPending() {
   enabled = s.enabled; cadence = std::clamp(s.cadence, 0, 8); passes = std::clamp(s.passes, 1, kMaxPasses); asyncMode = s.async;
   intensity = std::clamp(s.intensity, 0.0f, 3.0f); guardStrength = std::clamp(s.guard, 0.0f, 1.0f); netScale = std::clamp(s.netScale, 0.5f, 1.0f);
   split = s.split; splitPos = std::clamp(s.splitPos, 0.02f, 0.98f);
+  look = std::clamp(s.look, 0, 4);
 }
 
 // Rendered frame rate, measured between the game's upscale calls (one per rendered frame;
@@ -1677,7 +1691,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   recorded = true;
   Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, paint ? 2u : (split ? splitCol : 0u),
                  c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f,
-                 (launchNow ? 1u : 0u) | (landNow ? 2u : 0u) | (landedBefore ? 4u : 0u) | (guided ? 16u : 0u), span, 1.0f - stability};
+                 (launchNow ? 1u : 0u) | (landNow ? 2u : 0u) | (landedBefore ? 4u : 0u) | (guided ? 16u : 0u) | (uint32_t(look & 7) << 8), span, 1.0f - stability};
 
   const UINT slot = UINT(frame % kRing);
   // The slot written kRing frames ago is long finished: read it before reusing it.

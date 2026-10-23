@@ -21,9 +21,13 @@ g++ -std=c++20 -O2 -Wall -Wno-cast-function-type -shared -o build/version.dll sr
 echo "built build/prism_nvngx.dll build/version.dll"
 # Runtime shaders: compile every entry point now, so errors show at build time.
 g++ -std=c++20 -O1 -o build/shader_check.exe tests/shader_check.cpp -static -static-libgcc -static-libstdc++ 2>&1
-node -e "const s=require('fs').readFileSync('src/pipeline.cpp','utf8');const m='const char* kShaders = R\"(';const a=s.indexOf(m);require('fs').writeFileSync('build/shaders.hlsl',s.slice(a+m.length,s.indexOf(')\";',a)))"
+node tools/extract_shaders.cjs
 ./build/shader_check.exe build/shaders.hlsl Reduce1 Reduce2 Encode Compose Carry Fill Bake CopyGuides Fit Down
 # The in-game panel without a game: draws it over a still and saves a PNG (or "live": a window).
 g++ -std=c++20 -O2 -Wall -Wextra -Wno-cast-function-type -municode -o build/overlay_demo.exe tests/overlay_demo.cpp src/overlay.cpp build/obj/*.o \
   -Isrc -Iexternal/minhook/include -ld3d12 -ldxgi -ldwrite -lwindowscodecs -lole32 -luuid -static -static-libgcc -static-libstdc++ 2>&1
 echo "built build/overlay_demo.exe"
+# The colour looks on a still or a chart, as a contact sheet.
+g++ -std=c++20 -O2 -Wall -Wno-cast-function-type -municode -o build/look_preview.exe tests/look_preview.cpp -Isrc \
+  -ld3d12 -ldxgi -lwindowscodecs -lole32 -luuid -static -static-libgcc -static-libstdc++ 2>&1
+echo "built build/look_preview.exe"

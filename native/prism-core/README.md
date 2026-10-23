@@ -73,6 +73,7 @@ KeyCadence=F2
 KeyAsync=F3
 KeySplit=F4
 KeyCapture=F11
+Look=0           ; colour: 0 默认, 1 高还原, 2 高饱和, 3 低饱和, 4 浓烈 (or default, faithful, vivid, muted, punchy)
 KeyOverlay=Home  ; the in-game panel
 SplitPos=0.500   ; where the split view divides the picture, 0.02-0.98 (the panel drags it)
 ```
@@ -92,6 +93,28 @@ are experimental.
 | F4 | split view: original left, Prism right |
 | F11 | capture one frame's original, input, network output and result to `prism-capture/` |
 | Home | the in-game panel (View + Y on a gamepad) |
+
+## Looks
+
+`Look` grades the frame after the network and before the game's own tone mapping, so it works
+in scene light the way a colourist grades log footage (`src/look_hlsl.h`): contrast in stops
+around mid grey as one ratio for all channels (driven by the mean of luminance and the largest
+channel, so saturated blues and reds are not pushed into the shadows), colour in Oklab. Muted
+colours gain more than strong ones, greys (and greys with a cast) stay neutral, skin takes only
+part of any change, highlights and deep shadows lose a little chroma, shadows and highlights can
+be tinted, and colours that would leave the gamut approach its edge along their own hue and
+lightness instead of being clipped.
+
+| Look | What it does |
+|---|---|
+| 0 默认 | the network's result as it is |
+| 1 高还原 | the original's colour: only the network's light and shade (one ratio for all channels), eased beyond about 1.5 stops and less on skin, with a gentle film contrast |
+| 2 高饱和 | chroma ×1.38 plus up to 55% more on muted colours, cyan, green and yellow a little more, red a little less; for anime and stylised games |
+| 3 低饱和 | chroma ×0.58, greens and yellows lower still, cool whites and teal shadows, skin keeps most of its colour; the modern film and series look |
+| 4 浓烈 | contrast 1.42 at mid grey, chroma ×1.5, teal shadows and warm highlights |
+
+`tests/look_preview.cpp` runs the same HLSL on an F11 capture pair or a generated colour chart
+and saves a contact sheet of all five.
 
 ## In-game panel
 
@@ -149,6 +172,8 @@ bash native/prism-core/build.sh
 | `src/ngx_param.h` | NGX parameter blocks by MSVC vtable slot |
 | `tests/nr_bench.cpp` | drives the signed network outside any game: cost, sequences, async overlap |
 | `tests/overlay_demo.cpp` | the in-game panel over a still, without a game |
+| `src/look_hlsl.h` | the colour looks (HLSL shared by Core and the preview) |
+| `tests/look_preview.cpp` | contact sheet of the looks on a capture pair or a colour chart |
 | `tests/nets_harness.cpp` | GPU check of the NETS shaders against the CPU reference |
 | `tests/shader_check.cpp` | compiles every runtime shader entry point at build time |
 | `tests/ab_run.cjs` | A/B runner: switches prism-core.ini settings in a running game and collects the statistics |

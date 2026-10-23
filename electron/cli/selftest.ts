@@ -41,6 +41,8 @@ async function main(): Promise<void> {
   assert(tierOf(resolveValues('high'))?.id === 'high' && tierOf({ ...resolveValues('high'), 'prism-core.intensity': 205 }) === undefined, 'Tiers: values name their tier, a tweak makes them custom');
   assert(/^[\x00-\x7f]*$/.test(ini0), 'Core INI: ASCII only (GetPrivateProfileString reads it as ANSI)');
   assert(/KeyOverlay=Home/.test(ini0), 'Core INI: the in-game panel opens with Home');
+  assert(/Look=0/.test(ini0) && /Look=3/.test(coreIni({ 'prism-core.look': '3' })) && /Look=4/.test(coreIni({ 'prism-core.look': '9' })), 'Core INI: the colour look is written (0-4)');
+  assert(tierOf({ ...resolveValues('flagship'), 'prism-core.look': '2' })?.id === 'flagship', 'Tiers: the colour look does not change the tier');
   const kept = coreIni(resolveValues('high'), ['KeyOverlay=Insert', 'OverlayX=900', 'OverlayHud=1', 'SplitPos=0.620']);
   assert(/KeyOverlay=Insert/.test(kept) && !/KeyOverlay=Home/.test(kept) && /OverlayX=900/.test(kept) && /OverlayHud=1/.test(kept) && /SplitPos=0\.620/.test(kept),
     'Core INI: a rewrite keeps the in-game panel\'s own keys');
