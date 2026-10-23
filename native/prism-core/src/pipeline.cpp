@@ -540,8 +540,11 @@ bool guided = false;  // the luminance-guided edit (Guided=1)
 int look = 0;         // the colour look (Look=0..4: 默认, 高还原, 高饱和, 低饱和, 浓烈; look_hlsl.h)
 bool netReset = false;  // NetReset=1: the network starts without its history on every run (study)
 // NetScale (0.5-1, synchronous mode only): the network's working resolution. Below 1 it runs on
-// a reduced proxy and Compose brings its edit back with a joint bilateral upsample.
-float netScale = 1.0f, builtScale = 1.0f;
+// a reduced proxy and Compose brings its edit back with a joint bilateral upsample. The reduced
+// textures and the network's features are made at full size and only their top-left part (the
+// active size) is used and evaluated: the cost follows the active area, and the size can change
+// from one frame to the next without making anything again.
+float netScale = 1.0f;
 uint32_t nw = 0, nh = 0;  // the network's working size
 ID3D12Resource *proxyLow = nullptr, *neuralLow = nullptr, *midsLow[2] = {};
 // What the network's passes read and write: the native textures, or the reduced ones.
@@ -791,34 +794,10 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
     device->CreateUnorderedAccessView(landedLuma, nullptr, nullptr, Cpu(b + kSetL + 4));
   }
 
-  // The network's working size; below native it gets its own textures, and the descriptors the
-  // synchronous path uses point at them: t2 the small output, t11 the small proxy, set G's u0 the
-  // small proxy for Down (sets G and the scratch are only used asynchronously, off at this scale).
-  builtScale = netScale;
-  nw = netScale < 1.0f ? UINT(float(w) * netScale + 0.5f) : w;
-  nh = netScale < 1.0f ? UINT(float(h) * netScale + 0.5f) : h;
+  // The network starts native; each frame picks its working size (SelectNetSize). The features
+  // below are made at full size either way.
+  nw = w; nh = h;
   netProxy = proxy; netNeural = neural; netMids[0] = mids[0]; netMids[1] = mids[1];
-  if (nw != w || nh != h) {
-    auto small = [&](bool uav) -> ID3D12Resource* {
-      D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-      D3D12_RESOURCE_DESC d = {};
-      d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; d.Width = nw; d.Height = nh; d.DepthOrArraySize = 1; d.MipLevels = 1;
-      d.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; d.SampleDesc.Count = 1; d.Flags = uav ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
-      ID3D12Resource* t = nullptr;
-      return SUCCEEDED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, __uuidof(ID3D12Resource), (void**)&t)) ? t : nullptr;
-    };
-    proxyLow = small(true); neuralLow = small(true); midsLow[0] = small(true); midsLow[1] = small(true);
-    if (!proxyLow || !neuralLow || !midsLow[0] || !midsLow[1]) return Fail("reduced network resources");
-    netProxy = proxyLow; netNeural = neuralLow; netMids[0] = midsLow[0]; netMids[1] = midsLow[1];
-    for (UINT k = 0; k < kRing; ++k) {
-      const UINT b = k * kBlock;
-      sv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-      device->CreateShaderResourceView(neuralLow, &sv, Cpu(b + 2));
-      device->CreateShaderResourceView(proxyLow, &sv, Cpu(b + 11));
-      device->CreateUnorderedAccessView(proxyLow, nullptr, nullptr, Cpu(b + kSetG));
-    }
-    Log("network at %ux%u (%.0f%% of %ux%u), edge-aware upsample", nw, nh, netScale * 100.0f, w, h);
-  }
 
   // The network: the signed runtime from the game folder, initialised on the game's device (once).
   ngx::Result r = ngx::kSuccess;
@@ -874,6 +853,45 @@ bool HookExecuteOnce(ID3D12Device* dev) {
   void* target = (*reinterpret_cast<void***>(probe))[10];
   probe->Release();
   return MH_CreateHook(target, (void*)&HookExecute, (void**)&realExecute) == MH_OK && MH_EnableHook(target) == MH_OK;
+}
+
+// The reduced network's textures (proxy, output, the passes' in-between), full size, made the first
+// time a frame runs below native.
+bool EnsureLow() {
+  if (proxyLow) return true;
+  auto full = [&]() -> ID3D12Resource* {
+    D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC d = {};
+    d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; d.Width = w; d.Height = h; d.DepthOrArraySize = 1; d.MipLevels = 1;
+    d.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; d.SampleDesc.Count = 1; d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    ID3D12Resource* t = nullptr;
+    return SUCCEEDED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, __uuidof(ID3D12Resource), (void**)&t)) ? t : nullptr;
+  };
+  proxyLow = full(); neuralLow = full(); midsLow[0] = full(); midsLow[1] = full();
+  if (!proxyLow || !neuralLow || !midsLow[0] || !midsLow[1]) return Fail("reduced network resources");
+  return true;
+}
+
+// This frame's working size. The native and the reduced textures swap only between asynchronous
+// launches (a reduced network runs synchronously); within the reduced mode the active size simply
+// follows NetScale. The height follows the width the way the shaders' LowSize() does.
+bool SelectNetSize() {
+  const bool want = netScale < 0.999f, reduced = netProxy != proxy;
+  if (want != reduced && !inFlight) {
+    if (want && !EnsureLow()) return false;
+    netProxy = want ? proxyLow : proxy; netNeural = want ? neuralLow : neural;
+    netMids[0] = want ? midsLow[0] : mids[0]; netMids[1] = want ? midsLow[1] : mids[1];
+    historyValid = false;
+  }
+  const UINT before = nw;
+  if (netProxy != proxy) {
+    nw = std::clamp(UINT(float(w) * netScale + 0.5f), 16u, w);
+    nh = std::clamp(UINT(std::floor(float(h) * float(nw) / float(w) + 0.5f)), 16u, h);
+  } else {
+    nw = w; nh = h;
+  }
+  if (nw != before) Log("network at %ux%u (%.1f%% of %ux%u)%s", nw, nh, 100.0 * nw / w, w, h, nw != w ? ", edge-aware upsample" : "");
+  return true;
 }
 
 // The compute queue, its feature, the copies of the launch frame's motion and depth.
@@ -1608,7 +1626,7 @@ bool PipelineRecord(const UpscaleCall& c) {
     // A new output or render size: let the network in flight finish, then rebuild.
     static uint32_t builtRW = 0, builtRH = 0, waited = 0;
     const D3D12_RESOURCE_DESC nd = c.output->GetDesc();
-    if (heap && (UINT(nd.Width) != w || nd.Height != h || c.renderWidth != builtRW || c.renderHeight != builtRH || netScale != builtScale)) {
+    if (heap && (UINT(nd.Width) != w || nd.Height != h || c.renderWidth != builtRW || c.renderHeight != builtRH)) {
       bool busy = false;
       {
         std::lock_guard<std::mutex> lock(asyncMutex);
@@ -1626,6 +1644,7 @@ bool PipelineRecord(const UpscaleCall& c) {
       builtRW = c.renderWidth; builtRH = c.renderHeight;
     }
   }
+  if (!SelectNetSize()) return false;
 
   liveRW = c.renderWidth; liveRH = c.renderHeight;
   auto* l = c.list;
@@ -1655,7 +1674,7 @@ bool PipelineRecord(const UpscaleCall& c) {
     if (inFlight && submittedId == launchId) landNow = !landPoll || fenceDone->GetCompletedValue() >= launchId;
     const int interval = cadence != 0 ? cadence : fpsCap > 0 ? adaptK : 1;  // uncapped adaptive: as soon as landed
     // A landing frame may launch again right away: the landed edit is baked apart first.
-    launchNow = (!inFlight || landNow) && frame - lastLaunchFrame >= UINT64(interval) && !(cadence == 0 && adaptHold > 0);
+    launchNow = (!inFlight || landNow) && frame - lastLaunchFrame >= UINT64(interval) && !(cadence == 0 && adaptHold > 0) && netScale >= 0.999f;
     // A network still running on the frame its last pass should have landed did not fit the idle time.
     if (inFlight && !landNow && frame == lastLaunchFrame + UINT64(stagger ? std::max(asyncRun.n, 1) : 1)) ++adaptLate;
   }
@@ -1664,6 +1683,12 @@ bool PipelineRecord(const UpscaleCall& c) {
     D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
     sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D; sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sv.Texture2D.MipLevels = 1;
     sv.Format = DXGI_FORMAT_R16G16_FLOAT; device->CreateShaderResourceView(c.motion, &sv, Cpu(ring + 3));
+    if (proxyLow && netProxy == proxy) {
+      // Native again after a reduced stretch: this slot's t2 and t11 back to the native output and
+      // the scratch (the reduced path points them at its own textures).
+      sv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; device->CreateShaderResourceView(neural, &sv, Cpu(ring + 2));
+      sv.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; device->CreateShaderResourceView(scratch, &sv, Cpu(ring + 11));
+    }
     const DXGI_FORMAT df = c.depth->GetDesc().Format;
     sv.Format = df == DXGI_FORMAT_R24G8_TYPELESS ? DXGI_FORMAT_R24_UNORM_X8_TYPELESS
               : df == DXGI_FORMAT_R32G8X24_TYPELESS ? DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS
@@ -1872,7 +1897,15 @@ bool PipelineRecord(const UpscaleCall& c) {
   Barrier(l, proxy, UAV, SRV);
   const bool reduced = netProxy != proxy;
   if (reduced) {
-    // 3b. The reduced proxy the network runs on (Compose brings the edit back up).
+    // 3b. The reduced proxy the network runs on (Compose brings the edit back up). This slot's t2
+    // and t11 are the reduced output and proxy, set G's u0 the reduced proxy for Down (the scratch
+    // and set G belong to the asynchronous path, which does not run at a reduced size).
+    D3D12_SHADER_RESOURCE_VIEW_DESC lv = {};
+    lv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D; lv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; lv.Texture2D.MipLevels = 1;
+    lv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    device->CreateShaderResourceView(neuralLow, &lv, Cpu(ring + 2));
+    device->CreateShaderResourceView(proxyLow, &lv, Cpu(ring + 11));
+    device->CreateUnorderedAccessView(proxyLow, nullptr, nullptr, Cpu(ring + kSetG));
     k.flags |= 32u;
     k.span = float(nw) / float(w);
     l->SetComputeRoot32BitConstants(0, 16, &k, 0);

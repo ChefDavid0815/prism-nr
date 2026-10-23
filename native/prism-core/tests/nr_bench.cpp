@@ -379,6 +379,8 @@ void CreateFeature(Gpu& g, Ngx& ngx, Feature& f, uint32_t w, uint32_t h) {
 }
 
 float activeScale = -1.f;  // drs: this frame's active size as a fraction of the feature's
+float colorScale = -1.f;   // nvs: the official scaled mode's colour scale
+ID3D12Resource* probeBackbuffer = nullptr;  // nvs: the full-size frame given as the backbuffer
 
 void RecordEvaluateOn(ID3D12GraphicsCommandList* list, Ngx& ngx, Feature& f) {
   void* p = f.params;
@@ -389,16 +391,36 @@ void RecordEvaluateOn(ID3D12GraphicsCommandList* list, Ngx& ngx, Feature& f) {
   // Probe: PRISM_ACTIVE evaluates only the top-left part of the feature (its active size).
   const float act = activeScale > 0.f ? activeScale : EnvF("PRISM_ACTIVE", 1.f);
   const uint32_t aw = uint32_t(f.w * act), ah = uint32_t(f.h * act);
-  SetUI(p, "Width", aw);
-  SetUI(p, "Height", ah);
-  SetUI(p, "OutWidth", aw);
-  SetUI(p, "OutHeight", ah);
+  // PRISM_SUBONLY: the active size in the subrects only (the sizes stay the feature's), as Core does.
+  const bool subOnly = std::getenv("PRISM_SUBONLY") != nullptr;
+  SetUI(p, "Width", subOnly ? f.w : aw);
+  SetUI(p, "Height", subOnly ? f.h : ah);
+  SetUI(p, "OutWidth", subOnly ? f.w : aw);
+  SetUI(p, "OutHeight", subOnly ? f.h : ah);
   for (const char* k : {"DLSSNR.ColorSubrect", "DLSSNR.DepthSubrect", "DLSSNR.MVecSubrect", "DLSSNR.OutputSubrect"}) {
     const std::string s(k);
     SetUI(p, (s + "BaseX").c_str(), 0);
     SetUI(p, (s + "BaseY").c_str(), 0);
     SetUI(p, (s + "Width").c_str(), aw);
     SetUI(p, (s + "Height").c_str(), ah);
+  }
+  // Probe: PRISM_COLORSCALE runs the official scaled mode: a smaller colour input, the output at full
+  // size, the full-size frame as the backbuffer (the guide), the scaling ratio set.
+  if (const char* cs = colorScale > 0.f ? "" : std::getenv("PRISM_COLORSCALE")) {
+    const float k = colorScale > 0.f ? colorScale : float(std::atof(cs));
+    const uint32_t cw = uint32_t(f.w * k), chh = uint32_t(f.h * k);
+    for (const char* key : {"DLSSNR.ColorSubrect", "DLSSNR.DepthSubrect", "DLSSNR.MVecSubrect"}) {
+      const std::string kk(key);
+      SetUI(p, (kk + "Width").c_str(), cw); SetUI(p, (kk + "Height").c_str(), chh);
+    }
+    SetUI(p, "Width", cw); SetUI(p, "Height", chh);
+    SetUI(p, "OutWidth", f.w); SetUI(p, "OutHeight", f.h);
+    SetF(p, "DLSSNR.ScalingRatio", k);
+    if (probeBackbuffer || std::getenv("PRISM_BACKBUFFER")) {
+      SetRes(p, "DLSSNR.Backbuffer", probeBackbuffer ? probeBackbuffer : f.color);
+      for (const char* kk2 : {"BaseX", "BaseY"}) SetUI(p, (std::string("DLSSNR.BackbufferSubrect") + kk2).c_str(), 0);
+      SetUI(p, "DLSSNR.BackbufferSubrectWidth", f.w); SetUI(p, "DLSSNR.BackbufferSubrectHeight", f.h);
+    }
   }
   SetF(p, "DLSSNR.MVecScaleX", 1.f);
   SetF(p, "DLSSNR.MVecScaleY", 1.f);
@@ -478,7 +500,7 @@ void CheckSlots(Ngx& ngx) {
 int Cost(Gpu& g, Ngx& ngx) {
   Timer t;
   t.Init(g);
-  const uint32_t sizes[][2] = {{1280, 720}, {1920, 1080}, {2560, 1440}, {2560, 1600}, {3840, 2160}};
+  const uint32_t sizes[][2] = {{1280, 720}, {1600, 1000}, {1920, 1080}, {1920, 1200}, {2240, 1400}, {2560, 1440}, {2560, 1600}, {3840, 2160}};
   for (auto& s : sizes) {
     Feature f;
     CreateFeature(g, ngx, f, s[0], s[1]);
@@ -849,6 +871,372 @@ int Drs(Gpu& g, Ngx& ngx, const std::wstring& png, uint32_t w, uint32_t h, int d
   return 0;
 }
 
+
+// ------------------------------------------------------------------ edit upsampling
+// The network at a reduced size, its edit brought back to full size by different upsamplers,
+// each compared with the native network's edit on the same panned still: error, error after the
+// best single gain (what intensity can fix is left out: the rest is structure), and flicker.
+//   bilinear   the edit's own bilinear upsample
+//   jbu        Core's joint bilateral upsample (4x4 taps, luma-guided, src/pipeline.cpp UpEdit)
+//   gf r,eps   fast guided filter (He & Sun 2015): per-window linear fit of the edit against log
+//              luma at low size, the fit's coefficients upsampled and applied to full-size log luma
+struct Plane { int w = 0, h = 0; std::vector<float> v; float& at(int x, int y) { return v[size_t(y) * w + x]; } float get(int x, int y) const { return v[size_t(std::clamp(y, 0, h - 1)) * w + std::clamp(x, 0, w - 1)]; } };
+Plane MakePlane(int w, int h) { Plane p; p.w = w; p.h = h; p.v.assign(size_t(w) * h, 0.f); return p; }
+float Bilinear(const Plane& p, float fx, float fy) {
+  fx = std::clamp(fx, 0.f, float(p.w - 1)); fy = std::clamp(fy, 0.f, float(p.h - 1));
+  const int x0 = int(fx), y0 = int(fy);
+  const float ax = fx - x0, ay = fy - y0;
+  return p.get(x0, y0) * (1 - ax) * (1 - ay) + p.get(x0 + 1, y0) * ax * (1 - ay) + p.get(x0, y0 + 1) * (1 - ax) * ay + p.get(x0 + 1, y0 + 1) * ax * ay;
+}
+Plane Box(const Plane& in, int r) {  // mean over a (2r+1)^2 window, clamped at the edges
+  Plane t = MakePlane(in.w, in.h), o = MakePlane(in.w, in.h);
+  for (int y = 0; y < in.h; ++y) for (int x = 0; x < in.w; ++x) { float a = 0; for (int k = -r; k <= r; ++k) a += in.get(x + k, y); t.at(x, y) = a / (2 * r + 1); }
+  for (int y = 0; y < in.h; ++y) for (int x = 0; x < in.w; ++x) { float a = 0; for (int k = -r; k <= r; ++k) a += t.get(x, y + k); o.at(x, y) = a / (2 * r + 1); }
+  return o;
+}
+
+int Ups(Gpu& g, Ngx& ngx, const std::wstring& png, uint32_t w, uint32_t h, int dx, int frames) {
+  const uint32_t W = w + uint32_t(dx * frames), H = h;
+  const std::vector<float> src = LoadStill(png, W, H);
+  auto lin = [&](int i, int x, int y, int c) { return Dec1(src[(size_t(y) * W + x + i * dx) * 3 + c]); };
+  const float kw[3] = {0.2126f, 0.7152f, 0.0722f};
+  const int warm = 6;
+  const float scales[] = {1.f, 0.75f, 0.625f, 0.5f};
+  std::vector<Plane> ref(static_cast<size_t>(frames));
+  Timer t;
+  t.Init(g);
+  struct Method { const char* name; int kind; int r; float eps; };
+  const Method methods[] = {{"bilinear     ", 0, 0, 0}, {"jbu (Core)   ", 1, 0, 0}, {"gf r2 e.010  ", 2, 2, 0.010f}, {"gf r2 e.003  ", 2, 2, 0.003f}, {"gf r4 e.010  ", 2, 4, 0.010f}};
+  constexpr int kM = 5;
+  std::printf("%dx%d, pan %d px/frame, %d frames (first %d not scored); edit = log2 luminance ratio\n", w, h, dx, frames, warm);
+  std::printf("size   method          error  gain-fixed  flicker  strength\n");
+  for (float s : scales) {
+    const uint32_t aw = uint32_t(w * s + 0.5f), ah = uint32_t(h * s + 0.5f);
+    Feature f;
+    CreateFeature(g, ngx, f, aw, ah);
+    double err[kM] = {}, errK[kM] = {}, flk[kM] = {}, mag[kM] = {};
+    std::vector<Plane> prev(kM);
+    int scored = 0;
+    for (int i = 0; i < frames; ++i) {
+      // Low-size input (bilinear at the footprint centre in linear light) and its upload.
+      std::vector<float> inLow(size_t(aw) * ah * 3);
+      std::vector<uint16_t> ch(size_t(aw) * ah * 4), mh(size_t(aw) * ah * 2, 0);
+      for (uint32_t y = 0; y < ah; ++y)
+        for (uint32_t x = 0; x < aw; ++x) {
+          const float fx = std::clamp((x + 0.5f) * w / aw - 0.5f, 0.f, float(w - 1)), fy = std::clamp((y + 0.5f) * h / ah - 0.5f, 0.f, float(h - 1));
+          const int x0 = int(fx), y0 = int(fy), x1 = std::min(x0 + 1, int(w) - 1), y1 = std::min(y0 + 1, int(h) - 1);
+          const float ax = fx - x0, ay = fy - y0;
+          for (int c = 0; c < 3; ++c) {
+            const float v = lin(i, x0, y0, c) * (1 - ax) * (1 - ay) + lin(i, x1, y0, c) * ax * (1 - ay) + lin(i, x0, y1, c) * (1 - ax) * ay + lin(i, x1, y1, c) * ax * ay;
+            inLow[(size_t(y) * aw + x) * 3 + c] = v;
+            ch[(size_t(y) * aw + x) * 4 + c] = ToHalf(Enc1(v));
+          }
+          ch[(size_t(y) * aw + x) * 4 + 3] = ToHalf(1.f);
+          mh[(size_t(y) * aw + x) * 2] = ToHalf(float(dx) * aw / w);
+        }
+      UploadTexture(g, f.color, ch.data(), aw, ah, 8, kSrv, kSrv);
+      UploadTexture(g, f.motion, mh.data(), aw, ah, 4, kSrv, kSrv);
+      TimedEvaluate(g, ngx, f, t);
+      const std::vector<uint16_t> out = ReadTexture(g, f.output, aw, ah, kUav);
+      // The low-size edit per channel (as Core takes it) and the low-size log luma (the guide).
+      Plane el[3] = {MakePlane(aw, ah), MakePlane(aw, ah), MakePlane(aw, ah)}, gl = MakePlane(aw, ah);
+      for (uint32_t y = 0; y < ah; ++y)
+        for (uint32_t x = 0; x < aw; ++x) {
+          float yl = 0;
+          for (int c = 0; c < 3; ++c) {
+            const float pi = inLow[(size_t(y) * aw + x) * 3 + c], po = Dec1(FromHalf(out[(size_t(y) * aw + x) * 4 + c]));
+            el[c].at(x, y) = std::clamp(std::log2(std::max(po, 1.f / 512) / std::max(pi, 1.f / 512)), -3.f, 3.f);
+            yl += kw[c] * pi;
+          }
+          gl.at(x, y) = std::log2(std::max(yl, 1e-4f));
+        }
+      // Full-size guide.
+      Plane gf = MakePlane(w, h), lumIn = MakePlane(w, h);
+      for (uint32_t y = 0; y < h; ++y) for (uint32_t x = 0; x < w; ++x) { float yl = 0; for (int c = 0; c < 3; ++c) yl += kw[c] * lin(i, x, y, c); lumIn.at(x, y) = yl; gf.at(x, y) = std::log2(std::max(yl, 1e-4f)); }
+      auto lumEdit = [&](int x, int y, const float e3[3]) {
+        float lo = 0;
+        for (int c = 0; c < 3; ++c) lo += kw[c] * lin(i, x, y, c) * std::exp2(e3[c]);
+        return std::clamp(std::log2(std::max(lo, 1.f / 4096) / std::max(lumIn.at(x, y), 1.f / 4096)), -3.f, 3.f);
+      };
+      if (s == 1.f) {  // native: the reference
+        Plane e = MakePlane(w, h);
+        for (uint32_t y = 0; y < h; ++y) for (uint32_t x = 0; x < w; ++x) { const float e3[3] = {el[0].at(x, y), el[1].at(x, y), el[2].at(x, y)}; e.at(x, y) = lumEdit(x, y, e3); }
+        ref[size_t(i)] = std::move(e);
+        continue;
+      }
+      // Guided filter coefficients per method (low size), once per frame.
+      Plane ga[kM][3], gb[kM][3];
+      for (int m = 0; m < kM; ++m) {
+        if (methods[m].kind != 2) continue;
+        const int rr = methods[m].r;
+        Plane mI = Box(gl, rr), II = MakePlane(aw, ah);
+        for (size_t k = 0; k < II.v.size(); ++k) II.v[k] = gl.v[k] * gl.v[k];
+        Plane mII = Box(II, rr);
+        for (int c = 0; c < 3; ++c) {
+          Plane IP = MakePlane(aw, ah);
+          for (size_t k = 0; k < IP.v.size(); ++k) IP.v[k] = gl.v[k] * el[c].v[k];
+          Plane mP = Box(el[c], rr), mIP = Box(IP, rr), a = MakePlane(aw, ah), b = MakePlane(aw, ah);
+          for (size_t k = 0; k < a.v.size(); ++k) {
+            const float var = mII.v[k] - mI.v[k] * mI.v[k], cov = mIP.v[k] - mI.v[k] * mP.v[k];
+            a.v[k] = cov / (var + methods[m].eps);
+            b.v[k] = mP.v[k] - a.v[k] * mI.v[k];
+          }
+          ga[m][c] = Box(a, rr); gb[m][c] = Box(b, rr);
+        }
+      }
+      for (int m = 0; m < kM; ++m) {
+        Plane e = MakePlane(w, h);
+        for (uint32_t y = 0; y < h; ++y)
+          for (uint32_t x = 0; x < w; ++x) {
+            const float fx = (x + 0.5f) * aw / w - 0.5f, fy = (y + 0.5f) * ah / h - 0.5f;
+            float e3[3];
+            if (methods[m].kind == 0) {
+              for (int c = 0; c < 3; ++c) e3[c] = Bilinear(el[c], fx, fy);
+            } else if (methods[m].kind == 1) {
+              const int bx = int(std::floor(fx)), by = int(std::floor(fy));
+              float acc[3] = {}, ws = 0, bil[3] = {};
+              for (int j = -1; j <= 2; ++j)
+                for (int k = -1; k <= 2; ++k) {
+                  const int qx = std::clamp(bx + k, 0, int(aw) - 1), qy = std::clamp(by + j, 0, int(ah) - 1);
+                  const float ddx = fx - float(bx + k), ddy = fy - float(by + j);
+                  const float rr = (gf.at(x, y) - gl.get(qx, qy)) / 0.15f;
+                  const float wt = std::exp(-(ddx * ddx + ddy * ddy) / 1.28f) * std::exp(-0.5f * rr * rr);
+                  for (int c = 0; c < 3; ++c) acc[c] += el[c].get(qx, qy) * wt;
+                  ws += wt;
+                  if (k >= 0 && k <= 1 && j >= 0 && j <= 1) for (int c = 0; c < 3; ++c) bil[c] += el[c].get(qx, qy) * ((1 - std::fabs(ddx)) * (1 - std::fabs(ddy)));
+                }
+              for (int c = 0; c < 3; ++c) e3[c] = ws > 1e-4f ? acc[c] / ws : bil[c];
+            } else {
+              for (int c = 0; c < 3; ++c) e3[c] = Bilinear(ga[m][c], fx, fy) * gf.at(x, y) + Bilinear(gb[m][c], fx, fy);
+            }
+            for (int c = 0; c < 3; ++c) e3[c] = std::clamp(e3[c], -3.f, 3.f);
+            e.at(x, y) = lumEdit(x, y, e3);
+          }
+        if (i >= warm) {
+          double er = 0, mg = 0, se = 0, ee = 0, fl = 0;
+          size_t nf = 0;
+          const Plane& rf = ref[size_t(i)];
+          for (size_t k = 0; k < e.v.size(); ++k) { er += std::fabs(e.v[k] - rf.v[k]); mg += std::fabs(e.v[k]); se += double(e.v[k]) * rf.v[k]; ee += double(e.v[k]) * e.v[k]; }
+          const double gain = ee > 0 ? se / ee : 1.0;
+          double ek = 0;
+          for (size_t k = 0; k < e.v.size(); ++k) ek += std::fabs(gain * e.v[k] - rf.v[k]);
+          if (!prev[size_t(m)].v.empty())
+            for (uint32_t y = 0; y < h; ++y) for (uint32_t x = 0; x + dx < w; ++x) { fl += std::fabs(e.at(x, y) - prev[size_t(m)].at(x + dx, y)); ++nf; }
+          const double n = double(e.v.size());
+          err[m] += er / n; errK[m] += ek / n; mag[m] += mg / n; flk[m] += nf ? fl / nf : 0;
+        }
+        prev[size_t(m)] = std::move(e);
+      }
+      if (i >= warm) ++scored;
+    }
+    if (s < 1.f)
+      for (int m = 0; m < kM; ++m)
+        std::printf("%4.1f%%  %s  %7.4f   %7.4f   %7.4f  %7.4f\n", s * 100, methods[m].name, err[m] / scored, errK[m] / scored, flk[m] / scored, mag[m] / scored);
+    ngx.release(f.handle);
+    for (auto* rs : {f.color, f.output, f.motion, f.depth}) rs->Release();
+  }
+  // The native reference's own flicker and strength, for scale.
+  double fl = 0, mg = 0; size_t nf = 0;
+  for (int i = warm + 1; i < frames; ++i) for (uint32_t y = 0; y < h; ++y) for (uint32_t x = 0; x + dx < w; ++x) { fl += std::fabs(ref[size_t(i)].at(x, y) - ref[size_t(i - 1)].at(x + dx, y)); mg += std::fabs(ref[size_t(i)].at(x, y)); ++nf; }
+  std::printf("native reference: flicker %.4f, strength %.4f\n", fl / nf, mg / nf);
+  return 0;
+}
+
+
+
+// ------------------------------------------------------------------ what the second pass adds
+// Two passes on a panned still, as Core runs them (pass 2 on pass 1's output, a feature each). How
+// big is pass 1's edit, how big is pass 2's increment on top of it, how much of that increment is
+// fine detail (what a 9x9 box blur takes away), and what does running pass 2 at a reduced size
+// (its increment brought back with a bilinear upsample) or every other frame (last frame's
+// increment, shifted by the pan, reused) cost against the two full passes? Errors are on the total
+// edit, log2 luminance.
+int Pass2(Gpu& g, Ngx& ngx, const std::wstring& png, uint32_t w, uint32_t h, int dx, int frames) {
+  const uint32_t W = w + uint32_t(dx * frames), H = h;
+  const std::vector<float> src = LoadStill(png, W, H);
+  auto lin = [&](int i, int x, int y, int c) { return Dec1(src[(size_t(y) * W + x + i * dx) * 3 + c]); };
+  const float kw[3] = {0.2126f, 0.7152f, 0.0722f};
+  const size_t px = size_t(w) * h;
+  const int warm = 6;
+  const uint32_t lw = w / 2, lh = h / 2;
+  Feature f1, f2, f2l;
+  CreateFeature(g, ngx, f1, w, h);
+  CreateFeature(g, ngx, f2, w, h);
+  CreateFeature(g, ngx, f2l, lw, lh);
+  Timer t;
+  t.Init(g);
+  auto lum = [&](const std::vector<float>& rgb, size_t q) { return kw[0] * rgb[q * 3] + kw[1] * rgb[q * 3 + 1] + kw[2] * rgb[q * 3 + 2]; };
+  double m1 = 0, m2 = 0, hf = 0, eHalf = 0, eSkip = 0, eOne = 0;
+  int scored = 0;
+  std::vector<float> prevInc;  // last frame's pass-2 increment, log2 luminance
+  for (int i = 0; i < frames; ++i) {
+    std::vector<uint16_t> in(px * 4), mv(px * 2, 0);
+    std::vector<float> inL(px * 3);
+    for (size_t q = 0; q < px; ++q) {
+      const int x = int(q % w), y = int(q / w);
+      for (int c = 0; c < 3; ++c) { inL[q * 3 + c] = lin(i, x, y, c); in[q * 4 + c] = ToHalf(Enc1(inL[q * 3 + c])); }
+      in[q * 4 + 3] = ToHalf(1.f);
+      mv[q * 2] = ToHalf(float(dx));
+    }
+    UploadTexture(g, f1.color, in.data(), w, h, 8, kSrv, kSrv);
+    UploadTexture(g, f1.motion, mv.data(), w, h, 4, kSrv, kSrv);
+    TimedEvaluate(g, ngx, f1, t);
+    const std::vector<uint16_t> o1 = ReadTexture(g, f1.output, w, h, kUav);
+    // Pass 2 at full size on pass 1's output.
+    UploadTexture(g, f2.color, o1.data(), w, h, 8, kSrv, kSrv);
+    UploadTexture(g, f2.motion, mv.data(), w, h, 4, kSrv, kSrv);
+    TimedEvaluate(g, ngx, f2, t);
+    const std::vector<uint16_t> o2 = ReadTexture(g, f2.output, w, h, kUav);
+    // Pass 2 at half size on pass 1's output (2x2 mean in linear light).
+    std::vector<uint16_t> lowIn(size_t(lw) * lh * 4), lowMv(size_t(lw) * lh * 2, 0);
+    std::vector<float> lowL(size_t(lw) * lh * 3);
+    for (uint32_t y = 0; y < lh; ++y)
+      for (uint32_t x = 0; x < lw; ++x) {
+        for (int c = 0; c < 3; ++c) {
+          float a = 0;
+          for (int j = 0; j < 2; ++j) for (int k = 0; k < 2; ++k) a += Dec1(FromHalf(o1[((size_t(2 * y + j)) * w + 2 * x + k) * 4 + c]));
+          lowL[(size_t(y) * lw + x) * 3 + c] = a / 4;
+          lowIn[(size_t(y) * lw + x) * 4 + c] = ToHalf(Enc1(a / 4));
+        }
+        lowIn[(size_t(y) * lw + x) * 4 + 3] = ToHalf(1.f);
+        lowMv[(size_t(y) * lw + x) * 2] = ToHalf(float(dx) / 2);
+      }
+    UploadTexture(g, f2l.color, lowIn.data(), lw, lh, 8, kSrv, kSrv);
+    UploadTexture(g, f2l.motion, lowMv.data(), lw, lh, 4, kSrv, kSrv);
+    TimedEvaluate(g, ngx, f2l, t);
+    const std::vector<uint16_t> o2l = ReadTexture(g, f2l.output, lw, lh, kUav);
+    // Edits in log2 luminance.
+    std::vector<float> p1(px * 3), p2(px * 3);
+    for (size_t q = 0; q < px * 3; ++q) { p1[q] = Dec1(FromHalf(o1[(q / 3) * 4 + q % 3])); p2[q] = Dec1(FromHalf(o2[(q / 3) * 4 + q % 3])); }
+    std::vector<float> e1(px), inc(px), incHalf(px), lowInc(size_t(lw) * lh);
+    for (size_t q = 0; q < size_t(lw) * lh; ++q) {
+      float a = 0, b = 0;
+      for (int c = 0; c < 3; ++c) { a += kw[c] * Dec1(FromHalf(o2l[q * 4 + c])); b += kw[c] * lowL[q * 3 + c]; }
+      lowInc[q] = std::clamp(std::log2(std::max(a, 1.f / 4096) / std::max(b, 1.f / 4096)), -3.f, 3.f);
+    }
+    for (size_t q = 0; q < px; ++q) {
+      const float li = lum(inL, q), l1 = lum(p1, q), l2 = lum(p2, q);
+      e1[q] = std::clamp(std::log2(std::max(l1, 1.f / 4096) / std::max(li, 1.f / 4096)), -3.f, 3.f);
+      inc[q] = std::clamp(std::log2(std::max(l2, 1.f / 4096) / std::max(l1, 1.f / 4096)), -3.f, 3.f);
+      const int x = int(q % w), y = int(q / w);
+      const float fx = std::clamp((x + 0.5f) / 2 - 0.5f, 0.f, float(lw - 1)), fy = std::clamp((y + 0.5f) / 2 - 0.5f, 0.f, float(lh - 1));
+      const int x0 = int(fx), y0 = int(fy), x1 = std::min(x0 + 1, int(lw) - 1), y1 = std::min(y0 + 1, int(lh) - 1);
+      const float ax = fx - x0, ay = fy - y0;
+      incHalf[q] = lowInc[size_t(y0) * lw + x0] * (1 - ax) * (1 - ay) + lowInc[size_t(y0) * lw + x1] * ax * (1 - ay) + lowInc[size_t(y1) * lw + x0] * (1 - ax) * ay + lowInc[size_t(y1) * lw + x1] * ax * ay;
+    }
+    if (i >= warm) {
+      // Fine detail in the increment: what a 9x9 box blur removes.
+      double a1 = 0, a2 = 0, ah = 0, eh = 0, es = 0, eo = 0;
+      std::vector<float> rowBlur(px);
+      for (uint32_t y = 0; y < h; ++y) for (uint32_t x = 0; x < w; ++x) { float a = 0; for (int k = -4; k <= 4; ++k) a += inc[size_t(y) * w + std::clamp(int(x) + k, 0, int(w) - 1)]; rowBlur[size_t(y) * w + x] = a / 9; }
+      for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x) {
+          const size_t q = size_t(y) * w + x;
+          float b = 0; for (int k = -4; k <= 4; ++k) b += rowBlur[size_t(std::clamp(int(y) + k, 0, int(h) - 1)) * w + x];
+          b /= 9;
+          a1 += std::fabs(e1[q]); a2 += std::fabs(inc[q]); ah += std::fabs(inc[q] - b);
+          eh += std::fabs(incHalf[q] - inc[q]);   // total edit e1 + incHalf vs e1 + inc
+          eo += std::fabs(inc[q]);                // pass 1 alone
+          if (!prevInc.empty()) es += std::fabs((x + dx < w ? prevInc[q + dx] : inc[q]) - inc[q]);
+        }
+      m1 += a1 / px; m2 += a2 / px; hf += ah / px; eHalf += eh / px; eSkip += es / px; eOne += eo / px;
+      ++scored;
+    }
+    prevInc = inc;
+  }
+  std::printf("pass 1 edit %.4f | pass 2 increment %.4f (%.0f%% of pass 1), fine detail in it %.4f (%.0f%%)\n", m1 / scored, m2 / scored, 100 * m2 / m1, hf / scored, 100 * hf / m2);
+  std::printf("error of the total edit against two full passes: pass 1 only %.4f | pass 2 at half size %.4f | pass 2 every other frame (shifted) %.4f\n", eOne / scored, eHalf / scored, eSkip / scored);
+  return 0;
+}
+
+// ------------------------------------------------------------------ the runtime's own scaled mode
+// The colour input at a reduced size (top-left subrect), the output at full size, the full-size
+// frame as the backbuffer: does the runtime bring its result up to full size itself (its guided
+// high-source path), and how close is that to the native network? Reports the share of the output
+// it wrote beyond the reduced area, error and flicker against native, and strength.
+int Nvs(Gpu& g, Ngx& ngx, const std::wstring& png, uint32_t w, uint32_t h, int dx, int frames, float k) {
+  const uint32_t W = w + uint32_t(dx * frames), H = h;
+  const std::vector<float> src = LoadStill(png, W, H);
+  auto lin = [&](int i, int x, int y, int c) { return Dec1(src[(size_t(y) * W + x + i * dx) * 3 + c]); };
+  const float kw[3] = {0.2126f, 0.7152f, 0.0722f};
+  const int warm = 6;
+  const size_t px = size_t(w) * h;
+  std::vector<std::vector<float>> ref(static_cast<size_t>(frames));
+  ID3D12Resource* bb = Texture(g, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, false, kSrv);
+  Timer t;
+  t.Init(g);
+  for (int pass = 0; pass < 2; ++pass) {
+    const bool scaled = pass == 1;
+    const uint32_t aw = scaled ? uint32_t(w * k) : w, ah = scaled ? uint32_t(h * k) : h;
+    Feature f;
+    CreateFeature(g, ngx, f, w, h);
+    std::vector<float> prev;
+    double err = 0, flk = 0, mag = 0, cover = 0, ms = 0;
+    int scored = 0;
+    for (int i = 0; i < frames; ++i) {
+      std::vector<uint16_t> full(px * 4), ch(px * 4, 0), mh(px * 2, 0);
+      for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x) { for (int c = 0; c < 3; ++c) full[(size_t(y) * w + x) * 4 + c] = ToHalf(Enc1(lin(i, x, y, c))); full[(size_t(y) * w + x) * 4 + 3] = ToHalf(1.f); }
+      for (uint32_t y = 0; y < ah; ++y)
+        for (uint32_t x = 0; x < aw; ++x) {
+          const float fx = std::clamp((x + 0.5f) * w / aw - 0.5f, 0.f, float(w - 1)), fy = std::clamp((y + 0.5f) * h / ah - 0.5f, 0.f, float(h - 1));
+          const int x0 = int(fx), y0 = int(fy), x1 = std::min(x0 + 1, int(w) - 1), y1 = std::min(y0 + 1, int(h) - 1);
+          const float ax = fx - x0, ay = fy - y0;
+          for (int c = 0; c < 3; ++c) {
+            const float v = lin(i, x0, y0, c) * (1 - ax) * (1 - ay) + lin(i, x1, y0, c) * ax * (1 - ay) + lin(i, x0, y1, c) * (1 - ax) * ay + lin(i, x1, y1, c) * ax * ay;
+            ch[(size_t(y) * w + x) * 4 + c] = ToHalf(Enc1(v));
+          }
+          ch[(size_t(y) * w + x) * 4 + 3] = ToHalf(1.f);
+          mh[(size_t(y) * w + x) * 2] = ToHalf(float(dx) * aw / w);
+        }
+      UploadTexture(g, f.color, scaled ? ch.data() : full.data(), w, h, 8, kSrv, kSrv);
+      UploadTexture(g, f.motion, mh.data(), w, h, 4, kSrv, kSrv);
+      UploadTexture(g, bb, full.data(), w, h, 8, kSrv, kSrv);
+      // A marker in the output: whatever the network does not write stays at -1.
+      std::vector<uint16_t> mark(px * 4, ToHalf(-1.f));
+      UploadTexture(g, f.output, mark.data(), w, h, 8, kUav, kUav);
+      colorScale = scaled ? k : -1.f;
+      probeBackbuffer = scaled ? bb : nullptr;
+      const double m = TimedEvaluate(g, ngx, f, t);
+      colorScale = -1.f; probeBackbuffer = nullptr;
+      const std::vector<uint16_t> out = ReadTexture(g, f.output, w, h, kUav);
+      std::vector<float> e(px);
+      size_t written = 0, beyond = 0;
+      for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x) {
+          const size_t q = size_t(y) * w + x;
+          const bool wrote = FromHalf(out[q * 4]) > -0.5f;
+          if (x >= aw || y >= ah) { ++beyond; written += wrote; }
+          float lo = 0, li = 0;
+          for (int c = 0; c < 3; ++c) { lo += kw[c] * Dec1(std::max(FromHalf(out[q * 4 + c]), 0.f)); li += kw[c] * lin(i, x, y, c); }
+          e[q] = std::clamp(std::log2(std::max(lo, 1.f / 4096) / std::max(li, 1.f / 4096)), -3.f, 3.f);
+        }
+      if (!scaled) ref[size_t(i)] = e;
+      if (i >= warm) {
+        double er = 0, mg = 0, fl = 0; size_t nf = 0;
+        for (size_t q = 0; q < px; ++q) { er += std::fabs(e[q] - ref[size_t(i)][q]); mg += std::fabs(e[q]); }
+        if (!prev.empty()) for (uint32_t y = 0; y < h; ++y) for (uint32_t x = 0; x + dx < w; ++x) { fl += std::fabs(e[size_t(y) * w + x] - prev[size_t(y) * w + x + dx]); ++nf; }
+        err += er / px; mag += mg / px; flk += nf ? fl / nf : 0; cover += beyond ? double(written) / beyond : 1.0; ms += m;
+        ++scored;
+      }
+      prev = std::move(e);
+    }
+    std::printf("%s  %.3f ms  wrote beyond the input area %5.1f%%  error %.4f  flicker %.4f  strength %.4f\n", scaled ? "runtime-scaled" : "native        ", ms / scored, 100 * cover / scored, err / scored, flk / scored, mag / scored);
+    ngx.release(f.handle);
+    for (auto* rs : {f.color, f.output, f.motion, f.depth}) rs->Release();
+  }
+  return 0;
+}
+
+// PRISM_NGXLOG=1 (verbose: 2): the runtime's own log on stderr, through NVSDK_NGX_FeatureCommonInfo.
+void NgxLog(const char* msg, int level, int component) {
+  std::fprintf(stderr, "[ngx %d/%d] %s", level, component, msg ? msg : "");
+  if (msg && *msg && msg[std::strlen(msg) - 1] != 10) std::fputc(10, stderr);
+}
+struct NgxLoggingInfo { void (*callback)(const char*, int, int); int minimumLevel; bool disableOtherSinks; };
+struct NgxPathListInfo { const wchar_t* const* path; unsigned length; };
+struct NgxFeatureCommonInfo { NgxPathListInfo paths; void* internal; NgxLoggingInfo logging; };
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -864,7 +1252,8 @@ int main(int argc, char** argv) {
   GetModuleFileNameW(nullptr, exe, MAX_PATH);
   std::wstring dataPath(exe);
   dataPath = dataPath.substr(0, dataPath.find_last_of(L"\\/"));
-  const NgxResult r = ngx.init(kApplicationId, dataPath.c_str(), g.device, kNgxVersionApi, nullptr);
+  NgxFeatureCommonInfo info = {{nullptr, 0}, nullptr, {&NgxLog, std::getenv("PRISM_NGXLOG") ? std::atoi(std::getenv("PRISM_NGXLOG")) : 0, false}};
+  const NgxResult r = ngx.init(kApplicationId, dataPath.c_str(), g.device, kNgxVersionApi, std::getenv("PRISM_NGXLOG") ? &info : nullptr);
   if (r != kNgxSuccess) { std::fprintf(stderr, "NGX Init failed: 0x%08x\n", r); return 1; }
   CheckSlots(ngx);
   const std::string mode = argv[2];
@@ -872,7 +1261,16 @@ int main(int argc, char** argv) {
   if (mode == "cost") rc = Cost(g, ngx);
   else if (mode == "seq" && argc >= 4) rc = Sequence(g, ngx, argv[3]);
   else if (mode == "async" && argc >= 5) rc = Async(g, ngx, uint32_t(std::atoi(argv[3])), uint32_t(std::atoi(argv[4])));
-  else if (mode == "drs" && argc >= 8) {
+  else if (mode == "pass2" && argc >= 8) {
+    const std::string still = argv[3];
+    rc = Pass2(g, ngx, std::wstring(still.begin(), still.end()), uint32_t(std::atoi(argv[4])), uint32_t(std::atoi(argv[5])), std::atoi(argv[6]), std::atoi(argv[7]));
+  } else if (mode == "nvs" && argc >= 9) {
+    const std::string still = argv[3];
+    rc = Nvs(g, ngx, std::wstring(still.begin(), still.end()), uint32_t(std::atoi(argv[4])), uint32_t(std::atoi(argv[5])), std::atoi(argv[6]), std::atoi(argv[7]), float(std::atof(argv[8])));
+  } else if (mode == "ups" && argc >= 8) {
+    const std::string still = argv[3];
+    rc = Ups(g, ngx, std::wstring(still.begin(), still.end()), uint32_t(std::atoi(argv[4])), uint32_t(std::atoi(argv[5])), std::atoi(argv[6]), std::atoi(argv[7]));
+  } else if (mode == "drs" && argc >= 8) {
     const std::string still = argv[3];
     rc = Drs(g, ngx, std::wstring(still.begin(), still.end()), uint32_t(std::atoi(argv[4])), uint32_t(std::atoi(argv[5])), std::atoi(argv[6]), std::atoi(argv[7]));
   }
