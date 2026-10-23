@@ -1465,3 +1465,324 @@ html[data-motion='standard'] .stage {
   gap: 16px;
   border-color: var(--ready);
 }
+
+/* ---------------------------------------------------------------- grading desk (custom look) */
+.grade-open {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 10px;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--rule-2);
+  font-size: 12px;
+  color: var(--grey);
+}
+.grade-desk {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--black);
+  animation: grade-in 260ms var(--ease);
+}
+@keyframes grade-in {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .grade-desk { animation: none; }
+}
+.grade-top {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: var(--top);
+  padding: 0 24px;
+  border-bottom: 1px solid var(--rule);
+  flex: none;
+}
+.grade-title {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+}
+.grade-title h1 {
+  font-size: 15px;
+  font-weight: 700;
+}
+.grade-title .dim {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.grade-slots {
+  width: 300px;
+}
+.grade-slots button {
+  height: 32px;
+}
+.grade-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+}
+.grade-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px 24px 16px;
+  gap: 16px;
+  overflow: auto;
+}
+.grade-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.grade-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+}
+.grade-preview-bar .segmented {
+  width: 200px;
+  flex: none;
+}
+.grade-preview-bar .segmented button {
+  height: 28px;
+  font-size: 12px;
+}
+.grade-canvas-wrap {
+  position: relative;
+  width: 100%;
+  max-height: calc(100vh - var(--top) - 340px);
+  margin: 0 auto;
+  border: 1px solid var(--rule);
+  cursor: ew-resize;
+  touch-action: none;
+}
+.grade-canvas-wrap canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.grade-split {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--white);
+  pointer-events: none;
+}
+.grade-tag {
+  position: absolute;
+  top: 10px;
+  padding: 2px 8px;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+.grade-tag-left { left: 10px; }
+.grade-tag-right { right: 10px; }
+.grade-nogl {
+  padding: 24px;
+}
+.grade-scopes {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 24px;
+  flex: none;
+}
+.grade-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.grade-scope figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--grey);
+  letter-spacing: 0.02em;
+}
+.grade-scope svg {
+  width: 100%;
+  height: 196px;
+  touch-action: none;
+}
+.scope-faint {
+  stroke: var(--rule-2);
+  stroke-width: 1;
+}
+.scope-point {
+  fill: var(--black);
+  stroke-width: 2;
+  cursor: ns-resize;
+}
+.scope-point:hover {
+  fill: currentColor;
+}
+.scope-wheel {
+  cursor: move;
+}
+.grade-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--rule);
+}
+.grade-pages {
+  grid-template-columns: repeat(6, 1fr);
+  margin: 16px 20px 0;
+  flex: none;
+}
+.grade-pages button {
+  height: 32px;
+}
+.grade-rows {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 20px;
+}
+.grade-switch,
+.grade-presets {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: #d0d0d0;
+}
+.grade-switch {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule-2);
+}
+.grade-switch .segmented button,
+.grade-presets .segmented button {
+  height: 30px;
+}
+.grade-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) 56px;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  border-bottom: 1px solid var(--rule-2);
+}
+.grade-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--grey);
+  white-space: nowrap;
+}
+.grade-row.is-set label {
+  color: #d9d9d9;
+}
+.grade-row:hover label,
+.grade-row:focus-within label {
+  color: var(--white);
+}
+.grade-mark {
+  width: 2px;
+  height: 14px;
+  flex: none;
+}
+.grade-track {
+  position: relative;
+  height: 24px;
+}
+.grade-ticks {
+  position: absolute;
+  inset: 0 1px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+}
+.grade-ticks i {
+  width: 2px;
+  height: 12px;
+  background: var(--rule);
+  transition: background 120ms var(--ease);
+}
+.grade-ticks i.is-ref {
+  height: 18px;
+  background: var(--grey-2);
+}
+.grade-ticks i.is-on {
+  background: var(--white);
+}
+.grade-ticks i.is-value {
+  height: 22px;
+  background: var(--white);
+}
+.grade-track input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.grade-track input::-webkit-slider-runnable-track {
+  height: 24px;
+  background: transparent;
+}
+.grade-track input::-webkit-slider-thumb {
+  appearance: none;
+  width: 3px;
+  height: 24px;
+  background: transparent;
+}
+.grade-track input:focus-visible {
+  outline: 1px solid var(--white);
+  outline-offset: 3px;
+}
+.grade-value {
+  text-align: right;
+  font-size: 13px;
+  color: var(--grey-2);
+}
+.grade-row.is-set .grade-value,
+.grade-row:hover .grade-value {
+  color: var(--white);
+}
+.grade-presets {
+  padding: 12px 20px;
+  border-top: 1px solid var(--rule);
+  flex: none;
+}
+.grade-help {
+  min-height: 64px;
+  padding: 10px 20px 0;
+  border-top: 1px solid var(--rule);
+  flex: none;
+}
+.grade-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 20px 14px;
+  flex: none;
+}
+@media (max-width: 1280px) {
+  .grade-body { grid-template-columns: minmax(0, 1fr) 380px; }
+  .grade-slots { width: 240px; }
+}

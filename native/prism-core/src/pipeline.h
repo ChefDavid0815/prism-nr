@@ -7,6 +7,8 @@
 
 #include <string>
 
+#include "grade.h"
+
 namespace prism {
 
 struct UpscaleCall {
@@ -36,7 +38,9 @@ struct LiveSettings {
   float intensity = 1.0f, netScale = 0.625f, guard = 1.0f;  // netScale: a side; 0.625 is the panel's 100%
   bool async = true, split = false;
   float splitPos = 0.5f;  // the split's column, as a fraction of the width
-  int look = 0;           // 0 默认, 1 高还原, 2 高饱和, 3 低饱和, 4 浓烈 (look_hlsl.h)
+  int look = 0;           // 0 默认, 1 高还原, 2 高饱和, 3 低饱和, 4 浓烈, 5 自定义 (look_hlsl.h)
+  GradeValues grade[kGradeSlots];  // the custom look's controls (grade.h), three slots
+  int gradeSlot = 0;               // the slot in use
   bool netAuto = false;   // the network's size follows FpsTarget, up to netScale
   int fpsTarget = 60;     // rendered frames per second (frame generation multiplies what is shown)
 };

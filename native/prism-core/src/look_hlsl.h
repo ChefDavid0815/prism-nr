@@ -12,11 +12,33 @@
 //   2 高饱和  vivid and clean, for anime and stylised games
 //   3 低饱和  restrained colour with cool, clean whites: the modern film and series look
 //   4 浓烈    deep contrast and rich colour
+//   5 自定义  every control below and more, set in the panel or the app (grade.h; constant buffer b1)
 #pragma once
 
 #define PRISM_LOOK_HLSL R"(
 static const float kLkMidGrey = 0.18;
 static const float kLkPi = 3.14159265;
+
+// The custom look's controls (grade.h's GradeToShader packs them).
+//   0 contrast, sat, vibrance, bias   4 highlights, shadows (stops), blacks, density
+//   8 hiDesat, loDesat, skinKeep, skinAlign   12 skyDeepen, hiTwist, temperature, tint
+//  16 tintLo (a, b), tintHi (a, b)   20-25 chroma by hue   26-31 hue turn (radians)   32-37 lightness by hue
+//  38 tintMid (a, b)   40 whites, midtones (stops), vignette, grain   44 seed, mix, pivot (stops)
+//  48-67 curves (stops added at -6, -3, 0, +3, +6): luminance, red, green, blue   68 curves on
+cbuffer LkCustom : register(b1) { float4 LkG[18]; };
+float LkK(uint i) { return LkG[i >> 2u][i & 3u]; }
+// Where the pixel is (the caller sets them; the centre and no grain otherwise).
+static float2 LkUv = 0.5;
+static uint2 LkPx = 0;
+
+// A curve through five points at -6, -3, 0, +3 and +6 stops (Catmull-Rom; grade.h's GradeCurveAt).
+float LkCurve(uint at, float l) {
+  const float f = clamp((l + 6.0) / 3.0, 0.0, 4.0);
+  const uint i = min(uint(f), 3u);
+  const float t = f - float(i);
+  const float p0 = LkK(at + (i > 0u ? i - 1u : 0u)), p1 = LkK(at + i), p2 = LkK(at + i + 1u), p3 = LkK(at + min(i + 2u, 4u));
+  return 0.5 * (2.0 * p1 + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t * t * t);
+}
 
 // Oklab from linear sRGB (Ottosson 2020); cube roots keep their sign for out-of-range values.
 float3 LkOklab(float3 c) {
@@ -87,6 +109,14 @@ struct LkParams {
   float skyDeepen;  // lightness taken from bright blues and cyans (a polariser's sky)
   float bias;       // stops of exposure after the contrast (a restrained look sits lower, not milky)
   float hiTwist;    // radians: bright reds turn toward yellow and bright blues toward cyan (film)
+  bool custom;      // the custom look: the controls below come from LkCustom
+  float highlights; // stops added above mid grey
+  float shadows;    // stops added below mid grey
+  float blacks;     // positive lifts black to a dark grey, negative crushes toward pure black
+  float temp;       // white balance: warm (+) or cool (-)
+  float tint;       // white balance: magenta (+) or green (-)
+  float hueTurn[6]; // radians, by hue (the same six as hue[])
+  float hueLight[6];// lightness share added, by hue
 };
 
 LkParams LkFor(uint look) {
@@ -94,7 +124,16 @@ LkParams LkFor(uint look) {
   p.contrast = 1.0; p.sat = 1.0; p.vibrance = 0.0; p.skinKeep = 1.0; p.hiDesat = 0.0; p.loDesat = 0.0;
   p.hue[0] = 1.0; p.hue[1] = 1.0; p.hue[2] = 1.0; p.hue[3] = 1.0; p.hue[4] = 1.0; p.hue[5] = 1.0;
   p.tintLo = 0.0; p.tintHi = 0.0; p.density = 0.0; p.skinAlign = 0.0; p.skyDeepen = 0.0; p.hiTwist = 0.0; p.bias = 0.0;
-  if (look == 2u) {  // 高饱和
+  p.highlights = 0.0; p.shadows = 0.0; p.blacks = 0.0; p.temp = 0.0; p.tint = 0.0; p.custom = look == 5u;
+  [unroll] for (int i = 0; i < 6; ++i) { p.hueTurn[i] = 0.0; p.hueLight[i] = 0.0; }
+  if (p.custom) {  // 自定义
+    p.contrast = LkK(0); p.sat = LkK(1); p.vibrance = LkK(2); p.bias = LkK(3);
+    p.highlights = LkK(4); p.shadows = LkK(5); p.blacks = LkK(6); p.density = LkK(7);
+    p.hiDesat = LkK(8); p.loDesat = LkK(9); p.skinKeep = LkK(10); p.skinAlign = LkK(11);
+    p.skyDeepen = LkK(12); p.hiTwist = LkK(13); p.temp = LkK(14); p.tint = LkK(15);
+    p.tintLo = float2(LkK(16), LkK(17)); p.tintHi = float2(LkK(18), LkK(19));
+    [unroll] for (uint j = 0u; j < 6u; ++j) { p.hue[j] = LkK(20u + j); p.hueTurn[j] = LkK(26u + j); p.hueLight[j] = LkK(32u + j); }
+  } else if (look == 2u) {  // 高饱和
     p.contrast = 1.10; p.sat = 1.38; p.vibrance = 0.55; p.skinKeep = 0.40; p.hiDesat = 0.10; p.loDesat = 0.08;
     p.hue[0] = 0.92; p.hue[1] = 1.08; p.hue[2] = 1.12; p.hue[3] = 1.15; p.hue[4] = 1.00; p.hue[5] = 1.05;
     p.density = 0.35; p.skinAlign = 0.25; p.skyDeepen = 0.04; p.hiTwist = 0.10;
@@ -117,20 +156,50 @@ LkParams LkFor(uint look) {
 // x: linear, exposure-normalised (the frame's mean at mid grey). Returns the graded colour.
 float3 LkGrade(float3 x, LkParams p) {
   x = max(x, 0.0);
+  // White balance: channel gains that keep luminance, so only the cast changes.
+  if (p.temp != 0.0 || p.tint != 0.0) {
+    const float3 g = exp2(float3(0.32 * p.temp + 0.12 * p.tint, -0.24 * p.tint, -0.40 * p.temp + 0.12 * p.tint));
+    x *= g / LkY(g);
+  }
   // Contrast in stops around mid grey, as one ratio for all channels (hue and chroma ratios stay).
   // It follows the mean of luminance and the largest channel: on luminance alone a saturated blue
   // or red (bright to the eye, low in luminance) would be pushed down with the shadows.
   const float l = log2(max(0.5 * (LkY(x) + max(x.r, max(x.g, x.b))), 1e-7) / kLkMidGrey);
-  const float l2 = l + (p.contrast - 1.0) * 2.5 * tanh(l / 2.5);
+  const float pivot = p.custom ? LkK(46) : 0.0;
+  float l2 = l + (p.contrast - 1.0) * 2.5 * tanh((l - pivot) / 2.5);
+  // Highlights and shadows: stops added on either side of mid grey, fading in over a few stops.
+  l2 += p.highlights * smoothstep(0.0, 3.0, l2) + p.shadows * (1.0 - smoothstep(-4.0, 0.0, l2));
+  if (p.custom) {
+    // Whites (the top end), midtones (a bump around grey), the luminance curve and a vignette.
+    l2 += LkK(40) * smoothstep(2.0, 6.0, l2) + LkK(41) * exp(-0.5 * l2 * l2 / 2.25);
+    if (LkK(68) != 0.0) l2 += LkCurve(48u, l2);
+    if (LkK(42) != 0.0) {
+      const float2 d = (LkUv - 0.5) * float2(16.0 / 9.0, 1.0);
+      l2 += LkK(42) * 1.5 * smoothstep(0.1, 1.0, dot(d, d) / 1.04);
+    }
+  }
   x *= exp2(l2 - l + p.bias);
+  // The colour curves: each channel lifted or lowered by its own curve, read at its own level.
+  if (p.custom && LkK(68) != 0.0) {
+    const float3 lc = log2(max(x, 1e-7) / kLkMidGrey);
+    x *= exp2(float3(LkCurve(53u, lc.r), LkCurve(58u, lc.g), LkCurve(63u, lc.b)));
+  }
+  // Black: a lift adds a little neutral light (black becomes a grey about 5.5 stops under mid grey);
+  // a crush takes it away softly, as one ratio for all channels so dark colours keep their hue.
+  if (p.blacks > 0.0) x += p.blacks * 0.004;
+  else if (p.blacks < 0.0) { const float m = max(x.r, max(x.g, x.b)); x *= m / (m + -p.blacks * 0.004); }
   // Chroma in Oklab.
   const float3 dIn = LkDist(x);
   const float3 lab0 = LkOklab(x);
   const float c = length(lab0.yz);
   const float h = atan2(lab0.z, lab0.y);
   static const float centres[6] = {0.506, 1.920, 2.478, -2.880, -1.676, -0.559};  // 29, 110, 142, 195, 264, 328 degrees
-  float hk = 0.0, hw = 0.0;
-  [unroll] for (int i = 0; i < 6; ++i) { const float w = LkHue(h, centres[i], 1.08); hk += w * p.hue[i]; hw += w; }
+  float hk = 0.0, hw = 0.0, ht = 0.0, hl = 0.0;
+  [unroll] for (int i = 0; i < 6; ++i) {
+    const float w = LkHue(h, centres[i], 1.08);
+    hk += w * p.hue[i]; ht += w * p.hueTurn[i]; hl += w * p.hueLight[i]; hw += w;
+  }
+  ht = hw > 1e-3 ? ht / hw : 0.0; hl = hw > 1e-3 ? hl / hw : 0.0;
   float k = p.sat * (hw > 1e-3 ? hk / hw : 1.0);
   k *= 1.0 + p.vibrance * (1.0 - smoothstep(0.0, 0.16, c));
   // Greys and whites stay neutral, and so does a grey with a cast (a blue-grey room): saturation
@@ -141,6 +210,12 @@ float3 LkGrade(float3 x, LkParams p) {
   k *= lerp(1.0, 1.0 - p.hiDesat, smoothstep(1.5, 4.5, l2));
   k *= lerp(1.0, 1.0 - p.loDesat, smoothstep(-3.0, -6.0, l2));
   float3 lab = float3(lab0.x, lab0.yz * k);
+  // A turn of hue by hue, faded out toward grey; skin takes its share.
+  const float colourful = smoothstep(0.01, 0.05, c), skinShare = lerp(1.0, p.skinKeep, skin);
+  if (ht != 0.0) {
+    const float turn = ht * colourful * skinShare, cs = cos(turn), sn = sin(turn);
+    lab.yz = float2(lab.y * cs - lab.z * sn, lab.y * sn + lab.z * cs);
+  }
   // Skin toward the skin line: a turn of its hue, the share by how much it reads as skin (too red
   // looks blotchy, too yellow pale).
   if (p.skinAlign > 0.0 && skin > 0.0) {
@@ -159,7 +234,9 @@ float3 LkGrade(float3 x, LkParams p) {
   }
   // Split toning, growing with lightness so black stays black; skin keeps its own hue.
   const float hi = smoothstep(-0.5, 2.5, l2), lo = 1.0 - smoothstep(-4.0, -0.5, l2);
-  lab.yz += (p.tintHi * hi + p.tintLo * lo) * (1.0 - 0.75 * skin) * min(lab0.x, 1.2);
+  const float mid = saturate(1.0 - hi - lo);
+  const float2 tintMid = p.custom ? float2(LkK(38), LkK(39)) : 0.0;
+  lab.yz += (p.tintHi * hi + p.tintLo * lo + tintMid * mid) * lerp(1.0 - 0.75 * skin, skinShare, p.custom ? 1.0 : 0.0) * min(lab0.x, 1.2);
   // Subtractive saturation: the chroma a colour really gains (what the gamut lets it keep) is paid
   // for in lightness, the way film dyes darken as they grow denser, so a richer colour reads deeper
   // instead of neon. The price follows how much brighter than grey each hue looks at the same
@@ -170,6 +247,14 @@ float3 LkGrade(float3 x, LkParams p) {
   const float gained = max(length(LkOklab(LkCompress(LkLinear(float3(lab0.x, lab.yz)), dIn)).yz) - c, 0.0) * hkw;
   const float sky = LkHue(h, -1.676, 0.9) * smoothstep(0.03, 0.10, c) * smoothstep(0.55, 0.85, lab0.x);
   lab.x = lab0.x - p.density * gained * (1.0 - 0.5 * skin) - p.skyDeepen * sky * lab0.x;
+  lab.x *= 1.0 + hl * colourful * skinShare;
+  // Film grain: a per-frame hash, in lightness, strongest in the mid tones.
+  if (p.custom && LkK(43) > 0.0) {
+    uint n = LkPx.x * 1973u + LkPx.y * 9277u + uint(LkK(44)) * 26699u;
+    n = (n << 13u) ^ n; n = n * (n * n * 15731u + 789221u) + 1376312589u;
+    const float r = float(n & 0x7fffffffu) / 2147483647.0 - 0.5;
+    lab.x *= 1.0 + LkK(43) * 0.22 * r * (0.35 + 0.65 * mid);
+  }
   return max(LkCompress(LkLinear(lab), dIn), 0.0);
 }
 
@@ -189,6 +274,8 @@ float3 LookApply(float3 o, float3 e, uint look, float exposure) {
     result = x * exp2(0.10 * 2.5 * tanh(l / 2.5));
   } else if (look >= 2u && look <= 4u) {
     result = LkGrade(result * s, LkFor(look)) / s;
+  } else if (look == 5u) {
+    result = lerp(result, LkGrade(result * s, LkFor(look)) / s, LkK(45));
   }
   return result;
 }

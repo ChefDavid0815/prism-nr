@@ -6,6 +6,8 @@ import { Barcode } from '../components/Barcode';
 import { DataField } from '../components/DataField';
 import { RollingNumber } from '../components/RollingNumber';
 import { TickRange } from '../components/TickRange';
+import { GRADE, gradeParse, gradeValueKey, GRADE_VALUE_KEYS } from '../../electron/shared/grade';
+import { GradeDesk } from './GradeDesk';
 import { fingerprint, routeTone, TONE_COLOR } from '../lib/fingerprint';
 
 export const ROUTE_LABEL: Record<Route, string> = {
@@ -435,7 +437,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
         )}
 
         {plan && !blocked && (
-          <CoreSettings key={tierNonce} values={pickCore(plan.values)} tier={PRESETS.find((p) => p.id === preset) ?? PRESETS[1]} live={record?.route === 'prism-core' ? record : null} onChange={setCoreValues} onTuned={onTuned} />
+          <CoreSettings key={tierNonce} values={pickCore(plan.values)} tier={PRESETS.find((p) => p.id === preset) ?? PRESETS[1]} live={record?.route === 'prism-core' ? record : null} gameName={game.name} onChange={setCoreValues} onTuned={onTuned} />
         )}
 
         {plan && (plan.profileNotes.length > 0 || plan.warnings.length > 0) && (
@@ -535,9 +537,9 @@ function LaunchOption({ value }: { value: string }) {
 
 // ---------------------------------------------------------------------------
 
-const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.netSize', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard', 'prism-core.look'];
-/** The look is its own choice: tiers neither set nor reset it. */
-const TIER_KEYS = CORE_KEYS.filter((k) => k !== 'prism-core.look');
+const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.netSize', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard', 'prism-core.look', ...GRADE_VALUE_KEYS];
+/** The look (and the custom look's grades) is its own choice: tiers neither set nor reset it. */
+const TIER_KEYS = CORE_KEYS.filter((k) => k !== 'prism-core.look' && !GRADE_VALUE_KEYS.includes(k));
 
 const LOOKS: { value: string; label: string; note: string }[] = [
   { value: '0', label: '默认', note: '网络原样的色彩。' },
@@ -545,6 +547,7 @@ const LOOKS: { value: string; label: string; note: string }[] = [
   { value: '2', label: '高饱和', note: '颜色更鲜更干净：越灰的颜色加得越多，灰和白保持中性，皮肤只跟一小部分。适合二次元和卡通风格。' },
   { value: '3', label: '低饱和', note: '收住颜色，白色微冷，暗部微青，像美剧和电影的质感，皮肤保留自然血色。适合科技和现代题材。' },
   { value: '4', label: '浓烈', note: '深对比加浓郁色彩，暗部偏青、高光微暖。真正的重度渲染。' },
+  { value: '5', label: '自定义', note: '你自己的调色：调色台里有影调、曲线、色彩、三向色轮、色相、胶片六页共 66 项参数，三个方案随时切换，带实时预览。游戏里按 Home 打开面板也能调，两边是同一份设置。' },
 ];
 
 function pickCore(values: CoreValues): CoreValues {
@@ -573,11 +576,13 @@ interface CoreSettingsProps {
   tier: PresetDef;
   /** The active Core install, when there is one: changes are written to it right away. */
   live: InstallRecord | null;
+  gameName: string;
   onChange: (v: CoreValues) => void;
   onTuned: () => void;
 }
 
-function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsProps) {
+function CoreSettings({ values, tier, live, gameName, onChange, onTuned }: CoreSettingsProps) {
+  const [desk, setDesk] = useState(false);
   const [status, setStatus] = useState<'idle' | 'writing' | 'written' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -588,6 +593,15 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
   const defaults = resolveValues(tier.id);
   const look = String(values['prism-core.look'] ?? '0');
   const changed = TIER_KEYS.some((k) => String(values[k]) !== String(defaults[k]));
+  const statusText = !live
+    ? '启用时写入游戏目录的 prism-core.ini。启用以后再调，游戏运行中约 1 秒内生效。'
+    : status === 'writing'
+      ? '正在写入 prism-core.ini'
+      : status === 'written'
+        ? '已写入 prism-core.ini，游戏运行中约 1 秒内生效。'
+        : status === 'error'
+          ? `写入失败：${error}`
+          : '这些设置已经写在游戏目录里。改动会直接写入，游戏运行中约 1 秒内生效。';
 
   useEffect(() => () => {
     if (pending.current) clearTimeout(pending.current);
@@ -629,7 +643,19 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
           ))}
         </div>
         <p className="block-note">{(LOOKS.find((l) => l.value === look) ?? LOOKS[0]).note}</p>
+        {look === '5' && (() => {
+          const slot = Math.max(0, Math.min(2, Number(values['prism-core.gradeSlot'] ?? 0) || 0));
+          const g = gradeParse(String(values[gradeValueKey(slot)] ?? ''));
+          const touched = GRADE.filter((x, i) => Math.abs(g[i] - x.def) > 1e-4).length;
+          return (
+            <div className="grade-open">
+              <span className="mono">方案 {slot + 1} · {touched === 0 ? '中性，还没调整' : `已调整 ${touched} 项`}</span>
+              <button className="btn btn-line btn-small" onClick={() => setDesk(true)}>打开调色台</button>
+            </div>
+          );
+        })()}
       </div>
+      {desk && <GradeDesk gameName={gameName} values={values} set={set} status={statusText} onClose={() => setDesk(false)} />}
 
       <div className="core-field">
         <span className="core-field-label" id="core-cadence-label">网络节奏</span>
@@ -686,18 +712,10 @@ function CoreSettings({ values, tier, live, onChange, onTuned }: CoreSettingsPro
 
       <div className="core-foot">
         <p className={`block-note ${status === 'error' ? 'tone-blocked' : ''}`} role="status" aria-live="polite">
-          {!live
-            ? '启用时写入游戏目录的 prism-core.ini。启用以后再调，游戏运行中约 1 秒内生效。'
-            : status === 'writing'
-              ? '正在写入 prism-core.ini'
-              : status === 'written'
-                ? '已写入 prism-core.ini，游戏运行中约 1 秒内生效。'
-                : status === 'error'
-                  ? `写入失败：${error}`
-                  : '这些设置已经写在游戏目录里。改动会直接写入，游戏运行中约 1 秒内生效。'}
+          {statusText}
         </p>
         {changed && (
-          <button className="btn btn-line btn-small" onClick={() => set({ ...pickCore(defaults), 'prism-core.look': look })}>
+          <button className="btn btn-line btn-small" onClick={() => set({ ...pickCore(defaults), 'prism-core.look': look, ...Object.fromEntries(GRADE_VALUE_KEYS.filter((k) => k in values).map((k) => [k, values[k]])) })}>
             恢复{tier.name}档
           </button>
         )}

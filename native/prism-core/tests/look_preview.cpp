@@ -4,6 +4,9 @@
 //   look_preview <original.png> <prism.png> <sheet.png>   an F11 capture pair (the network's edit is
 //                                                          recovered from the pair, as Compose has it)
 //   look_preview chart <sheet.png>                        a colour checker, skin, grey and sky chart
+//   either, then --grade=<Grade= line> or --preset=<0-3>  the last tile shows the custom look (自定义)
+//                                                          instead of 浓烈: a preset loaded as the
+//                                                          custom look's starting point must match it
 // The stills are display-referred; they go back to scene light through the inverse of Core's
 // proxy encode (exposure-normalised, hue-preserving shoulder), are graded, and come forward again.
 #include <windows.h>
@@ -19,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "grade.h"
 #include "look_hlsl.h"
 
 #define CHECK(x) do { HRESULT hr_ = (x); if (FAILED(hr_)) { std::fprintf(stderr, "%s failed: 0x%08lx (line %d)\n", #x, hr_, __LINE__); std::exit(1); } } while (0)
@@ -123,6 +127,7 @@ void Main(uint3 id : SV_DispatchThreadID) {
   if (id.x >= w || id.y >= h) return;
   const float3 a = ToScene(A[id.xy].rgb), b = ToScene(B[id.xy].rgb);
   const float3 e = clamp(log2(max(b, 1.0 / 512.0) / max(a, 1.0 / 512.0)), -3.0, 3.0);
+  LkUv = (float2(id.xy) + 0.5) / float2(w, h); LkPx = id.xy;
   const float3 r = ShowOriginal != 0u ? a : LookApply(a, e, Look, 1.0);
   O[id.xy] = float4(ToDisplay(r), 1.0);
 }
@@ -130,6 +135,14 @@ void Main(uint3 id : SV_DispatchThreadID) {
 
 int wmain(int argc, wchar_t** argv) {
   CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  // The custom look, if asked for: it takes the last tile.
+  bool custom = false;
+  prism::GradeValues grade;
+  if (argc > 1 && !wcsncmp(argv[argc - 1], L"--grade=", 8)) { grade = prism::GradeParse(argv[argc - 1] + 8); custom = true; --argc; }
+  else if (argc > 1 && !wcsncmp(argv[argc - 1], L"--preset=", 9)) { grade = prism::GradeFromPreset(_wtoi(argv[argc - 1] + 9)); custom = true; --argc; }
+  float gradeK[prism::kGradeConstants];
+  prism::GradeToShader(grade, gradeK);
+  if (custom) std::printf("custom look: %ls\n", prism::GradeFormat(grade).c_str());
   Image a, b;
   const wchar_t* out;
   if (argc == 3 && !wcscmp(argv[1], L"chart")) { a = Chart(); b = a; out = argv[2]; }
@@ -171,14 +184,26 @@ int wmain(int argc, wchar_t** argv) {
   D3D12_DESCRIPTOR_RANGE ranges[2] = {};
   ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors = 2;
   ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors = 1; ranges[1].OffsetInDescriptorsFromTableStart = 2;
-  D3D12_ROOT_PARAMETER rp[2] = {};
+  D3D12_ROOT_PARAMETER rp[3] = {};
   rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[0].Constants.Num32BitValues = 2;
   rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; rp[1].DescriptorTable = {2, ranges};
-  D3D12_ROOT_SIGNATURE_DESC rd = {2, rp, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+  rp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; rp[2].Descriptor.ShaderRegister = 1;
+  D3D12_ROOT_SIGNATURE_DESC rd = {3, rp, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
   ID3DBlob* blob = nullptr;
   CHECK(D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err));
   ID3D12RootSignature* root = nullptr;
   CHECK(dev->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), __uuidof(ID3D12RootSignature), (void**)&root));
+  // The custom look's constants (b1).
+  ID3D12Resource* cb = nullptr;
+  {
+    D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC d = {}; d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; d.Width = 512; d.Height = 1; d.DepthOrArraySize = 1;
+    d.MipLevels = 1; d.SampleDesc.Count = 1; d.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    CHECK(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, __uuidof(ID3D12Resource), (void**)&cb));
+    void* m = nullptr;
+    CHECK(cb->Map(0, nullptr, &m));
+    std::memcpy(m, gradeK, sizeof(gradeK));
+  }
   D3D12_COMPUTE_PIPELINE_STATE_DESC pd = {}; pd.pRootSignature = root; pd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
   ID3D12PipelineState* pso = nullptr;
   CHECK(dev->CreateComputePipelineState(&pd, __uuidof(ID3D12PipelineState), (void**)&pso));
@@ -242,8 +267,9 @@ int wmain(int argc, wchar_t** argv) {
     l->SetComputeRootSignature(root);
     ID3D12DescriptorHeap* hs[] = {heap};
     l->SetDescriptorHeaps(1, hs);
-    const uint32_t k[2] = {uint32_t(tile == 0 ? 0 : tile - 1), tile == 0 ? 1u : 0u};
+    const uint32_t k[2] = {uint32_t(tile == 0 ? 0 : custom && tile == 5 ? 5 : tile - 1), tile == 0 ? 1u : 0u};
     l->SetComputeRoot32BitConstants(0, 2, k, 0);
+    l->SetComputeRootConstantBufferView(2, cb->GetGPUVirtualAddress());
     l->SetComputeRootDescriptorTable(1, heap->GetGPUDescriptorHandleForHeapStart());
     l->Dispatch((W + 15) / 16, (H + 15) / 16, 1);
     barrier(to, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);

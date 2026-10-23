@@ -12,6 +12,7 @@ import { initStore } from '../core/store';
 import { setIniValue } from '../core/installer';
 import { netScaleFor, netSizeFor, PRESETS, resolveValues, tierLocked, tierOf } from '../shared/catalog';
 import { nrCostFor, planNr } from '../shared/nrplan';
+import { GRADE, gradeFormat, gradeFromPreset, gradeParse, gradeToShader } from '../shared/grade';
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) {
@@ -47,7 +48,31 @@ async function main(): Promise<void> {
   assert(tierOf(resolveValues('high'))?.id === 'high' && tierOf({ ...resolveValues('high'), 'prism-core.intensity': 205 }) === undefined, 'Tiers: values name their tier, a tweak makes them custom');
   assert(/^[\x00-\x7f]*$/.test(ini0), 'Core INI: ASCII only (GetPrivateProfileString reads it as ANSI)');
   assert(/KeyOverlay=Home/.test(ini0), 'Core INI: the in-game panel opens with Home');
-  assert(/Look=0/.test(ini0) && /Look=3/.test(coreIni({ 'prism-core.look': '3' })) && /Look=4/.test(coreIni({ 'prism-core.look': '9' })), 'Core INI: the colour look is written (0-4)');
+  assert(/Look=0/.test(ini0) && /Look=3/.test(coreIni({ 'prism-core.look': '3' })) && /Look=5/.test(coreIni({ 'prism-core.look': '9' })), 'Core INI: the colour look is written (0-5, 5 the custom look)');
+  // The custom look: grade.ts against native/prism-core/src/grade.h.
+  {
+    const h = fs.readFileSync(path.join(__dirname, '..', '..', 'native', 'prism-core', 'src', 'grade.h'), 'utf8');
+    const native = [...h.matchAll(/t\[kG\w+\] = \{L"(\w+)", L"[^"]+", (-?[\d.]+), (-?[\d.]+), (-?[\d.]+), ([\d.]+)f?, (kU\w+)/g)].map((m) => ({ key: m[1], min: +m[2], max: +m[3], def: +m[4], step: +m[5], unit: m[6] }));
+    const units: Record<string, string> = { kUSigned: 'signed', kUPlain: 'plain', kUStops: 'stops', kUHue: 'hue', kUTurn: 'turn' };
+    const fixed = GRADE.filter((g) => !/^(Hue|Sat|Lum)(Red|Yellow|Green|Cyan|Blue|Magenta)$|^Curve[YRGB]\d$/.test(g.key));
+    const same = native.length === fixed.length && native.every((n, i) => n.key === fixed[i].key && n.min === fixed[i].min && n.max === fixed[i].max && n.def === fixed[i].def && n.step === fixed[i].step && units[n.unit] === fixed[i].unit);
+    assert(same && GRADE.length === 66, `Custom look: the app's table matches grade.h (${native.length} named controls, ${GRADE.length} in all)`);
+    // Starting points, as Core's look_preview printed them (single precision on both sides).
+    const want = [
+      '',
+      'Contrast:17,Saturation:38,Vibrance:55,SkinProtect:60,SkinAlign:42,SatRed:-8,SatYellow:8,SatGreen:12,SatCyan:15,SatMagenta:5,Density:35,HighlightTwist:40,Sky:27,HighlightDesat:20,ShadowDesat:13',
+      'Exposure:-0.20,Contrast:40,Saturation:-34,SkinProtect:55,SkinAlign:50,ShadowHue:238,ShadowAmount:63,HighlightHue:254,HighlightAmount:36,SatRed:-5,SatYellow:-15,SatGreen:-22,SatMagenta:-15,HighlightTwist:32,HighlightDesat:24,ShadowDesat:42',
+      'Contrast:70,Saturation:50,Vibrance:35,SkinProtect:60,SkinAlign:58,ShadowHue:240,ShadowAmount:54,HighlightHue:72,HighlightAmount:63,SatRed:-5,SatYellow:5,SatGreen:8,SatCyan:12,SatBlue:8,SatMagenta:2,Density:55,HighlightTwist:56,Sky:47,HighlightDesat:20',
+    ];
+    const order = (x: string) => x.split(',').filter(Boolean).sort().join(',');
+    assert(want.every((w, i) => order(gradeFormat(gradeFromPreset(i))) === order(w)), 'Custom look: the presets as starting points match Core\'s');
+    const g = gradeParse('Contrast:24, saturation:-34,Exposure:9,Bogus:3,ShadowHue:200');
+    assert(gradeFormat(g) === 'Exposure:3.00,Contrast:24,Saturation:-34,ShadowHue:200', 'Custom look: the ini line parses (any case, clamped, unknown keys dropped) and formats back');
+    const k = gradeToShader(gradeParse(''));
+    assert(k[0] === 1 && k[1] === 1 && Math.abs(k[10] - 0.5) < 1e-6 && k[45] === 1 && k[68] === 0, 'Custom look: neutral packs to no change');
+    const gi = coreIni({ 'prism-core.look': '5', 'prism-core.grade': 'Contrast:24', 'prism-core.grade3': 'Sat:9,Saturation:-10', 'prism-core.gradeSlot': '2' });
+    assert(/Look=5/.test(gi) && /\r\nGrade=Contrast:24\r\n/.test(gi) && /\r\nGrade2=\r\n/.test(gi) && /\r\nGrade3=Saturation:-10\r\n/.test(gi) && /GradeSlot=2/.test(gi) && /^[\x00-\x7f]*$/.test(gi), 'Core INI: the custom look\'s three slots and the slot in use');
+  }
   assert(tierOf({ ...resolveValues('flagship'), 'prism-core.look': '2' })?.id === 'flagship', 'Tiers: the colour look does not change the tier');
   const kept = coreIni(resolveValues('high'), ['KeyOverlay=Insert', 'OverlayX=900', 'OverlayHud=1', 'SplitPos=0.620']);
   assert(/KeyOverlay=Insert/.test(kept) && !/KeyOverlay=Home/.test(kept) && /OverlayX=900/.test(kept) && /OverlayHud=1/.test(kept) && /SplitPos=0\.620/.test(kept),

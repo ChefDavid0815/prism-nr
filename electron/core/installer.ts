@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { netScaleFor, netSizeFor, pluginById, PLUGINS, PRESETS, resolveValues, tierLocked } from '../shared/catalog';
+import { gradeFormat, gradeParse, gradeValueKey, GRADE_SLOTS } from '../shared/grade';
 import { matchProfile, styleById } from '../shared/profiles';
 import type {
   BackupRecord,
@@ -118,7 +119,10 @@ export function coreIni(values: Values, keep: string[] = []): string {
     `Guided=${values['prism-core.guided'] === true || values['prism-core.guided'] === 1 || values['prism-core.guided'] === '1' ? 1 : 0}`,
     // The network's size only applies to every-frame tiers; the asynchronous network runs native.
     `NetScale=${cadence === 1 ? netScaleFor(values['prism-core.netSize']).toFixed(4) : '1.00'}`,
-    `Look=${Math.max(0, Math.min(4, Math.round(Number(values['prism-core.look'] ?? 0)) || 0))}`,
+    `Look=${Math.max(0, Math.min(5, Math.round(Number(values['prism-core.look'] ?? 0)) || 0))}`,
+    // The custom look's three slots (grade.ts), re-written in canonical form (ASCII).
+    ...Array.from({ length: GRADE_SLOTS }, (_, i) => `${i === 0 ? 'Grade' : `Grade${i + 1}`}=${gradeFormat(gradeParse(String(values[gradeValueKey(i)] ?? '')))}`),
+    `GradeSlot=${Math.max(0, Math.min(GRADE_SLOTS - 1, Math.round(Number(values['prism-core.gradeSlot'] ?? 0)) || 0))}`,
     'KeyToggle=F8',
     'KeyCadence=F2',
     'KeyAsync=F3',
@@ -880,7 +884,14 @@ export function syncCoreFromIni(): boolean {
     if (guard !== undefined) next['prism-core.guard'] = Math.round(guard * 100);
     if (netScale !== undefined && netScale < 0.999) next['prism-core.netSize'] = netSizeFor(netScale);
     if (async !== undefined) next['prism-core.async'] = async !== 0;
-    if (look !== undefined) next['prism-core.look'] = String(Math.max(0, Math.min(4, Math.round(look))));
+    if (look !== undefined) next['prism-core.look'] = String(Math.max(0, Math.min(5, Math.round(look))));
+    // The custom look, as the in-game desk saved it.
+    for (let i = 0; i < GRADE_SLOTS; i++) {
+      const line = ini[i === 0 ? 'grade' : `grade${i + 1}`];
+      if (line !== undefined) next[gradeValueKey(i)] = gradeFormat(gradeParse(line));
+    }
+    const slot = num('gradeslot');
+    if (slot !== undefined) next['prism-core.gradeSlot'] = String(Math.max(0, Math.min(GRADE_SLOTS - 1, Math.round(slot))));
     r.values = next;
     file.sha256After = sha256Text(text);
     changed = true;

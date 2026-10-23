@@ -876,6 +876,10 @@ struct Input {
   bool mouseMoved = false, down = false, pressed = false, released = false;
   int wheelSteps = 0;
   bool up = false, dn = false, left = false, right = false, enter = false, back = false, toggle = false;
+  bool side = false;          // Tab, or Y on a gamepad: between the panel and the grading desk
+  bool reset = false;         // Backspace or Delete, or X on a gamepad: the focused control back to neutral
+  int page = 0;               // LB / RB on a gamepad: the grading desk's previous or next page
+  bool fine = false;          // Shift held: the smallest steps
   bool pad = false;           // the last navigation came from a gamepad
   bool padConnected = false;
   WORD padHeld = 0;           // gamepad buttons down now
@@ -907,7 +911,8 @@ void PollInput(UINT bw, UINT bh, bool open) {
   static WORD padWas = 0;
   static Repeat pUp, pDn, pLeft, pRight;
   in.mouseMoved = in.pressed = in.released = false;
-  in.up = in.dn = in.left = in.right = in.enter = in.back = in.toggle = false;
+  in.up = in.dn = in.left = in.right = in.enter = in.back = in.toggle = in.side = in.reset = false;
+  in.page = 0;
   in.wheelSteps = 0;
   const int wh = wheel.exchange(0);
   if (!fg) { toggleWas = Key(cfg.key); lWas = false; in.down = false; return; }
@@ -932,10 +937,11 @@ void PollInput(UINT bw, UINT bh, bool open) {
   if (open) {
     in.up = Rep(Key(VK_UP), rUp, now); in.dn = Rep(Key(VK_DOWN), rDn, now);
     in.left = Rep(Key(VK_LEFT), rLeft, now); in.right = Rep(Key(VK_RIGHT), rRight, now);
-    static bool enterWas = false, escWas = false;
-    const bool e = Key(VK_RETURN) || Key(VK_SPACE), x = Key(VK_ESCAPE);
-    in.enter = e && !enterWas; in.back = x && !escWas;
-    enterWas = e; escWas = x;
+    static bool enterWas = false, escWas = false, tabWas = false, resetWas = false;
+    const bool e = Key(VK_RETURN) || Key(VK_SPACE), x = Key(VK_ESCAPE), tb = Key(VK_TAB), rs = Key(VK_BACK) || Key(VK_DELETE);
+    in.enter = e && !enterWas; in.back = x && !escWas; in.side = tb && !tabWas; in.reset = rs && !resetWas;
+    enterWas = e; escWas = x; tabWas = tb; resetWas = rs;
+    in.fine = Key(VK_SHIFT);
     if (in.up || in.dn || in.left || in.right || in.enter) in.pad = false;
   }
   // The gamepad: View + Y opens and closes; the d-pad or left stick moves, A changes, B closes.
@@ -965,6 +971,11 @@ void PollInput(UINT bw, UINT bh, bool open) {
         in.up |= pu; in.dn |= pd; in.left |= pl; in.right |= pr;
         in.enter |= (pressed & XINPUT_GAMEPAD_A) != 0;
         in.back |= (pressed & XINPUT_GAMEPAD_B) != 0;
+        in.reset |= (pressed & XINPUT_GAMEPAD_X) != 0;
+        if ((pressed & XINPUT_GAMEPAD_Y) && !(b & XINPUT_GAMEPAD_BACK)) in.side = true;
+        if (pressed & XINPUT_GAMEPAD_LEFT_SHOULDER) in.page = -1;
+        if (pressed & XINPUT_GAMEPAD_RIGHT_SHOULDER) in.page = 1;
+        if (pressed & (XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_Y | XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER)) in.pad = true;
       }
     }
   }
@@ -1002,8 +1013,16 @@ struct Panel {
   enum Drag { kNone, kMove, kSlide, kSplitLine } drag = kNone;
   int dragRow = -1;
   float dragDX = 0, dragDY = 0;
-  float seg[kRows][2] = {};   // the inverted block's animated left and right, per segmented row
-  bool segInit[kRows] = {};
+  float seg[kRows + 8][2] = {};  // the inverted block's animated left and right, per segmented row (the desk's after the panel's)
+  bool segInit[kRows + 8] = {};
+  int side = 0;                // where the keys and the gamepad go: 0 the panel, 1 the grading desk
+  float pw = 0, ph = 0;        // the panel's size this frame
+  // The grading desk.
+  int gPage = 0, gFocus = 2;   // the page, and the focused item (0 slots, 1 pages, then the page's rows, then the presets)
+  int gChannel = 0, gAttr = 1; // the curve's channel (luminance, red, green, blue); the hue page's control (hue, saturation, lightness)
+  int gDragPoint = -1, gDragWheel = -1;  // a curve point or a wheel marker being dragged
+  float gDragY = 0, gDragFrom = 0;
+  double gClickAt = -1; int gClickParam = -1;  // a double click resets
   double changedAt = -1, savedAt = -10;
   std::wstring toast;
   uint32_t toastMark = kReady;
@@ -1122,13 +1141,14 @@ std::wstring RowHelp(int r, const LiveSettings& s, int option) {
       return kTiers[i].help;
     }
     case kLook: {
-      static const wchar_t* looks[5] = {
+      static const wchar_t* looks[6] = {
           L"网络原样的色彩。",
           L"保留原画的颜色，只取网络的光影和质感；强改动被柔和压住，皮肤上更克制。AI 味最低，适合原画党。",
           L"颜色更鲜更干净：越灰的颜色加得越多，灰和白保持中性，皮肤只跟一小部分。适合二次元和卡通风格。",
           L"收住颜色，白色微冷，暗部微青，像美剧和电影的质感，皮肤保留自然血色。适合科技和现代题材。",
-          L"深对比加浓郁色彩，暗部偏青、高光微暖。真正的重度渲染。"};
-      return looks[std::clamp(option >= 0 ? option : s.look, 0, 4)];
+          L"深对比加浓郁色彩，暗部偏青、高光微暖。真正的重度渲染。",
+          L"你自己的调色：旁边的调色台有影调、曲线、色彩、三向色轮、色相、胶片六页，共 66 项参数，三个方案随时切换。Prism NR 软件里也能调。Tab 或手柄 Y 进入调色台。"};
+      return looks[std::clamp(option >= 0 ? option : s.look, 0, 5)];
     }
     case kIntensity: return L"网络改动的放大倍数，100% 是网络原样输出。250% 以上是游乐场，画面容易过度。";
     case kPasses: return L"网络在自己的结果上再跑几遍，效果更强，开销按遍数成倍增加。3 遍以上是游乐场。";
@@ -1198,10 +1218,11 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
   LiveStats st;
   GetLiveStats(&st);
 
-  const float W = U(420), pad = U(20), rowH = U(38), labelW = U(108);
+  const float W = U(460), pad = U(20), rowH = U(38), labelW = U(108);
   // Height: header, telemetry, rows, help, footer.
   const float headH = U(52), telH = U(144), helpH = U(64), footH = U(40);
   const float H = headH + telH + rowH * float(kRows) + U(12) + helpH + footH;
+  panel.pw = W; panel.ph = H;
   float x0 = std::round(cfg.x * ui), y0 = std::round(cfg.y * ui);
   x0 = std::clamp(x0, 0.0f, std::max(0.0f, float(bw) - W)); y0 = std::clamp(y0, 0.0f, std::max(0.0f, float(bh) - H));
   panel.px0 = x0; panel.py0 = y0;
@@ -1219,7 +1240,7 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
   {
     const float cy = y0 + std::round((headH - LineHeight(kTitle)) * 0.5f);
     const float nw = Text(x0 + pad, cy, L"Prism Core", kTitle, kWhite);
-    Text(x0 + pad + nw + U(8), cy + U(2), L"1.3", kLabel, kQuiet);
+    Text(x0 + pad + nw + U(8), cy + U(2), L"1.4", kLabel, kQuiet);
     const wchar_t* state; uint32_t mark;
     if (st.failure) { state = L"已停止"; mark = kBlocked; }
     else if (!s.enabled) { state = L"已关闭"; mark = kCaution; }
@@ -1292,18 +1313,21 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
     const float ry = y + r * rowH;
     if (in.mx >= x0 && in.mx < x1 && in.my >= ry && in.my < ry + rowH && !in.pad) hoverRow = r;
   }
-  if (hoverRow >= 0 && in.mouseMoved && panel.drag == Panel::kNone) panel.focus = hoverRow;
+  if (hoverRow >= 0 && in.mouseMoved && panel.drag == Panel::kNone) { panel.focus = hoverRow; panel.side = 0; }
+  if (in.side) panel.side = s.look == 5 ? 1 - panel.side : 0;
+  if (s.look != 5) panel.side = 0;
+  const bool keysHere = panel.side == 0;
   // Keyboard and gamepad: up and down move the focus, left and right change the value.
-  if (in.up) panel.focus = (panel.focus + kRows - 1) % kRows;
-  if (in.dn) panel.focus = (panel.focus + 1) % kRows;
-  const int step = in.right ? 1 : in.left ? -1 : 0;
+  if (keysHere && in.up) panel.focus = (panel.focus + kRows - 1) % kRows;
+  if (keysHere && in.dn) panel.focus = (panel.focus + 1) % kRows;
+  const int step = !keysHere ? 0 : in.right ? 1 : in.left ? -1 : 0;
   panel.hoverOption = -1;
   const bool netScaleOn = s.cadence == 1;
   LiveSettings n = s;
   bool changed = false;
   for (int r = 0; r < kRows; ++r) {
     const float ry = y + r * rowH;
-    const bool focused = panel.focus == r;
+    const bool focused = panel.focus == r && keysHere;
     const bool rowEnabled = (r != kNetScale && r != kTarget) || netScaleOn;
     const float ty = ry + std::round((rowH - LineHeight(kBody)) * 0.5f);
     if (focused) Fill(x0 + U(8), ry + U(10), x0 + U(8) + std::max(2.0f, U(2)), ry + rowH - U(10), kWhite);
@@ -1349,10 +1373,11 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
         break;
       }
       case kLook: {
-        clicked = Segments(r, cx0, sy, cx1, sh, {L"默认", L"高还原", L"高饱和", L"低饱和", L"浓烈"}, std::clamp(n.look, 0, 4), 31, 0, &hover, dt);
+        clicked = Segments(r, cx0, sy, cx1, sh, {L"默认", L"高还原", L"高饱和", L"低饱和", L"浓烈", L"自定义"}, std::clamp(n.look, 0, 5), 63, 0, &hover, dt);
         int want = clicked;
-        if (keyStep) want = std::clamp(n.look + step, 0, 4);
+        if (keyStep) want = std::clamp(n.look + step, 0, 5);
         if (want >= 0 && want != n.look) { n.look = want; changed = true; }
+        if (focused && in.enter && n.look == 5) panel.side = 1;  // into the grading desk
         if (focused) panel.hoverOption = hover;
         break;
       }
@@ -1428,7 +1453,7 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
   // Help for the focused row.
   {
     float hy = y + U(10);
-    for (const std::wstring& line : Wrap(RowHelp(panel.focus, n, panel.hoverOption), kSmall, W - pad * 2)) {
+    for (const std::wstring& line : Wrap(RowHelp(panel.focus, n, keysHere ? panel.hoverOption : -1), kSmall, W - pad * 2)) {
       Text(x0 + pad, hy, line, kSmall, kReadout);
       hy += LineHeight(kSmall);
     }
@@ -1440,8 +1465,8 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
   {
     const float fy = y + std::round((footH - LineHeight(kLabel)) * 0.5f);
     std::wstring keys;
-    if (in.pad) keys = L"View + Y 收起　十字键 选择和调整　A 切换　B 收起";
-    else keys = std::wstring(KeyName(cfg.key)) + L" 收起　↑↓ 选择　←→ 调整　拖动标题栏移动";
+    if (in.pad) keys = n.look == 5 ? L"View + Y 收起　十字键 选择和调整　Y 调色台　B 收起" : L"View + Y 收起　十字键 选择和调整　A 切换　B 收起";
+    else keys = std::wstring(KeyName(cfg.key)) + (n.look == 5 ? L" 收起　↑↓ 选择　←→ 调整　Tab 调色台" : L" 收起　↑↓ 选择　←→ 调整　拖动标题栏移动");
     Text(x0 + pad, fy, keys, kLabel, kQuiet);
     const float since = float(now - panel.savedAt);
     if (since < 2.0f) TextRight(x1 - pad, fy, L"已保存", kLabel, Fade(kReadout, since < 1.4f ? 1.0f : (2.0f - since) / 0.6f));
@@ -1459,6 +1484,382 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
       SavePanelValue(L"OverlayY", Fmt(L"%.0f", cfg.y));
     }
   }
+}
+
+// ------------------------------------------------------------------ the grading desk (Look=5, grade.h)
+// Beside the panel while the look is 自定义: the tone curve and a hue ring at the top, six pages of
+// controls, three slots, and a preset to start from. The hue ring is the one place colour fills
+// more than a stroke: there the hues are the data.
+constexpr float kPi = 3.14159265f;
+constexpr float kHueCentres[6] = {29, 110, 142, 195, 264, 328};  // look_hlsl.h's six hues, in Oklab degrees
+
+// A hue's colour: Oklab at a lightness and chroma, to sRGB.
+uint32_t HueInk(float deg, float L = 0.75f, float C = 0.13f, float alpha = 1.0f) {
+  const float h = deg * kPi / 180.0f, a = C * std::cos(h), b = C * std::sin(h);
+  float l = L + 0.3963377774f * a + 0.2158037573f * b, m = L - 0.1055613458f * a - 0.0638541728f * b, s = L - 0.0894841775f * a - 1.2914855480f * b;
+  l = l * l * l; m = m * m * m; s = s * s * s;
+  const float rgb[3] = {4.0767416621f * l - 3.3077115913f * m + 0.2309699292f * s, -1.2684380046f * l + 2.6097574011f * m - 0.3413193965f * s,
+                        -0.0041960863f * l - 0.7034186147f * m + 1.7076147010f * s};
+  uint32_t out = 0;
+  for (float c : rgb) {
+    c = std::clamp(c, 0.0f, 1.0f);
+    const float e = c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+    out = (out << 8) | uint32_t(e * 255.0f + 0.5f);
+  }
+  return Rgba(out, alpha);
+}
+uint32_t ChannelInk(int c) { return c == 1 ? HueInk(29, 0.68f, 0.2f) : c == 2 ? HueInk(142, 0.75f, 0.2f) : c == 3 ? HueInk(264, 0.62f, 0.2f) : kWhite; }
+
+void Line(float ax, float ay, float bx, float by, float w, uint32_t c) {
+  const float dx = bx - ax, dy = by - ay, len = std::sqrt(dx * dx + dy * dy);
+  if (len < 1e-3f) return;
+  const float nx = -dy / len * w * 0.5f, ny = dx / len * w * 0.5f;
+  Tri(ax + nx, ay + ny, bx + nx, by + ny, bx - nx, by - ny, c);
+  Tri(ax + nx, ay + ny, bx - nx, by - ny, ax - nx, ay - ny, c);
+}
+
+// A by-hue control at a hue (degrees): the shader's raised-cosine blend of the six.
+float ByHue(const GradeValues& g, int base, float deg) {
+  float sum = 0, wsum = 0;
+  for (int i = 0; i < 6; ++i) {
+    float d = std::fabs(deg - kHueCentres[i]);
+    d = std::fmod(d, 360.0f); d = std::min(d, 360.0f - d);
+    const float w = d < 61.9f ? 0.5f + 0.5f * std::cos(kPi * d / 61.9f) : 0.0f;
+    sum += w * g.v[base + i]; wsum += w;
+  }
+  return wsum > 1e-3f ? sum / wsum : 0.0f;
+}
+
+std::wstring GradeText(int i, float v) {
+  switch (GradeInfo(i).unit) {
+    case kUStops: return std::fabs(v) < 0.005f ? L"0.00" : Fmt(L"%+.2f", v);
+    case kUHue: return Fmt(L"%.0f°", v);
+    case kUTurn: return std::fabs(v) < 0.5f ? L"0°" : Fmt(L"%+.0f°", v);
+    case kUSigned: return std::fabs(v) < 0.5f ? L"0" : Fmt(L"%+.0f", v);
+    default: return Fmt(L"%.0f", v);
+  }
+}
+// Steps for the keys and the wheel (Shift: the finest).
+float GradeStep(int i, bool fine) {
+  const GradeSpec& p = GradeInfo(i);
+  if (p.unit == kUStops) return fine ? 0.01f : 0.1f;
+  if (p.unit == kUHue) return fine ? 1.0f : 5.0f;
+  if (p.unit == kUTurn) return 1.0f;
+  return fine ? 1.0f : 5.0f;
+}
+float GradeNudge(int i, float v, float by) {
+  const GradeSpec& p = GradeInfo(i);
+  if (p.unit == kUHue) { v = std::fmod(v + by + 360.0f, 360.0f); return std::round(v); }
+  const float st = p.unit == kUStops ? 0.01f : 1.0f;
+  return std::clamp(std::round((v + by) / st) * st, p.min, p.max);
+}
+
+// A control's bar run: centred controls fill from neutral, the rest from the left; a hue control is
+// a strip of its hues with the value as a tall white bar.
+Bars GradeSlider(float x0, float y, float x1, float h, int param, float value, bool hot) {
+  const GradeSpec& p = GradeInfo(param);
+  const float bw = std::max(2.0f, std::round(2.0f * ui)), gap = std::max(1.0f, std::round(2.0f * ui));
+  const int n = int((x1 - x0 + gap) / (bw + gap));
+  const float span = n * (bw + gap) - gap;
+  const float tv = (value - p.min) / (p.max - p.min), c0 = p.min < 0 ? -p.min / (p.max - p.min) : 0.0f;
+  const float lo = std::min(tv, c0), hi = std::max(tv, c0), half = 0.5f / n;
+  for (int i = 0; i < n; ++i) {
+    const float f = (i + 0.5f) / n, bx = x0 + i * (bw + gap);
+    const bool atValue = std::fabs(f - tv) <= half;
+    if (p.unit == kUHue) {
+      if (atValue) Fill(bx - gap * 0.5f, y - U(3), bx + bw + gap * 0.5f, y + h + U(3), hot ? kWhite : Rgba(0xe6e6e6));
+      else Fill(bx, y + U(3), bx + bw, y + h, HueInk(p.min + f * (p.max - p.min), 0.72f, 0.12f, hot ? 1.0f : 0.55f));
+      continue;
+    }
+    const bool isRef = p.min < 0 && std::fabs(f - c0) <= half;
+    const bool filled = hi - lo > 1e-4f && f >= lo - half * 0.5f && f <= hi + half * 0.5f;
+    const uint32_t c = filled ? (hot ? kWhite : Rgba(0xe6e6e6)) : isRef ? kQuiet : kHair;
+    Fill(bx, isRef ? y - U(3) : y + U(3), bx + bw, y + h, c);
+  }
+  return {x0, y, x0 + span, y + h};
+}
+
+void DrawGrade(UINT bw, UINT bh, float dt) {
+  const double now = Now();
+  const LiveSettings s = GetLiveSettings();
+  LiveSettings n = s;
+  bool changed = false;
+  const int slot = std::clamp(n.gradeSlot, 0, kGradeSlots - 1);
+
+  const float W = U(440), pad = U(20), rowH = U(34), labelW = U(92);
+  const float headH = U(52), scopeH = U(180), tabsH = U(46), rowsH = rowH * 8.0f + U(6), presetH = U(46), helpH = U(64), footH = U(36);
+  const float H = headH + scopeH + tabsH + rowsH + presetH + helpH + footH;
+  // Beside the panel: on its right if there is room, else on its left, else over it.
+  float x0 = panel.px0 + panel.pw + U(12);
+  if (x0 + W > float(bw)) x0 = panel.px0 - U(12) - W;
+  if (x0 < 0) x0 = std::clamp(panel.px0, 0.0f, std::max(0.0f, float(bw) - W));
+  const float y0 = std::clamp(panel.py0, 0.0f, std::max(0.0f, float(bh) - H));
+  const float x1 = x0 + W, y1 = y0 + H, t = Hair();
+  const float open = cfg.motion ? EaseOutExpo(float(now - panel.openedAt) / 0.18f) : 1.0f;
+  clip = {x0, y0, x0 + std::max(1.0f, W * open), y1};
+  Fill(x0, y0, x1, y1, Rgba(0x000000, 0.93f));
+  Frame(x0, y0, x1, y1, t, kHair);
+
+  const bool over = in.mx >= x0 && in.mx < x1 && in.my >= y0 && in.my < y1 && !in.pad;
+  if (over && in.mouseMoved && panel.drag == Panel::kNone) panel.side = 1;
+  const bool keys = panel.side == 1;
+
+  // The page's rows: a control, or -1 the curve's channel, -2 the hue page's control.
+  static const wchar_t* pageNames[6] = {L"影调", L"曲线", L"色彩", L"色轮", L"色相", L"胶片"};
+  if (keys && in.page) panel.gPage = (panel.gPage + in.page + 6) % 6;
+  std::vector<int> rows;
+  switch (panel.gPage) {
+    case 0: for (int i = kGExposure; i <= kGMidtones; ++i) rows.push_back(i); break;
+    case 1: rows.push_back(-1); for (int i = 0; i < kCurvePoints; ++i) rows.push_back(kGCurve + panel.gChannel * kCurvePoints + i); break;
+    case 2: for (int i = kGTemp; i <= kGMix; ++i) rows.push_back(i); break;
+    case 3: for (int i = kGShadowHue; i <= kGHiAmt; ++i) rows.push_back(i); break;
+    case 4: rows.push_back(-2); for (int i = 0; i < 6; ++i) rows.push_back((panel.gAttr == 0 ? kGHueShift : panel.gAttr == 1 ? kGHueSat : kGHueLight) + i); break;
+    default: for (int i = kGDensity; i <= kGGrain; ++i) rows.push_back(i); break;
+  }
+  const int items = 2 + int(rows.size()) + 1, presetItem = items - 1;
+  panel.gFocus = std::clamp(panel.gFocus, 0, items - 1);
+  if (keys && in.up) panel.gFocus = (panel.gFocus + items - 1) % items;
+  if (keys && in.dn) panel.gFocus = (panel.gFocus + 1) % items;
+  const int step = keys ? (in.right ? 1 : in.left ? -1 : 0) : 0;
+  auto focusMark = [&](float ry, float h) { Fill(x0 + U(8), ry + U(10), x0 + U(8) + std::max(2.0f, U(2)), ry + h - U(10), kWhite); };
+  int hover = -1;
+
+  // Header: the name, and the three slots.
+  {
+    const float cy = y0 + std::round((headH - LineHeight(kTitle)) * 0.5f);
+    const float nw = Text(x0 + pad, cy, L"调色台", kTitle, kWhite);
+    Text(x0 + pad + nw + U(8), cy + U(2), L"自定义", kLabel, kQuiet);
+    if (keys && panel.gFocus == 0) focusMark(y0, headH);
+    const float sh = U(26), sy = y0 + std::round((headH - sh) * 0.5f);
+    int want = Segments(kRows + 0, x1 - pad - U(186), sy, x1 - pad, sh, {L"方案 1", L"方案 2", L"方案 3"}, slot, 7, 0, &hover, dt);
+    if (keys && panel.gFocus == 0 && step) want = std::clamp(slot + step, 0, kGradeSlots - 1);
+    if (want >= 0 && want != slot) { n.gradeSlot = want; changed = true; }
+    Fill(x0, y0 + headH - t, x1, y0 + headH, kHair);
+  }
+  GradeValues& cur = n.grade[std::clamp(n.gradeSlot, 0, kGradeSlots - 1)];  // the slot just chosen, if it changed
+
+  // Scopes: the tone curve as a bar run, and the hue ring.
+  float y = y0 + headH;
+  {
+    const float ax0 = x0 + pad, ax1 = x0 + pad + U(206), ay0 = y + U(30), ay1 = y + scopeH - U(16);
+    Text(ax0, y + U(10), L"影调曲线", kLabel, kReadout);
+    TextRight(ax1, y + U(10), L"−8 → +6 档", kLabel, kQuiet);
+    auto mapX = [&](float l) { return ax0 + (l + 8.0f) / 14.0f * (ax1 - ax0); };
+    auto mapY = [&](float o) { return ay1 - std::clamp((o + 8.0f) / 14.0f, 0.0f, 1.0f) * (ay1 - ay0); };
+    Fill(ax0, mapY(0) , ax1, mapY(0) + t, kHairFaint);
+    Fill(mapX(0), ay0, mapX(0) + t, ay1, kHairFaint);
+    Fill(ax0, ay1, ax1, ay1 + t, kHair);
+    float k[kGradeConstants];
+    GradeToShader(cur, k);
+    bool channelOn[4] = {true, false, false, false};
+    for (int c = 1; c < 4; ++c) for (int i = 0; i < kCurvePoints; ++i) channelOn[c] |= cur.v[kGCurve + c * kCurvePoints + i] != 0.0f;
+    const float bwid = std::max(2.0f, std::round(2.0f * ui)), gap = std::max(1.0f, std::round(1.0f * ui)), cap = std::max(2.0f, U(2));
+    const int nb = int((ax1 - ax0 + gap) / (bwid + gap));
+    for (int i = 0; i < nb; ++i) {
+      const float bx = ax0 + i * (bwid + gap), l = -8.0f + (i + 0.5f) / nb * 14.0f;
+      const float o = GradeTone(cur, l), yy = mapY(o);
+      Fill(bx, yy, bx + bwid, ay1, Rgba(0x262626));
+      if (i % 2 == 0) Fill(bx, mapY(l), bx + bwid, mapY(l) + t, kQuiet);  // no change
+      for (int c = 1; c < 4; ++c)
+        if (channelOn[c]) { const float yc = mapY(o + GradeCurveAt(k + 48 + c * kCurvePoints, o)); Fill(bx, yc, bx + bwid, yc + cap, ChannelInk(c)); }
+      Fill(bx, yy, bx + bwid, yy + cap, kWhite);
+    }
+    // The curve's points on its page: drag them up and down.
+    if (panel.gPage == 1) {
+      const int c = panel.gChannel;
+      const float pxPerStop = (ay1 - ay0) / 14.0f;
+      for (int i = 0; i < kCurvePoints; ++i) {
+        const float l = kCurveStops[i], o = GradeTone(cur, l);
+        const float px = mapX(l), py = mapY(c == 0 ? o : o + GradeCurveAt(k + 48 + c * kCurvePoints, o));
+        const bool focused = keys && panel.gFocus == 3 + i, dragging = panel.gDragPoint == i;
+        const float r = U(focused || dragging ? 6 : 4);
+        Fill(px - r - t, py - r - t, px + r + t, py + r + t, kBlack);
+        if (focused || dragging) Fill(px - r, py - r, px + r, py + r, ChannelInk(c));
+        else Frame(px - r, py - r, px + r, py + r, std::max(1.0f, U(1.5f)), ChannelInk(c));
+        if (in.pressed && !in.pad && std::fabs(in.mx - px) < U(10) && std::fabs(in.my - py) < U(10)) {
+          panel.gDragPoint = i; panel.gDragY = in.my; panel.gDragFrom = cur.v[kGCurve + c * kCurvePoints + i];
+          panel.gFocus = 3 + i; panel.side = 1;
+        }
+      }
+      if (panel.gDragPoint >= 0) {
+        if (in.down) {
+          const int pi = kGCurve + c * kCurvePoints + panel.gDragPoint;
+          const float nv = GradeNudge(pi, panel.gDragFrom, -(in.my - panel.gDragY) / pxPerStop / 1.5f * 100.0f);
+          if (nv != cur.v[pi]) { cur.v[pi] = nv; changed = true; }
+        } else panel.gDragPoint = -1;
+      }
+    }
+
+    // The hue ring: a spoke per hue, as long as that hue's saturation gain (the dotted circle is no
+    // change), turned by its hue shift; around it the hues themselves; the three wheels as markers.
+    const float rx = std::round((ax1 + x1 - pad) * 0.5f + U(6)), ry = std::round(y + scopeH * 0.5f + U(6));
+    const float R = std::min((x1 - pad - ax1) * 0.5f - U(16), scopeH * 0.5f - U(26)), r0 = U(8);
+    Text(ax1 + U(26), y + U(10), L"色相环", kLabel, kReadout);
+    auto at = [&](float deg, float rad, float* px, float* py) { *px = rx + std::cos(deg * kPi / 180.0f) * rad; *py = ry - std::sin(deg * kPi / 180.0f) * rad; };
+    for (int j = 0; j < 72; ++j) {
+      float ax, ay, bx2, by2, cx2, cy2, dx2, dy2;
+      at(j * 5.0f, R + U(5), &ax, &ay); at((j + 1) * 5.0f, R + U(5), &bx2, &by2); at((j + 1) * 5.0f, R + U(8), &cx2, &cy2); at(j * 5.0f, R + U(8), &dx2, &dy2);
+      const uint32_t c = HueInk(j * 5.0f + 2.5f, 0.72f, 0.13f);
+      Tri(ax, ay, bx2, by2, cx2, cy2, c); Tri(ax, ay, cx2, cy2, dx2, dy2, c);
+    }
+    for (int j = 0; j < 36; ++j) { float px, py; at(j * 10.0f, r0 + (R - r0) * 0.5f, &px, &py); Fill(px - t, py - t, px + t, py + t, kQuiet); }
+    const float sat = 1.0f + cur.v[kGSat] / 100.0f;
+    for (int j = 0; j < 72; ++j) {
+      const float h = j * 5.0f + 2.5f;
+      const float gain = std::max(0.0f, sat * (1.0f + ByHue(cur, kGHueSat, h) / 100.0f));
+      const float turn = ByHue(cur, kGHueShift, h), light = ByHue(cur, kGHueLight, h) / 100.0f;
+      const float len = (R - r0) * std::clamp(gain / 2.0f, 0.0f, 1.0f);
+      float ax, ay, bx2, by2;
+      at(h + turn, r0, &ax, &ay); at(h + turn, r0 + len, &bx2, &by2);
+      Line(ax, ay, bx2, by2, std::max(2.0f, U(2)), HueInk(h + turn, std::clamp(0.74f * (1.0f + 0.3f * light), 0.3f, 0.95f), 0.14f));
+    }
+    // The wheels: shadows a hollow square, midtones a cross, highlights a filled square.
+    const int hueOf[3] = {kGShadowHue, kGMidHue, kGHiHue}, amtOf[3] = {kGShadowAmt, kGMidAmt, kGHiAmt};
+    int focusedWheel = -1;
+    if (panel.gPage == 3 && panel.gFocus >= 2 && panel.gFocus < 2 + int(rows.size())) focusedWheel = (panel.gFocus - 2) / 2;
+    for (int w = 0; w < 3; ++w) {
+      float px, py;
+      at(cur.v[hueOf[w]], r0 + (R - r0) * cur.v[amtOf[w]] / 100.0f, &px, &py);
+      const bool hot = (keys && focusedWheel == w) || panel.gDragWheel == w;
+      const float r = U(hot ? 6 : 4.5f), lw = std::max(2.0f, U(2));
+      Fill(px - r - t, py - r - t, px + r + t, py + r + t, Rgba(0x000000, w == 1 ? 0.0f : 1.0f));
+      if (w == 0) Frame(px - r, py - r, px + r, py + r, lw, kWhite);
+      else if (w == 2) Fill(px - r, py - r, px + r, py + r, kWhite);
+      else { Fill(px - r - t, py - lw * 0.5f - t, px + r + t, py + lw * 0.5f + t, kBlack); Fill(px - lw * 0.5f - t, py - r - t, px + lw * 0.5f + t, py + r + t, kBlack);
+             Fill(px - r, py - lw * 0.5f, px + r, py + lw * 0.5f, kWhite); Fill(px - lw * 0.5f, py - r, px + lw * 0.5f, py + r, kWhite); }
+      if (in.pressed && !in.pad && std::fabs(in.mx - px) < U(10) && std::fabs(in.my - py) < U(10)) panel.gDragWheel = w;
+    }
+    // On the wheels' page a press anywhere in the ring moves the focused wheel there.
+    const float dxm = in.mx - rx, dym = in.my - ry;
+    if (in.pressed && !in.pad && panel.gDragWheel < 0 && panel.gPage == 3 && dxm * dxm + dym * dym < (R + U(8)) * (R + U(8)))
+      panel.gDragWheel = focusedWheel >= 0 ? focusedWheel : 1;
+    if (panel.gDragWheel >= 0) {
+      if (in.down) {
+        const int w = panel.gDragWheel;
+        float deg = std::atan2(-(in.my - ry), in.mx - rx) * 180.0f / kPi;
+        if (deg < 0) deg += 360.0f;
+        const float amt = std::clamp((std::sqrt(dxm * dxm + dym * dym) - r0) / (R - r0) * 100.0f, 0.0f, 100.0f);
+        if (std::round(deg) != cur.v[hueOf[w]] || std::round(amt) != cur.v[amtOf[w]]) { cur.v[hueOf[w]] = std::round(deg); cur.v[amtOf[w]] = std::round(amt); changed = true; }
+        if (panel.gPage == 3) panel.gFocus = 2 + w * 2 + 1;
+        panel.side = 1;
+      } else panel.gDragWheel = -1;
+    }
+    y += scopeH;
+    Fill(x0, y - t, x1, y, kHair);
+  }
+
+  // Pages.
+  {
+    const float sh = U(28), sy = y + std::round((tabsH - sh) * 0.5f);
+    if (keys && panel.gFocus == 1) focusMark(y, tabsH);
+    int want = Segments(kRows + 1, x0 + pad, sy, x1 - pad, sh, std::vector<std::wstring>(pageNames, pageNames + 6), panel.gPage, 63, 0, &hover, dt);
+    if (keys && panel.gFocus == 1 && step) want = (panel.gPage + step + 6) % 6;
+    if (want >= 0 && want != panel.gPage) panel.gPage = want;
+    y += tabsH;
+    Fill(x0 + pad, y - t, x1 - pad, y, kHairFaint);
+  }
+
+  // The page's rows.
+  const float cx0 = x0 + pad + labelW, cx1 = x1 - pad;
+  y += U(3);
+  for (int r = 0; r < int(rows.size()); ++r) {
+    const float ry = y + r * rowH;
+    const int item = 2 + r, param = rows[size_t(r)];
+    const bool focused = keys && panel.gFocus == item;
+    const bool overRow = in.mx >= x0 && in.mx < x1 && in.my >= ry && in.my < ry + rowH && !in.pad;
+    if (overRow && in.mouseMoved && panel.drag == Panel::kNone && panel.gDragWheel < 0 && panel.gDragPoint < 0) { panel.gFocus = item; panel.side = 1; }
+    if (focused) focusMark(ry, rowH);
+    const float ty = ry + std::round((rowH - LineHeight(kBody)) * 0.5f), sh = U(24), sy = ry + std::round((rowH - sh) * 0.5f);
+    if (param < 0) {
+      const bool channel = param == -1;
+      Text(x0 + pad, ty, channel ? L"通道" : L"调整", kBody, focused ? kWhite : kReadout);
+      const int chosen = channel ? panel.gChannel : panel.gAttr;
+      int want = channel ? Segments(kRows + 2, cx0, sy, cx1, sh, {L"亮度", L"红", L"绿", L"蓝"}, chosen, 15, 0, &hover, dt)
+                         : Segments(kRows + 3, cx0, sy, cx1, sh, {L"色相", L"饱和", L"明度"}, chosen, 7, 0, &hover, dt);
+      if (focused && step) want = std::clamp(chosen + step, 0, channel ? 3 : 2);
+      if (want >= 0) (channel ? panel.gChannel : panel.gAttr) = want;
+    } else {
+      const GradeSpec& p = GradeInfo(param);
+      // A hue's or a channel's mark beside its name.
+      float lx = x0 + pad;
+      uint32_t mark = 0;
+      if (param >= kGHueShift && param < kGCurve) mark = HueInk(kHueCentres[(param - kGHueShift) % 6], 0.72f, 0.14f);
+      else if (param >= kGCurve && param < kGCurve + 20) mark = ChannelInk((param - kGCurve) / kCurvePoints);
+      if (mark) { Fill(lx, ry + U(11), lx + std::max(2.0f, U(2)), ry + rowH - U(11), mark); lx += U(10); }
+      const bool neutral = std::fabs(cur.v[param] - p.def) < 1e-4f;
+      Text(lx, ty, p.label, kBody, focused ? kWhite : neutral ? kReadout : Rgba(0xd9d9d9));
+      const float vw = U(56);
+      const Bars b = GradeSlider(cx0, sy + U(4), cx1 - vw - U(8), sh - U(10), param, cur.v[param], focused);
+      TextRight(cx1, ty, GradeText(param, cur.v[param]), kValue, focused ? kWhite : neutral ? kQuiet : kReadout);
+      float nv = cur.v[param];
+      const bool overBar = in.mx >= b.x0 - U(4) && in.mx < b.x1 + U(4) && overRow;
+      if (overRow && in.pressed) {
+        if (panel.gClickParam == param && now - panel.gClickAt < 0.35) { nv = p.def; panel.gClickAt = -1; }
+        else {
+          panel.gClickParam = param; panel.gClickAt = now;
+          if (overBar) { panel.drag = Panel::kSlide; panel.dragRow = 1000 + param; }
+        }
+      }
+      if (panel.drag == Panel::kSlide && panel.dragRow == 1000 + param && in.down) {
+        const float f = std::clamp((in.mx - b.x0) / (b.x1 - b.x0), 0.0f, 1.0f);
+        nv = GradeNudge(param, p.min + f * (p.max - p.min), 0.0f);
+        if (p.unit == kUHue) nv = std::round(p.min + f * (p.max - p.min));
+      }
+      if (overRow && in.wheelSteps) nv = GradeNudge(param, nv, in.wheelSteps * GradeStep(param, in.fine));
+      if (focused && step) nv = GradeNudge(param, nv, step * GradeStep(param, in.fine));
+      if (focused && (in.enter || in.reset)) nv = p.def;
+      if (std::fabs(nv - cur.v[param]) > 1e-4f) { cur.v[param] = nv; changed = true; }
+    }
+    if (r + 1 < int(rows.size())) Fill(x0 + pad, ry + rowH - t, x1 - pad, ry + rowH, kHairFaint);
+  }
+  y += rowsH - U(3);
+  Fill(x0, y - t, x1, y, kHair);
+
+  // A preset to start from (it replaces the slot's controls); the one the slot matches is inverted.
+  {
+    const bool focused = keys && panel.gFocus == presetItem;
+    if (focused) focusMark(y, presetH);
+    const float ty = y + std::round((presetH - LineHeight(kBody)) * 0.5f), sh = U(26), sy = y + std::round((presetH - sh) * 0.5f);
+    Text(x0 + pad, ty, L"起点", kBody, focused ? kWhite : kReadout);
+    int match = -1;
+    for (int i = 0; i < 4; ++i) if (GradeFromPreset(i) == cur) match = i;
+    int want = Segments(kRows + 4, cx0, sy, cx1, sh, {L"中性", L"高饱和", L"低饱和", L"浓烈"}, match, 15, 0, &hover, dt);
+    if (focused && step) want = std::clamp((match < 0 ? (step > 0 ? -1 : 4) : match) + step, 0, 3);
+    if (want >= 0 && want != match) { cur = GradeFromPreset(want); changed = true; }
+    y += presetH;
+    Fill(x0, y - t, x1, y, kHair);
+  }
+
+  // Help for the focused item.
+  {
+    std::wstring help;
+    const int f = panel.gFocus;
+    if (f == 0) help = L"三个方案各存一套调色，切换立即生效，方便来回对比。全部保存在游戏目录的 prism-core.ini，Prism NR 软件里也能调。";
+    else if (f == 1) help = L"六页参数：影调、曲线、色彩、三向色轮、色相、胶片。手柄 LB / RB 翻页。";
+    else if (f == presetItem) help = L"把一个预设载入当前方案作为起点，会替换这个方案的全部参数。和预设完全一致时那一项反白。";
+    else {
+      const int param = rows[size_t(f - 2)];
+      if (param == -1) help = L"要调的曲线：亮度只改明暗，红、绿、蓝分别改那个颜色在各档亮度上的多少。也可以在上方曲线上直接拖动点。";
+      else if (param == -2) help = L"六种颜色各自要调的属性：色相、饱和或明度。上方色相环会跟着变：辐条长短是饱和，偏转是色相。";
+      else {
+        help = GradeInfo(param).help;
+        if (param >= kGShadowHue && param <= kGHiAmt) help += L" 也可以在色相环上直接拖动它的标记。";
+      }
+    }
+    float hy = y + U(10);
+    for (const std::wstring& line : Wrap(help, kSmall, W - pad * 2)) { Text(x0 + pad, hy, line, kSmall, kReadout); hy += LineHeight(kSmall); }
+    y += helpH;
+    Fill(x0, y - t, x1, y, kHair);
+  }
+
+  // Footer: the keys.
+  {
+    const float fy = y + std::round((footH - LineHeight(kLabel)) * 0.5f);
+    const std::wstring k = in.pad ? L"LB RB 翻页　十字键 选择和调整　X 复位　Y 回到面板" : L"Tab 回到面板　←→ 调整　Shift 微调　Enter 或双击 复位";
+    Text(x0 + pad, fy, k, kLabel, kQuiet);
+  }
+  clip = {-1e9f, -1e9f, 1e9f, 1e9f};
+  if (changed) Changed(n);
 }
 
 // The split's labels, and its handle while the panel is open (drag it to move the split).
@@ -1523,6 +1924,20 @@ void TestSetup() {
   if (t.find("hud") != std::string::npos) cfg.hud = true;
   if (t.find("split") != std::string::npos) { LiveSettings s = GetLiveSettings(); s.split = true; s.splitPos = 0.62f; SetLiveSettings(s); }
   if (t.find("nohint") != std::string::npos) panel.hinted = true;
+  // grade: the custom look with a worked grade; gpage=N, gfocus=N, gchan=N choose the desk's state.
+  if (t.find("grade") != std::string::npos) {
+    LiveSettings s = GetLiveSettings();
+    s.look = 5;
+    s.grade[0] = GradeParse(L"Exposure:-0.15,Contrast:28,Highlights:-22,Shadows:12,Saturation:-12,Vibrance:18,ShadowHue:205,ShadowAmount:55,"
+                            L"MidHue:45,MidAmount:18,HighlightHue:70,HighlightAmount:40,SatGreen:-30,HueGreen:-12,SatBlue:15,LumBlue:-25,HueYellow:-6,"
+                            L"CurveY1:15,CurveY5:-10,CurveB1:25,CurveR5:12,Density:30,HighlightTwist:40,Vignette:-30,Grain:20");
+    SetLiveSettings(s);
+    panel.side = 1;
+  }
+  auto num = [&](const char* key, int lo, int hi, int* out) { const size_t at = t.find(key); if (at != std::string::npos) *out = std::clamp(std::atoi(t.c_str() + at + std::strlen(key)), lo, hi); };
+  num("gpage=", 0, 5, &panel.gPage);
+  num("gfocus=", 0, 12, &panel.gFocus);
+  num("gchan=", 0, 3, &panel.gChannel);
 }
 
 bool started = false;
@@ -1617,6 +2032,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
   DrawSplit(bw, bh, panel.open);
   if (panel.open) {
     DrawPanel(bw, bh, dt);
+    if (GetLiveSettings().look == 5) DrawGrade(bw, bh, dt);
     CURSORINFO ci = {};
     ci.cbSize = sizeof ci;
     const bool systemCursor = GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING);

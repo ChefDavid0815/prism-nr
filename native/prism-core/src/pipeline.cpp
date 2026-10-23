@@ -363,6 +363,7 @@ void Compose(uint3 id : SV_DispatchThreadID) {
   // Split view (F4): the original left of the split column (Split - 4), a thin line at it. The
   // look (Flags bits 8-10) colours the result.
   const bool original = Split >= 4u && id.x < Split - 4u;
+  LkUv = (float2(id.xy) + 0.5) / float2(Size); LkPx = id.xy;
   float3 result = original ? o : LookApply(o, e, (Flags >> 8u) & 7u, Exposure[0]);
   if (Split >= 4u && (id.x == Split - 4u || id.x + 1u == Split - 4u)) result = 2.0;
   if (Split == 2u) result = float3(4.0, 0.0, 4.0);  // debug paint: proves the writes reach the screen
@@ -533,6 +534,7 @@ void Fill(uint3 id : SV_DispatchThreadID) {
   }
   NewEdit[id.xy] = float4(e, d);
   const bool original = Split >= 4u && id.x < Split - 4u;
+  LkUv = (float2(id.xy) + 0.5) / float2(Size); LkPx = id.xy;
   float3 result = original ? Orig[id.xy].rgb : LookApply(Orig[id.xy].rgb, e, (Flags >> 8u) & 7u, Exposure[0]);
   if (Split >= 4u && (id.x == Split - 4u || id.x + 1u == Split - 4u)) result = 2.0;
   Out0[id.xy] = float4(result, 1.0);
@@ -642,7 +644,16 @@ ID3D12RootSignature* root = nullptr;
 ID3D12PipelineState *psoReduce1 = nullptr, *psoReduce2 = nullptr, *psoEncode = nullptr, *psoCompose = nullptr, *psoCarry = nullptr, *psoBake = nullptr, *psoCopyGuides = nullptr, *psoFill = nullptr, *psoFit = nullptr;
 bool guided = false;  // the luminance-guided edit (Guided=1)
 int upFilter = 1;     // the reduced network's way up: 0 joint bilateral, 1 guided filter (UpFilter)
-int look = 0;         // the colour look (Look=0..4: 默认, 高还原, 高饱和, 低饱和, 浓烈; look_hlsl.h)
+int look = 0;         // the colour look (Look=0..5: 默认, 高还原, 高饱和, 低饱和, 浓烈, 自定义; look_hlsl.h)
+GradeValues grades[kGradeSlots];  // the custom look's controls (Grade=, Grade2=, Grade3=; grade.h)
+int gradeSlot = 0;                // the one in use (GradeSlot=0-2)
+float gradeK[kGradeConstants] = {};  // and as the shader takes them (look_hlsl.h's LkCustom, b1)
+// LkCustom's slots: every binding of the root signature writes the next one (several a frame, a few
+// frames in flight: 64 slots are never reused while the GPU may still read them).
+constexpr UINT kGradeSlotBytes = 512, kGradeRing = 64;
+ID3D12Resource* gradeBuffer = nullptr;
+uint8_t* gradeMapped = nullptr;
+unsigned gradeNext = 0, gradeFrame = 0;
 bool netReset = false;  // NetReset=1: the network starts without its history on every run (study)
 // NetScale (0.5-1, synchronous mode only): the network's working resolution. Below 1 it runs on
 // a reduced proxy and Compose brings its edit back with a joint bilateral upsample. The reduced
@@ -809,6 +820,14 @@ bool slotRefresh[16] = {};
 
 D3D12_CPU_DESCRIPTOR_HANDLE Cpu(UINT i) { auto h0 = heap->GetCPUDescriptorHandleForHeapStart(); h0.ptr += SIZE_T(i) * inc; return h0; }
 D3D12_GPU_DESCRIPTOR_HANDLE Gpu(UINT i) { auto h0 = heap->GetGPUDescriptorHandleForHeapStart(); h0.ptr += UINT64(i) * inc; return h0; }
+// The root signature, with the custom look's constants (b1) that every pass of Core may read.
+void BindRoot(ID3D12GraphicsCommandList* l) {
+  l->SetComputeRootSignature(root);
+  const unsigned slot = gradeNext++ % kGradeRing;
+  GradeSeed(gradeK, gradeFrame);
+  std::memcpy(gradeMapped + slot * kGradeSlotBytes, gradeK, sizeof(gradeK));
+  l->SetComputeRootConstantBufferView(3, gradeBuffer->GetGPUVirtualAddress() + UINT64(slot) * kGradeSlotBytes);
+}
 
 bool Fail(const char* what, HRESULT hr = S_OK) {
   Log("pipeline off: %s (0x%08lx)", what, hr);
@@ -866,15 +885,25 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   D3D12_DESCRIPTOR_RANGE ranges[2] = {};
   ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors = kSrvs;
   ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors = 6;
-  D3D12_ROOT_PARAMETER rp[3] = {};
+  D3D12_ROOT_PARAMETER rp[4] = {};
   rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[0].Constants.Num32BitValues = 16;
   rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; rp[1].DescriptorTable = {1, &ranges[0]};
   rp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; rp[2].DescriptorTable = {1, &ranges[1]};
-  D3D12_ROOT_SIGNATURE_DESC rd = {}; rd.NumParameters = 3; rd.pParameters = rp;
+  // The custom look (b1): a constant buffer, written into a ring of slots in an upload heap.
+  rp[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; rp[3].Descriptor.ShaderRegister = 1;
+  D3D12_ROOT_SIGNATURE_DESC rd = {}; rd.NumParameters = 4; rd.pParameters = rp;
   ID3DBlob *blob = nullptr, *err = nullptr;
   hr = D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
   if (FAILED(hr) || FAILED(hr = device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), __uuidof(ID3D12RootSignature), (void**)&root)))
     return Fail("root signature", hr);
+  {
+    D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC d = {}; d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; d.Width = kGradeSlotBytes * kGradeRing; d.Height = 1; d.DepthOrArraySize = 1;
+    d.MipLevels = 1; d.SampleDesc.Count = 1; d.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    if (FAILED(hr = device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, __uuidof(ID3D12Resource), (void**)&gradeBuffer)) ||
+        FAILED(hr = gradeBuffer->Map(0, nullptr, reinterpret_cast<void**>(&gradeMapped))))
+      return Fail("look constants", hr);
+  }
   for (auto [entry, pso] : {std::pair{"Reduce1", &psoReduce1}, std::pair{"Reduce2", &psoReduce2}, std::pair{"Encode", &psoEncode}, std::pair{"Compose", &psoCompose}, std::pair{"Carry", &psoCarry}, std::pair{"Bake", &psoBake}, std::pair{"Fill", &psoFill}, std::pair{"CopyGuides", &psoCopyGuides}, std::pair{"Fit", &psoFit}, std::pair{"Down", &psoDown}, std::pair{"GuidedFit", &psoGuidedFit}}) {
     ID3DBlob *cs = nullptr, *e = nullptr;
     if (FAILED(hr = compile(kShaders, std::strlen(kShaders), "prism", nullptr, nullptr, entry, "cs_5_1", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &cs, &e))) {
@@ -1480,8 +1509,8 @@ void LoadConfig() {
   if (configTime.dwLowDateTime || configTime.dwHighDateTime) Notice(L"已应用 Prism NR 里的设置");
   configTime = fa.ftLastWriteTime;
   auto Get = [&](const wchar_t* key) {
-    wchar_t buf[64] = {};
-    GetPrivateProfileStringW(L"Prism Core", key, L"", buf, 64, path.c_str());
+    wchar_t buf[1024] = {};  // Grade= runs to a few hundred characters
+    GetPrivateProfileStringW(L"Prism Core", key, L"", buf, 1024, path.c_str());
     return std::wstring(buf);
   };
   auto Num = [&](const wchar_t* key, double fallback, double lo, double hi) {
@@ -1500,9 +1529,12 @@ void LoadConfig() {
   {
     // A number, or the look's name.
     const std::wstring lk = Get(L"Look");
-    static const wchar_t* names[] = {L"default", L"faithful", L"vivid", L"muted", L"punchy"};
-    for (int i = 0; i < 5; ++i) if (!lstrcmpiW(lk.c_str(), names[i])) look = i;
-    if (!lk.empty() && lk[0] >= L'0' && lk[0] <= L'9') look = std::clamp(_wtoi(lk.c_str()), 0, 4);
+    static const wchar_t* names[] = {L"default", L"faithful", L"vivid", L"muted", L"punchy", L"custom"};
+    for (int i = 0; i < 6; ++i) if (!lstrcmpiW(lk.c_str(), names[i])) look = i;
+    if (!lk.empty() && lk[0] >= L'0' && lk[0] <= L'9') look = std::clamp(_wtoi(lk.c_str()), 0, 5);
+    for (int i = 0; i < kGradeSlots; ++i) grades[i] = GradeParse(Get(GradeKey(i)));
+    gradeSlot = int(Num(L"GradeSlot", gradeSlot, 0, kGradeSlots - 1));
+    GradeToShader(grades[gradeSlot], gradeK);
   }
   netReset = Num(L"NetReset", netReset ? 1 : 0, 0, 1) != 0;
   netScaleUser = float(Num(L"NetScale", netScaleUser, 0.5, 1.0));
@@ -1598,7 +1630,7 @@ void RecordFrame(const UpscaleCall& c, ID3D12GraphicsCommandList* l, UINT ring) 
   device->CreateUnorderedAccessView(recDepth, nullptr, nullptr, Cpu(ring + kSetR + 3));
   ID3D12DescriptorHeap* heaps[] = {heap};
   l->SetDescriptorHeaps(1, heaps);
-  l->SetComputeRootSignature(root);
+  BindRoot(l);
   const Constants k = {w, h, tilesX * tilesY, tilesX, intensity, guardStrength, 0.05f, 0u, c.renderWidth, c.renderHeight, c.motionScaleX, c.motionScaleY, 0.05f, 0u, 1.0f, 1.0f};
   l->SetComputeRoot32BitConstants(0, 16, &k, 0);
   l->SetComputeRootDescriptorTable(1, Gpu(ring));
@@ -1662,7 +1694,8 @@ LiveSettings GetLiveSettings() {
   LiveSettings s;
   s.enabled = enabled; s.cadence = cadence; s.passes = passes; s.intensity = intensity; s.netScale = netScaleUser; s.guard = guardStrength;
   s.netAuto = netAuto; s.fpsTarget = fpsTarget;
-  s.async = asyncMode; s.split = split; s.splitPos = splitPos; s.look = look;
+  s.async = asyncMode; s.split = split; s.splitPos = splitPos; s.look = look; s.gradeSlot = gradeSlot;
+  for (int i = 0; i < kGradeSlots; ++i) s.grade[i] = grades[i];
   return s;
 }
 
@@ -1692,6 +1725,8 @@ void SaveLiveSettings() {
   put(L"Split", s.split ? L"1" : L"0");
   std::swprintf(b, 32, L"%.3f", s.splitPos); put(L"SplitPos", b);
   put(L"Look", std::to_wstring(s.look));
+  for (int i = 0; i < kGradeSlots; ++i) put(GradeKey(i), GradeFormat(s.grade[i]));
+  put(L"GradeSlot", std::to_wstring(s.gradeSlot));
   WIN32_FILE_ATTRIBUTE_DATA fa;
   if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) configTime = fa.ftLastWriteTime;  // our own write: not read back
   unsaved = false;
@@ -1725,6 +1760,7 @@ LogFn PipelineLogger() { return Log; }
 
 // The panel's change, on the render thread: the settings the next frame records with.
 void ApplyPending() {
+  ++gradeFrame;  // the grain's seed
   if (!havePending) return;
   LiveSettings s;
   {
@@ -1737,7 +1773,10 @@ void ApplyPending() {
   intensity = std::clamp(s.intensity, 0.0f, 3.0f); guardStrength = std::clamp(s.guard, 0.0f, 1.0f); netScaleUser = std::clamp(s.netScale, 0.5f, 1.0f);
   netAuto = s.netAuto; fpsTarget = std::clamp(s.fpsTarget, 20, 360);
   split = s.split; splitPos = std::clamp(s.splitPos, 0.02f, 0.98f);
-  look = std::clamp(s.look, 0, 4);
+  look = std::clamp(s.look, 0, 5);
+  const int slot = std::clamp(s.gradeSlot, 0, kGradeSlots - 1);
+  if (slot != gradeSlot || s.grade[slot] != grades[gradeSlot]) { gradeSlot = slot; for (int i = 0; i < kGradeSlots; ++i) grades[i] = s.grade[i]; GradeToShader(grades[gradeSlot], gradeK); }
+  else for (int i = 0; i < kGradeSlots; ++i) grades[i] = s.grade[i];
 }
 
 // Rendered frame rate, measured between the game's upscale calls (one per rendered frame;
@@ -1944,7 +1983,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   Barrier(l, warpLHistory, UAV, SRV);
   ID3D12DescriptorHeap* heaps[] = {heap};
   l->SetDescriptorHeaps(1, heaps);
-  l->SetComputeRootSignature(root);
+  BindRoot(l);
   l->SetComputeRoot32BitConstants(0, 16, &k, 0);
   l->SetComputeRootDescriptorTable(1, Gpu(ring));
   if (!refresh) {
@@ -2062,7 +2101,7 @@ bool PipelineRecord(const UpscaleCall& c) {
       }
       // Bindings again (NGX may have changed nothing here, but the encode pass left its table).
       l->SetDescriptorHeaps(1, heaps);
-      l->SetComputeRootSignature(root);
+      BindRoot(l);
       l->SetComputeRoot32BitConstants(0, 16, &k, 0);
       l->SetComputeRootDescriptorTable(1, Gpu(ring));
     } else if (inFlight && asyncRun.next < asyncRun.n) {
@@ -2144,7 +2183,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   // 5. Compose onto the game's frame. NGX changed the bindings: set ours again.
   Barrier(l, netNeural, UAV, SRV);
   l->SetDescriptorHeaps(1, heaps);
-  l->SetComputeRootSignature(root);
+  BindRoot(l);
   l->SetComputeRoot32BitConstants(0, 16, &k, 0);
   l->SetComputeRootDescriptorTable(1, Gpu(ring));
   const bool fit = reduced && (k.flags & 64u);
