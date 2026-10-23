@@ -9,7 +9,7 @@ g++ -std=c++20 -O2 -Wall -Wextra -o build/nets_harness.exe tests/nets_harness.cp
 echo "built build/nets_harness.exe"
 # The bench's file name must contain "nvngx.dll" (NGX gates feature creation on the module path).
 g++ -std=c++20 -O2 -Wall -Wextra -Wno-cast-function-type -o "build/prism_nvngx.dll.exe" tests/nr_bench.cpp \
-  -ld3d12 -ldxgi -static -static-libgcc -static-libstdc++ 2>&1
+  -ld3d12 -ldxgi -lwindowscodecs -lole32 -luuid -static -static-libgcc -static-libstdc++ 2>&1
 echo "built build/prism_nvngx.dll.exe"
 # Prism Core and its version.dll loader.
 MH="external/minhook/src/hook.c external/minhook/src/buffer.c external/minhook/src/trampoline.c external/minhook/src/hde/hde64.c"

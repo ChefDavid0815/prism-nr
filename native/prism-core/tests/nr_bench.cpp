@@ -20,6 +20,7 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <wincodec.h>
 
 #include <algorithm>
 #include <chrono>
@@ -29,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -376,22 +378,27 @@ void CreateFeature(Gpu& g, Ngx& ngx, Feature& f, uint32_t w, uint32_t h) {
   UploadTexture(g, f.motion, zero.data(), w, h, 4, kSrv, kSrv);
 }
 
+float activeScale = -1.f;  // drs: this frame's active size as a fraction of the feature's
+
 void RecordEvaluateOn(ID3D12GraphicsCommandList* list, Ngx& ngx, Feature& f) {
   void* p = f.params;
   SetRes(p, "DLSSNR.Color", f.color);
   SetRes(p, "DLSSNR.Output", f.output);
   SetRes(p, "DLSSNR.MVec", f.motion);
   SetRes(p, "DLSSNR.Depth", f.depth);
-  SetUI(p, "Width", f.w);
-  SetUI(p, "Height", f.h);
-  SetUI(p, "OutWidth", f.w);
-  SetUI(p, "OutHeight", f.h);
+  // Probe: PRISM_ACTIVE evaluates only the top-left part of the feature (its active size).
+  const float act = activeScale > 0.f ? activeScale : EnvF("PRISM_ACTIVE", 1.f);
+  const uint32_t aw = uint32_t(f.w * act), ah = uint32_t(f.h * act);
+  SetUI(p, "Width", aw);
+  SetUI(p, "Height", ah);
+  SetUI(p, "OutWidth", aw);
+  SetUI(p, "OutHeight", ah);
   for (const char* k : {"DLSSNR.ColorSubrect", "DLSSNR.DepthSubrect", "DLSSNR.MVecSubrect", "DLSSNR.OutputSubrect"}) {
     const std::string s(k);
     SetUI(p, (s + "BaseX").c_str(), 0);
     SetUI(p, (s + "BaseY").c_str(), 0);
-    SetUI(p, (s + "Width").c_str(), f.w);
-    SetUI(p, (s + "Height").c_str(), f.h);
+    SetUI(p, (s + "Width").c_str(), aw);
+    SetUI(p, (s + "Height").c_str(), ah);
   }
   SetF(p, "DLSSNR.MVecScaleX", 1.f);
   SetF(p, "DLSSNR.MVecScaleY", 1.f);
@@ -399,6 +406,25 @@ void RecordEvaluateOn(ID3D12GraphicsCommandList* list, Ngx& ngx, Feature& f) {
   SetI(p, "DLSSNR.Enabled", 1);
   SetI(p, "DLSSNR.Reset", f.first ? 1 : 0);
   SetF(p, "DLSSNR.Intensity", 1.f);
+  // Probe: PRISM_SETI / PRISM_SETF = "key=value,key=value" set ints / floats on every evaluate.
+  for (const char* env : {"PRISM_SETI", "PRISM_SETF"}) {
+    const char* v = std::getenv(env);
+    if (!v) continue;
+    std::string all = v;
+    size_t at = 0;
+    while (at < all.size()) {
+      size_t end = all.find(',', at);
+      if (end == std::string::npos) end = all.size();
+      const std::string kv = all.substr(at, end - at);
+      const size_t eq = kv.find('=');
+      if (eq != std::string::npos) {
+        const std::string k = kv.substr(0, eq);
+        if (env[10] == 'I') SetI(p, k.c_str(), std::atoi(kv.c_str() + eq + 1));
+        else SetF(p, k.c_str(), float(std::atof(kv.c_str() + eq + 1)));
+      }
+      at = end + 1;
+    }
+  }
   f.first = false;
   const NgxResult r = ngx.evaluate(list, f.handle, p, nullptr);
   if (r != kNgxSuccess) { std::fprintf(stderr, "EvaluateFeature failed: 0x%08x\n", r); std::exit(1); }
@@ -697,11 +723,137 @@ int Async(Gpu& g, Ngx& ngx, uint32_t w, uint32_t h) {
   return 0;
 }
 
+// ------------------------------------------------------------------ dynamic network resolution
+// A feature made at full size evaluates only its top-left part (its active size) when the subrects
+// say so, and costs in proportion. Is that part's output as good as a feature made at that size,
+// and does the network's history stay steady when the active size changes from frame to frame?
+// A still panned by dx pixels per frame stands in for a camera move (motion known exactly). Each
+// run's edit (log2 luminance ratio of output to input, at full size after a bilinear upsample) is
+// compared with the native run's (error), with its own previous frame shifted by the pan
+// (flicker), and its mean size is reported (strength).
+std::vector<float> LoadStill(const std::wstring& path, uint32_t W, uint32_t H) {
+  CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  IWICImagingFactory* f = nullptr;
+  CHECK(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_IWICImagingFactory, (void**)&f));
+  IWICBitmapDecoder* dec = nullptr;
+  CHECK(f->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &dec));
+  IWICBitmapFrameDecode* fr = nullptr;
+  CHECK(dec->GetFrame(0, &fr));
+  IWICBitmapScaler* sc = nullptr;
+  CHECK(f->CreateBitmapScaler(&sc));
+  CHECK(sc->Initialize(fr, W, H, WICBitmapInterpolationModeFant));
+  IWICFormatConverter* cv = nullptr;
+  CHECK(f->CreateFormatConverter(&cv));
+  CHECK(cv->Initialize(sc, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom));
+  std::vector<uint8_t> px(size_t(W) * H * 4);
+  CHECK(cv->CopyPixels(nullptr, W * 4, UINT(px.size()), px.data()));
+  std::vector<float> rgb(size_t(W) * H * 3);
+  for (size_t i = 0; i < size_t(W) * H; ++i) for (int c = 0; c < 3; ++c) rgb[i * 3 + c] = px[i * 4 + c] / 255.f;
+  return rgb;
+}
+
+float Dec1(float c) { c = std::max(c, 0.f); return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
+float Enc1(float c) { c = std::max(c, 0.f); return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f; }
+
+int Drs(Gpu& g, Ngx& ngx, const std::wstring& png, uint32_t w, uint32_t h, int dx, int frames) {
+  const uint32_t W = w + uint32_t(dx * frames), H = h;
+  const std::vector<float> src = LoadStill(png, W, H);
+  const size_t px = size_t(w) * h;
+  // Frame i at full size (sRGB-encoded, as Core's proxy), and its luminance in linear light.
+  auto full = [&](int i, int x, int y, int c) { return src[(size_t(y) * W + x + i * dx) * 3 + c]; };
+  auto lumIn = [&](int i, int x, int y) { return 0.2126f * Dec1(full(i, x, y, 0)) + 0.7152f * Dec1(full(i, x, y, 1)) + 0.0722f * Dec1(full(i, x, y, 2)); };
+  struct Run { const char* name; bool ownFeature; std::function<float(int)> scale; };
+  const std::vector<Run> runs = {
+      {"native                      ", false, [](int) { return 1.f; }},
+      {"active 75%                  ", false, [](int) { return 0.75f; }},
+      {"own feature 75% (NetScale)  ", true, [](int) { return 0.75f; }},
+      {"active 75%/62.5% each frame ", false, [](int i) { return i % 2 ? 0.625f : 0.75f; }},
+      {"active 75%/62.5% every 8    ", false, [](int i) { return (i / 8) % 2 ? 0.625f : 0.75f; }},
+      {"active 62.5%                ", false, [](int) { return 0.625f; }},
+      {"active 50%                  ", false, [](int) { return 0.5f; }},
+  };
+  std::vector<std::vector<float>> ref(static_cast<size_t>(frames));
+  Timer t;
+  t.Init(g);
+  const int warm = 8;
+  std::printf("%dx%d, pan %d px/frame, %d frames (first %d not scored)\n", w, h, dx, frames, warm);
+  std::printf("run                           ms      error   flicker  strength\n");
+  for (const Run& run : runs) {
+    const float s0 = run.scale(0);
+    const uint32_t fw = run.ownFeature ? uint32_t(w * s0 + 0.5f) : w, fh = run.ownFeature ? uint32_t(h * s0 + 0.5f) : h;
+    Feature f;
+    CreateFeature(g, ngx, f, fw, fh);
+    std::vector<float> prev;
+    double msSum = 0, errSum = 0, flkSum = 0, magSum = 0;
+    int scored = 0;
+    for (int i = 0; i < frames; ++i) {
+      const float s = run.scale(i);
+      const uint32_t aw = run.ownFeature ? fw : uint32_t(w * s + 0.5f), ah = run.ownFeature ? fh : uint32_t(h * s + 0.5f);
+      // The input at the active size (bilinear at the footprint centre in linear light, like Core's Down).
+      std::vector<uint16_t> ch(size_t(fw) * fh * 4, 0), mh(size_t(fw) * fh * 2, 0);
+      for (uint32_t y = 0; y < ah; ++y)
+        for (uint32_t x = 0; x < aw; ++x) {
+          const float fx = std::clamp((x + 0.5f) * w / aw - 0.5f, 0.f, float(w - 1)), fy = std::clamp((y + 0.5f) * h / ah - 0.5f, 0.f, float(h - 1));
+          const int x0 = int(fx), y0 = int(fy), x1 = std::min(x0 + 1, int(w) - 1), y1 = std::min(y0 + 1, int(h) - 1);
+          const float ax = fx - x0, ay = fy - y0;
+          for (int c = 0; c < 3; ++c) {
+            const float v = Dec1(full(i, x0, y0, c)) * (1 - ax) * (1 - ay) + Dec1(full(i, x1, y0, c)) * ax * (1 - ay) + Dec1(full(i, x0, y1, c)) * (1 - ax) * ay + Dec1(full(i, x1, y1, c)) * ax * ay;
+            ch[(size_t(y) * fw + x) * 4 + c] = ToHalf(Enc1(v));
+          }
+          ch[(size_t(y) * fw + x) * 4 + 3] = ToHalf(1.f);
+          mh[(size_t(y) * fw + x) * 2 + 0] = ToHalf(float(dx) * aw / w);  // to the previous frame, in active pixels
+        }
+      UploadTexture(g, f.color, ch.data(), fw, fh, 8, kSrv, kSrv);
+      UploadTexture(g, f.motion, mh.data(), fw, fh, 4, kSrv, kSrv);
+      activeScale = run.ownFeature ? 1.f : float(aw) / float(w);
+      const double ms = TimedEvaluate(g, ngx, f, t);
+      activeScale = -1.f;
+      const std::vector<uint16_t> out = ReadTexture(g, f.output, fw, fh, kUav);
+      // Back to full size and the edit.
+      std::vector<float> e(px);
+      for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x) {
+          const float fx = std::clamp((x + 0.5f) * aw / w - 0.5f, 0.f, float(aw - 1)), fy = std::clamp((y + 0.5f) * ah / h - 0.5f, 0.f, float(ah - 1));
+          const int x0 = int(fx), y0 = int(fy), x1 = std::min(x0 + 1, int(aw) - 1), y1 = std::min(y0 + 1, int(ah) - 1);
+          const float ax = fx - x0, ay = fy - y0;
+          float lo = 0, li = 0;
+          for (int c = 0; c < 3; ++c) {
+            auto at = [&](int xx, int yy) { return Dec1(FromHalf(out[(size_t(yy) * fw + xx) * 4 + c])); };
+            const float v = at(x0, y0) * (1 - ax) * (1 - ay) + at(x1, y0) * ax * (1 - ay) + at(x0, y1) * (1 - ax) * ay + at(x1, y1) * ax * ay;
+            lo += v * (c == 0 ? 0.2126f : c == 1 ? 0.7152f : 0.0722f);
+          }
+          li = lumIn(i, x, y);
+          e[size_t(y) * w + x] = std::clamp(std::log2(std::max(lo, 1.f / 4096) / std::max(li, 1.f / 4096)), -3.f, 3.f);
+        }
+      if (&run == &runs[0]) ref[size_t(i)] = e;
+      if (i >= warm) {
+        double er = 0, fl = 0, mg = 0;
+        size_t nf = 0;
+        for (uint32_t y = 0; y < h; ++y)
+          for (uint32_t x = 0; x < w; ++x) {
+            const float v = e[size_t(y) * w + x];
+            er += std::fabs(v - ref[size_t(i)][size_t(y) * w + x]);
+            mg += std::fabs(v);
+            // This frame's pixel x shows what the previous frame showed at x + dx.
+            if (x + dx < w && !prev.empty()) { fl += std::fabs(v - prev[size_t(y) * w + x + dx]); ++nf; }
+          }
+        errSum += er / px; magSum += mg / px; flkSum += nf ? fl / nf : 0; msSum += ms;
+        ++scored;
+      }
+      prev = std::move(e);
+    }
+    std::printf("%s %6.3f  %8.4f  %8.4f  %8.4f\n", run.name, msSum / scored, errSum / scored, flkSum / scored, magSum / scored);
+    ngx.release(f.handle);
+    for (auto* r : {f.color, f.output, f.motion, f.depth}) r->Release();
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc < 3) {
-    std::fprintf(stderr, "usage: prism_nvngx.dll.exe <nvngx_dlssnr.dll> cost | seq <dir>\n");
+    std::fprintf(stderr, "usage: prism_nvngx.dll.exe <nvngx_dlssnr.dll> cost | seq <dir> | async <w> <h> | drs <still.png> <w> <h> <pan px> <frames>\n");
     return 2;
   }
   Gpu g;
@@ -720,6 +872,10 @@ int main(int argc, char** argv) {
   if (mode == "cost") rc = Cost(g, ngx);
   else if (mode == "seq" && argc >= 4) rc = Sequence(g, ngx, argv[3]);
   else if (mode == "async" && argc >= 5) rc = Async(g, ngx, uint32_t(std::atoi(argv[3])), uint32_t(std::atoi(argv[4])));
+  else if (mode == "drs" && argc >= 8) {
+    const std::string still = argv[3];
+    rc = Drs(g, ngx, std::wstring(still.begin(), still.end()), uint32_t(std::atoi(argv[4])), uint32_t(std::atoi(argv[5])), std::atoi(argv[6]), std::atoi(argv[7]));
+  }
   if (ngx.shutdown) ngx.shutdown(g.device);
   return rc;
 }
