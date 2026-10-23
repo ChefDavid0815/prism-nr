@@ -119,6 +119,7 @@ export function coreIni(values: Values, keep: string[] = []): string {
     `Guided=${values['prism-core.guided'] === true || values['prism-core.guided'] === 1 || values['prism-core.guided'] === '1' ? 1 : 0}`,
     // The network's size only applies to every-frame tiers; the asynchronous network runs native.
     `NetScale=${cadence === 1 ? netScaleFor(values['prism-core.netSize']).toFixed(4) : '1.00'}`,
+    `Present=${values['prism-core.present'] === true || values['prism-core.present'] === '1' || values['prism-core.present'] === 1 ? 1 : 0}`,
     `Look=${Math.max(0, Math.min(5, Math.round(Number(values['prism-core.look'] ?? 0)) || 0))}`,
     // The custom look's three slots (grade.ts), re-written in canonical form (ASCII).
     ...Array.from({ length: GRADE_SLOTS }, (_, i) => `${i === 0 ? 'Grade' : `Grade${i + 1}`}=${gradeFormat(gradeParse(String(values[gradeValueKey(i)] ?? '')))}`),
@@ -226,7 +227,15 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   const steps: string[] = [];
 
   if (analysis.recommendedRoute === 'blocked') blockers.push(analysis.routeReason);
-  else if (route === 'blocked') blockers.push('这个游戏用不了 Prism Core：它需要 DX12、64 位并且自带 DLSS 的游戏。');
+  else if (route === 'blocked') blockers.push('这个游戏用不了 Prism Core：它需要 DX12、64 位的游戏。');
+  // No DLSS: present mode, which runs the network on every presented frame (no history to carry).
+  const presentMode = route === 'prism-core' && !analysis.nativeDlss.present;
+  if (presentMode) {
+    values['prism-core.present'] = true;
+    values['prism-core.cadence'] = '1';
+    values['prism-core.async'] = false;
+    warnings.push('这个游戏没有 DLSS，Prism Core 用画面递交模式：处理的是最终画面，界面文字也会经过网络；没有运动矢量，网络每帧重新计算，快速运动时可能有轻微闪烁。');
+  }
   if (!analysis.exe) blockers.push('没有找到游戏主程序。');
   const lock = tierLocked(PRESETS.find((p) => p.id === preset)!, gpu?.name);
   if (lock) blockers.push(lock);
@@ -274,7 +283,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
     manualSteps.push(`在 Steam 库里右键这个游戏 → 属性 → 通用 → 启动选项，填入：${lateLoad.launchOption}`);
     manualSteps.push('正常启动游戏，进入游戏画面后按一次 Home：Prism Core 这时才加载，面板会自动打开。');
   }
-  manualSteps.push('在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。');
+  manualSteps.push(presentMode ? '游戏没有 DLSS，不需要改游戏设置：Prism Core 在画面递交时处理。' : '在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。');
   if (plugins.includes('framegen') && values['framegen.mode'] !== 'off') manualSteps.push(`在游戏设置或 NVIDIA App 里开启 ${values['framegen.mode']} 帧生成。`);
   manualSteps.push('游戏里按 F8 开关 Prism Core、F4 分屏对比原画。档位、遍数和强度在这里调，游戏运行中约 1 秒内生效。');
 
@@ -296,6 +305,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
     warnings,
     profileNotes: profile?.coreNotes ?? [],
     lateLoad,
+    presentMode: presentMode || undefined,
     loader: loaderName,
   };
 }
@@ -885,6 +895,8 @@ export function syncCoreFromIni(): boolean {
     if (netScale !== undefined && netScale < 0.999) next['prism-core.netSize'] = netSizeFor(netScale);
     if (async !== undefined) next['prism-core.async'] = async !== 0;
     if (look !== undefined) next['prism-core.look'] = String(Math.max(0, Math.min(5, Math.round(look))));
+    const present = num('present');
+    if (present !== undefined) next['prism-core.present'] = present !== 0;
     // The custom look, as the in-game desk saved it.
     for (let i = 0; i < GRADE_SLOTS; i++) {
       const line = ini[i === 0 ? 'grade' : `grade${i + 1}`];

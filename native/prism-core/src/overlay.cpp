@@ -1299,6 +1299,9 @@ void DrawPanel(UINT bw, UINT bh, float dt) {
       } else {
         sizes = L"等待游戏的 DLSS 画面";
       }
+      if (st.present) {
+        sizes = (st.outW ? L"画面递交模式　" + std::to_wstring(st.outW) + L"×" + std::to_wstring(st.outH) : std::wstring(L"画面递交模式")) + L"　游戏没有 DLSS，处理整帧（含界面）";
+      }
       Text(gx0, vy + LineHeight(kValue) + U(6), sizes, kLabel, kQuiet);
     }
     y += telH;
@@ -2023,6 +2026,19 @@ void OverlayPresent(IDXGISwapChain* sc) {
   if (!panel.hinted && cfg.hint && now - panel.startedAt > 1.0) {
     panel.hinted = true;
     Toast(in.padConnected ? L"按 Home，或在手柄上按住 View 再按 Y，打开 Prism 面板" : std::wstring(L"按 ") + KeyName(cfg.key) + L" 打开 Prism 面板", kInfo, 6.0);
+  }
+
+  // Present mode: Prism on this frame first, then the panel over it.
+  if (PresentWanted()) {
+    IDXGISwapChain3* sc3 = nullptr;
+    if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&sc3))) {
+      ID3D12Resource* bb = nullptr;
+      if (SUCCEEDED(sc3->GetBuffer(sc3->GetCurrentBackBufferIndex(), __uuidof(ID3D12Resource), (void**)&bb)) && bb) {
+        PipelinePresent(chain.queue, bb, ColourMode(sc, d.BufferDesc.Format));
+        bb->Release();
+      }
+      sc3->Release();
+    }
   }
 
   verts.clear();

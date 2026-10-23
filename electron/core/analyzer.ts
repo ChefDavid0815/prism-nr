@@ -6,7 +6,7 @@ import { denuvoSections, readPe } from './pe';
 import { exists, log, psJson, psQuote, walk } from './util';
 
 /** Bumped when the analysis gains a field or a route, so cached analyses are redone. */
-export const ANALYSIS_SCHEMA = 6;
+export const ANALYSIS_SCHEMA = 7;
 
 // Executables that are never the game itself.
 const NOT_GAME_EXE =
@@ -167,6 +167,11 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
       routeReason = core
         ? '游戏是 DX12 并自带 DLSS，可以用 Prism Core：拦截游戏的 DLSS 调用，网络隔几帧跑一次全分辨率，不需要 ReShade。'
         : '游戏自带 DLSS，可以直接挂钩它的 DLSS 调用。性能优先的方案会改用 OptiScaler，在超分之前执行神经渲染。';
+    } else if (apis.includes('dx12') && pe?.bitness === 'x64') {
+      // No DLSS: Prism Core's present mode runs on the frame as it is presented (Present=1).
+      routes.push('prism-core');
+      recommendedRoute = 'prism-core';
+      routeReason = '游戏是 DX12 但没有 DLSS，Prism Core 用画面递交模式：在游戏把画面交给屏幕时处理整帧（包括界面文字），没有运动矢量，网络每帧重新计算。';
     } else if (apis.length) {
       routes.push('feeder');
       // OptiScaler needs an upscaler call to replace; FSR 2/3 or XeSS works too.

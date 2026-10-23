@@ -655,6 +655,13 @@ ID3D12Resource* gradeBuffer = nullptr;
 uint8_t* gradeMapped = nullptr;
 unsigned gradeNext = 0, gradeFrame = 0;
 bool netReset = false;  // NetReset=1: the network starts without its history on every run (study)
+// Present mode (Present=1, games without DLSS): Prism on the presented frame, while no upscale has
+// come for a moment (see PipelinePresent). PresentReset=0 keeps the network's history from frame to
+// frame (there are no motion vectors to move it with).
+bool presentMode = false, presentReset = true;
+bool presenting = false;           // PipelineRecord is running for PipelinePresent
+double lastUpscaleMs = -1e9;       // the game's last upscale evaluation
+double lastPresentMs = -1e9;       // the last frame present mode processed
 // NetScale (0.5-1, synchronous mode only): the network's working resolution. Below 1 it runs on
 // a reduced proxy and Compose brings its edit back with a joint bilateral upsample. The reduced
 // textures and the network's features are made at full size and only their top-left part (the
@@ -1537,6 +1544,8 @@ void LoadConfig() {
     GradeToShader(grades[gradeSlot], gradeK);
   }
   netReset = Num(L"NetReset", netReset ? 1 : 0, 0, 1) != 0;
+  presentMode = Num(L"Present", presentMode ? 1 : 0, 0, 1) != 0;
+  presentReset = Num(L"PresentReset", presentReset ? 1 : 0, 0, 1) != 0;
   netScaleUser = float(Num(L"NetScale", netScaleUser, 0.5, 1.0));
   netAuto = Num(L"NetScaleAuto", netAuto ? 1 : 0, 0, 1) != 0;
   fpsTarget = int(Num(L"FpsTarget", fpsTarget, 20, 360));
@@ -1735,6 +1744,7 @@ void SaveLiveSettings() {
 
 void GetLiveStats(LiveStats* o) {
   o->running = heap && recorded && !failed && enabled;
+  o->present = NowMs() - lastPresentMs < 1000.0;
   o->failure = failure;
   o->outW = w; o->outH = h; o->netW = nw; o->netH = nh; o->renderW = liveRW; o->renderH = liveRH;
   o->prismMs = float(prismMsSmooth);
@@ -1808,6 +1818,7 @@ void MeasureFrameRate(int mode) {
 
 bool PipelineRecord(const UpscaleCall& c) {
   if (failed || !Log) return false;
+  if (!presenting) lastUpscaleMs = NowMs();
   Pace();
   {
     std::lock_guard<std::mutex> lock(statsMutex);
@@ -1857,8 +1868,9 @@ bool PipelineRecord(const UpscaleCall& c) {
   {
     // A new output or render size: let the network in flight finish, then rebuild.
     static uint32_t builtRW = 0, builtRH = 0, waited = 0;
+    static DXGI_FORMAT builtFormat = DXGI_FORMAT_UNKNOWN;
     const D3D12_RESOURCE_DESC nd = c.output->GetDesc();
-    if (heap && (UINT(nd.Width) != w || nd.Height != h || c.renderWidth != builtRW || c.renderHeight != builtRH)) {
+    if (heap && (UINT(nd.Width) != w || nd.Height != h || c.renderWidth != builtRW || c.renderHeight != builtRH || nd.Format != builtFormat)) {
       bool busy = false;
       {
         std::lock_guard<std::mutex> lock(asyncMutex);
@@ -1873,7 +1885,7 @@ bool PipelineRecord(const UpscaleCall& c) {
     }
     if (!heap) {
       if (!Setup(c.list, c.output)) return false;
-      builtRW = c.renderWidth; builtRH = c.renderHeight;
+      builtRW = c.renderWidth; builtRH = c.renderHeight; builtFormat = nd.Format;
     }
   }
   AutoNetScale();
@@ -1899,7 +1911,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   bool landNow = false, launchNow = false;
   // Every frame can run asynchronous too: the network of frame t overlaps frame t+1 and lands a
   // frame later (Cadence=1 with Async=1).
-  const bool async = asyncMode && historyValid && !c.reset && netProxy == proxy;  // a reduced network runs synchronously
+  const bool async = asyncMode && historyValid && !c.reset && netProxy == proxy && !presenting;  // a reduced network and present mode run synchronously
   if (async) {
     std::lock_guard<std::mutex> lock(asyncMutex);
     // Land once the launch was submitted; in poll mode only once the network has also finished on
@@ -2260,6 +2272,225 @@ bool PipelineRecord(const UpscaleCall& c) {
     Log("pipeline frame %llu output %p %llux%u fmt %d flags 0x%x list %p", (unsigned long long)frame, (void*)c.output, (unsigned long long)d.Width, d.Height, int(d.Format), unsigned(d.Flags), (void*)l);
   }
   return true;
+}
+
+
+// ------------------------------------------------------------------ present mode (Present=1)
+// Games without DLSS: Prism runs on the frame as it is presented. The back buffer goes to scene
+// light (the inverse of the shoulder the looks' preview uses for SDR; HDR10 and scRGB by their own
+// curves, paper white at 1), through the same pipeline with motion vectors of zero and a constant
+// depth (the network starts without history every frame unless PresentReset=0), and back. The
+// game's UI is in that frame too, so it is processed with it.
+const char* kPresentShaders = R"(
+cbuffer P : register(b0) { uint2 Size; uint Mode; uint Pad; };  // Mode: 0 SDR (sRGB-encoded), 1 scRGB, 2 HDR10
+Texture2D<float4> In : register(t0);
+RWTexture2D<float4> Out : register(u0);
+float Max3(float3 c) { return max(c.r, max(c.g, c.b)); }
+float3 Dec(float3 c) { c = max(c, 0.0); return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
+float3 Enc(float3 c) { c = max(c, 0.0); return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055; }
+static const float m1 = 0.1593017578, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+float3 FromPq(float3 e) { const float3 p = pow(saturate(e), 1.0 / m2); return 10000.0 * pow(max(p - c1, 0.0) / (c2 - c3 * p), 1.0 / m1); }
+float3 ToPq(float3 n) { const float3 y = pow(saturate(n / 10000.0), m1); return pow((c1 + c2 * y) / (1.0 + c3 * y), m2); }
+static const float3x3 k2020To709 = {1.6605, -0.5876, -0.0728, -0.1246, 1.1329, -0.0083, -0.0182, -0.1006, 1.1187};
+static const float3x3 k709To2020 = {0.6274, 0.3293, 0.0433, 0.0691, 0.9195, 0.0114, 0.0164, 0.0880, 0.8956};
+static const float kPaper = 203.0;  // nits of paper white (BT.2408)
+[numthreads(16, 16, 1)]
+void PresentIn(uint3 id : SV_DispatchThreadID) {
+  if (any(id.xy >= Size)) return;
+  const float3 c = In[id.xy].rgb;
+  float3 s;
+  if (Mode == 0u) { const float3 l = Dec(c); s = l / (1.0 - min(Max3(l), 0.985)); }
+  else if (Mode == 1u) s = c * (80.0 / kPaper);
+  else s = mul(k2020To709, FromPq(c)) / kPaper;
+  Out[id.xy] = float4(max(s, 0.0), 1.0);
+}
+[numthreads(16, 16, 1)]
+void PresentOut(uint3 id : SV_DispatchThreadID) {
+  if (any(id.xy >= Size)) return;
+  const float3 s = max(In[id.xy].rgb, 0.0);
+  float3 c;
+  if (Mode == 0u) c = Enc(s / (1.0 + Max3(s)));
+  else if (Mode == 1u) c = s * (kPaper / 80.0);
+  else c = ToPq(mul(k709To2020, s * kPaper));
+  Out[id.xy] = float4(c, 1.0);
+}
+)";
+
+struct PresentPass {
+  ID3D12Device* dev = nullptr;
+  ID3D12RootSignature* root = nullptr;
+  ID3D12PipelineState *in = nullptr, *out = nullptr;
+  ID3D12DescriptorHeap* heap = nullptr;  // in: the copy (t0), the colour (u0); out: the colour (t0), the result (u0)
+  UINT inc = 0, w = 0, h = 0;
+  DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN;
+  ID3D12Resource *copy = nullptr, *color = nullptr, *result = nullptr, *motion = nullptr, *depth = nullptr;
+  ID3D12CommandAllocator* alloc[3] = {};
+  uint64_t done[3] = {};
+  UINT slot = 0;
+  ID3D12GraphicsCommandList* list = nullptr;
+  ID3D12Fence* fence = nullptr;
+  uint64_t fenceValue = 0;
+  HANDLE event = nullptr;
+  bool broken = false;
+} pres;
+
+// The back buffer's format with a typed UAV store: sRGB formats as their UNORM twins (the bytes are
+// sRGB-encoded either way; the shaders encode and decode).
+DXGI_FORMAT PresentFormat(DXGI_FORMAT f) {
+  switch (f) {
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: case DXGI_FORMAT_R8G8B8A8_TYPELESS: return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: case DXGI_FORMAT_B8G8R8A8_TYPELESS: return DXGI_FORMAT_B8G8R8A8_UNORM;
+    case DXGI_FORMAT_R10G10B10A2_TYPELESS: return DXGI_FORMAT_R10G10B10A2_UNORM;
+    case DXGI_FORMAT_R16G16B16A16_TYPELESS: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    default: return f;
+  }
+}
+
+void PresentWaitIdle() {
+  if (!pres.fence) return;
+  if (pres.fence->GetCompletedValue() < pres.fenceValue) { pres.fence->SetEventOnCompletion(pres.fenceValue, pres.event); WaitForSingleObject(pres.event, 2000); }
+}
+void PresentReleaseTextures() {
+  for (ID3D12Resource** r : {&pres.copy, &pres.color, &pres.result, &pres.motion, &pres.depth}) if (*r) { (*r)->Release(); *r = nullptr; }
+}
+
+bool PresentBuild(ID3D12CommandQueue* q, ID3D12Resource* bb) {
+  HRESULT hr = S_OK;
+  auto broke = [](const char* what, HRESULT e) { Log("present mode off: %s (0x%08lx)", what, e); pres.broken = true; return false; };
+  if (!pres.dev) {
+    if (FAILED(hr = q->GetDevice(__uuidof(ID3D12Device), (void**)&pres.dev))) return broke("GetDevice", hr);
+    using CompileFn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
+    auto compile = (CompileFn)(void*)GetProcAddress(LoadLibraryW(L"d3dcompiler_47.dll"), "D3DCompile");
+    if (!compile) return broke("no d3dcompiler_47", E_FAIL);
+    D3D12_DESCRIPTOR_RANGE ranges[2] = {};
+    ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors = 1;
+    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors = 1;
+    D3D12_ROOT_PARAMETER rp[3] = {};
+    rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[0].Constants.Num32BitValues = 4;
+    rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; rp[1].DescriptorTable = {1, &ranges[0]};
+    rp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; rp[2].DescriptorTable = {1, &ranges[1]};
+    D3D12_ROOT_SIGNATURE_DESC rd = {}; rd.NumParameters = 3; rd.pParameters = rp;
+    ID3DBlob *blob = nullptr, *err = nullptr;
+    if (FAILED(hr = D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err)) ||
+        FAILED(hr = pres.dev->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), __uuidof(ID3D12RootSignature), (void**)&pres.root)))
+      return broke("root signature", hr);
+    for (auto [entry, pso] : {std::pair{"PresentIn", &pres.in}, std::pair{"PresentOut", &pres.out}}) {
+      ID3DBlob *cs = nullptr, *e = nullptr;
+      if (FAILED(hr = compile(kPresentShaders, std::strlen(kPresentShaders), "present", nullptr, nullptr, entry, "cs_5_1", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &cs, &e))) {
+        Log("shader %s: %s", entry, e ? (const char*)e->GetBufferPointer() : "?");
+        return broke("shader compile", hr);
+      }
+      D3D12_COMPUTE_PIPELINE_STATE_DESC pd = {}; pd.pRootSignature = pres.root; pd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
+      if (FAILED(hr = pres.dev->CreateComputePipelineState(&pd, __uuidof(ID3D12PipelineState), (void**)pso))) return broke("pipeline state", hr);
+    }
+    D3D12_DESCRIPTOR_HEAP_DESC hd = {}; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 4; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    if (FAILED(hr = pres.dev->CreateDescriptorHeap(&hd, __uuidof(ID3D12DescriptorHeap), (void**)&pres.heap))) return broke("descriptor heap", hr);
+    pres.inc = pres.dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    for (auto& a : pres.alloc)
+      if (FAILED(hr = pres.dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void**)&a))) return broke("allocator", hr);
+    if (FAILED(hr = pres.dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pres.alloc[0], nullptr, __uuidof(ID3D12GraphicsCommandList), (void**)&pres.list))) return broke("command list", hr);
+    pres.list->Close();
+    if (FAILED(hr = pres.dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)&pres.fence))) return broke("fence", hr);
+    pres.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  }
+  // Textures at the back buffer's size.
+  const D3D12_RESOURCE_DESC bd = bb->GetDesc();
+  PresentWaitIdle();
+  PresentReleaseTextures();
+  pres.w = UINT(bd.Width); pres.h = bd.Height; pres.fmt = bd.Format;
+  const DXGI_FORMAT f = PresentFormat(bd.Format);
+  D3D12_FEATURE_DATA_FORMAT_SUPPORT fs = {};
+  fs.Format = f;
+  if (FAILED(pres.dev->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &fs, sizeof fs)) || !(fs.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE)) {
+    Log("present mode off: the back buffer's format %d has no typed UAV store here", int(bd.Format));
+    pres.broken = true;
+    return false;
+  }
+  auto tex = [&](DXGI_FORMAT tf, D3D12_RESOURCE_STATES s, bool uav) {
+    D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC d = {}; d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; d.Width = pres.w; d.Height = pres.h; d.DepthOrArraySize = 1; d.MipLevels = 1;
+    d.Format = tf; d.SampleDesc.Count = 1; d.Flags = uav ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
+    ID3D12Resource* r = nullptr;
+    return SUCCEEDED(pres.dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, s, nullptr, __uuidof(ID3D12Resource), (void**)&r)) ? r : nullptr;
+  };
+  pres.copy = tex(f, D3D12_RESOURCE_STATE_COPY_DEST, false);
+  pres.color = tex(DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+  pres.result = tex(f, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+  // Zero motion and a constant depth (committed resources start zeroed: far, with reverse depth).
+  pres.motion = tex(DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, false);
+  pres.depth = tex(DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, false);
+  if (!pres.copy || !pres.color || !pres.result || !pres.motion || !pres.depth) return broke("textures", E_OUTOFMEMORY);
+  auto cpu = [&](UINT i) { auto c = pres.heap->GetCPUDescriptorHandleForHeapStart(); c.ptr += SIZE_T(i) * pres.inc; return c; };
+  D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
+  sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D; sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sv.Texture2D.MipLevels = 1;
+  sv.Format = f; pres.dev->CreateShaderResourceView(pres.copy, &sv, cpu(0));
+  pres.dev->CreateUnorderedAccessView(pres.color, nullptr, nullptr, cpu(1));
+  sv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; pres.dev->CreateShaderResourceView(pres.color, &sv, cpu(2));
+  pres.dev->CreateUnorderedAccessView(pres.result, nullptr, nullptr, cpu(3));
+  Log("present mode: %ux%u, back buffer format %d", pres.w, pres.h, int(bd.Format));
+  return true;
+}
+
+bool PresentWanted() { return presentMode && !failed && !pres.broken && NowMs() - lastUpscaleMs > 1500.0; }
+
+bool PipelinePresent(ID3D12CommandQueue* q, ID3D12Resource* bb, int mode) {
+  if (!q || !bb || !Log || !PresentWanted()) return false;
+  const D3D12_RESOURCE_DESC bd = bb->GetDesc();
+  if (!pres.dev || UINT(bd.Width) != pres.w || bd.Height != pres.h || bd.Format != pres.fmt)
+    if (!PresentBuild(q, bb)) return false;
+  UpscaleCall c = {};
+  c.output = pres.color; c.motion = pres.motion; c.depth = pres.depth;
+  c.renderWidth = pres.w; c.renderHeight = pres.h;
+  c.reset = presentReset ? 1 : 0;
+  const UINT s = pres.slot;
+  pres.slot = (pres.slot + 1) % 3;
+  if (pres.fence->GetCompletedValue() < pres.done[s]) { pres.fence->SetEventOnCompletion(pres.done[s], pres.event); WaitForSingleObject(pres.event, 500); }
+  pres.alloc[s]->Reset();
+  ID3D12GraphicsCommandList* l = pres.list;
+  l->Reset(pres.alloc[s], nullptr);
+  const auto SRV = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, UAV = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  auto gpu = [&](UINT i) { auto g = pres.heap->GetGPUDescriptorHandleForHeapStart(); g.ptr += UINT64(i) * pres.inc; return g; };
+  const uint32_t k[4] = {pres.w, pres.h, uint32_t(std::clamp(mode, 0, 2)), 0u};
+  auto convert = [&](ID3D12PipelineState* pso, UINT set) {
+    ID3D12DescriptorHeap* heaps[] = {pres.heap};
+    l->SetDescriptorHeaps(1, heaps);
+    l->SetComputeRootSignature(pres.root);
+    l->SetComputeRoot32BitConstants(0, 4, k, 0);
+    l->SetComputeRootDescriptorTable(1, gpu(set));
+    l->SetComputeRootDescriptorTable(2, gpu(set + 1));
+    l->SetPipelineState(pso);
+    l->Dispatch((pres.w + 15) / 16, (pres.h + 15) / 16, 1);
+  };
+  // In: the back buffer to scene light.
+  Barrier(l, bb, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+  l->CopyResource(pres.copy, bb);
+  Barrier(l, pres.copy, D3D12_RESOURCE_STATE_COPY_DEST, SRV);
+  convert(pres.in, 0);
+  UavBarrier(l);
+  // Prism, as on an upscaled frame.
+  c.list = l;
+  presenting = true;
+  const bool ok = PipelineRecord(c);
+  presenting = false;
+  lastPresentMs = NowMs();
+  // Out: back to the back buffer's encoding.
+  Barrier(l, pres.color, UAV, SRV);
+  convert(pres.out, 2);
+  Barrier(l, pres.result, UAV, D3D12_RESOURCE_STATE_COPY_SOURCE);
+  Barrier(l, bb, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+  if (ok && enabled) l->CopyResource(bb, pres.result);  // off (F8, the panel): the frame as the game made it
+  Barrier(l, bb, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+  Barrier(l, pres.result, D3D12_RESOURCE_STATE_COPY_SOURCE, UAV);
+  Barrier(l, pres.color, SRV, UAV);
+  Barrier(l, pres.copy, SRV, D3D12_RESOURCE_STATE_COPY_DEST);
+  if (FAILED(l->Close())) { Log("present mode off: the command list did not close"); pres.broken = true; return false; }
+  ID3D12CommandList* lists[] = {l};
+  q->ExecuteCommandLists(1, lists);
+  q->Signal(pres.fence, ++pres.fenceValue);
+  pres.done[s] = pres.fenceValue;
+  static bool said = false;
+  if (!said) { said = true; Log("present mode: first frame processed at Present (mode %d)", mode); }
+  return ok;
 }
 
 }  // namespace prism

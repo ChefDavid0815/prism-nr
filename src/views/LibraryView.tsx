@@ -537,9 +537,9 @@ function LaunchOption({ value }: { value: string }) {
 
 // ---------------------------------------------------------------------------
 
-const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.netSize', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard', 'prism-core.look', ...GRADE_VALUE_KEYS];
+const CORE_KEYS = ['prism-core.cadence', 'prism-core.passes', 'prism-core.netSize', 'prism-core.async', 'prism-core.intensity', 'prism-core.guard', 'prism-core.look', 'prism-core.present', ...GRADE_VALUE_KEYS];
 /** The look (and the custom look's grades) is its own choice: tiers neither set nor reset it. */
-const TIER_KEYS = CORE_KEYS.filter((k) => k !== 'prism-core.look' && !GRADE_VALUE_KEYS.includes(k));
+const TIER_KEYS = CORE_KEYS.filter((k) => k !== 'prism-core.look' && k !== 'prism-core.present' && !GRADE_VALUE_KEYS.includes(k));
 
 const LOOKS: { value: string; label: string; note: string }[] = [
   { value: '0', label: '默认', note: '网络原样的色彩。' },

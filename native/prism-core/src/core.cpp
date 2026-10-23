@@ -230,6 +230,30 @@ void HookModule(HMODULE m) {
   hook("NVSDK_NGX_D3D12_EvaluateFeature_C", reinterpret_cast<void*>(&HookEvaluate<I, true>), reinterpret_cast<void**>(&hooked[I].evaluateC));
 }
 
+// Present mode (Present=1): a game without DLSS never creates an upscale, so Core hooks Present on
+// its own once the game has D3D12 and DXGI up (a short-lived device of its own finds the vtables;
+// every device and swap chain of the process shares them).
+DWORD WINAPI PresentWatch(void*) {
+  const std::wstring ini = ModuleDir(nullptr) + L"prism-core.ini";
+  if (!GetPrivateProfileIntW(L"Prism Core", L"Present", 0, ini.c_str())) return 0;
+  int seen = 0;
+  for (int tick = 0; tick < 20 * 600 && seen < 40; ++tick) {  // up to ten minutes; two seconds after D3D12 and DXGI load
+    if (pipelineStarted) return 0;
+    if (GetModuleHandleW(L"d3d12.dll") && GetModuleHandleW(L"dxgi.dll")) ++seen;
+    Sleep(50);
+  }
+  if (pipelineStarted || seen < 40) return 0;
+  using CreateDeviceFn = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
+  auto create = (CreateDeviceFn)(void*)GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12CreateDevice");
+  ID3D12Device* dev = nullptr;
+  if (!create || FAILED(create(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void**)&dev)) || !dev) { Log("present mode: no D3D12 device to find Present with"); return 0; }
+  // Reverse depth: present mode's constant depth of zero reads as far.
+  PipelineInit(ModuleDir(nullptr), 1 << 3, &Log, dev);
+  dev->Release();
+  Log("present mode: Present hooked without the game's DLSS");
+  return 0;
+}
+
 // NGX modules load late (when the game initialises DLSS); watch for them.
 DWORD WINAPI Watch(void*) {
   bool done[3] = {};
@@ -252,10 +276,11 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
     logFile = _wfopen((dir + L"prism-core.log").c_str(), L"w");
     // Late: the game had already created its renderer and loaded NGX before Core.
     lateLoad = GetModuleHandleW(L"d3d12.dll") && (GetModuleHandleA("_nvngx.dll") || GetModuleHandleA("nvngx_dlss.dll"));
-    Log("Prism Core 1.3.1 (Home panel, F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded%s",
+    Log("Prism Core 1.4.0 (Home panel, F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded%s",
         lateLoad ? " late, into a running game" : "");
     if (MH_Initialize() != MH_OK) { Log("MinHook init failed"); return TRUE; }
     CloseHandle(CreateThread(nullptr, 0, Watch, nullptr, 0, nullptr));
+    CloseHandle(CreateThread(nullptr, 0, PresentWatch, nullptr, 0, nullptr));
   }
   return TRUE;
 }

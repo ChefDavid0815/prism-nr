@@ -71,6 +71,7 @@ async function main(): Promise<void> {
     const k = gradeToShader(gradeParse(''));
     assert(k[0] === 1 && k[1] === 1 && Math.abs(k[10] - 0.5) < 1e-6 && k[45] === 1 && k[68] === 0, 'Custom look: neutral packs to no change');
     const gi = coreIni({ 'prism-core.look': '5', 'prism-core.grade': 'Contrast:24', 'prism-core.grade3': 'Sat:9,Saturation:-10', 'prism-core.gradeSlot': '2' });
+    assert(/Present=0/.test(ini0) && /Present=1/.test(coreIni({ 'prism-core.present': true })), 'Core INI: present mode (games without DLSS) is written');
     assert(/Look=5/.test(gi) && /\r\nGrade=Contrast:24\r\n/.test(gi) && /\r\nGrade2=\r\n/.test(gi) && /\r\nGrade3=Saturation:-10\r\n/.test(gi) && /GradeSlot=2/.test(gi) && /^[\x00-\x7f]*$/.test(gi), 'Core INI: the custom look\'s three slots and the slot in use');
   }
   assert(tierOf({ ...resolveValues('flagship'), 'prism-core.look': '2' })?.id === 'flagship', 'Tiers: the colour look does not change the tier');

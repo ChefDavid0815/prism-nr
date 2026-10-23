@@ -218,6 +218,8 @@ export interface InstallPlan {
   riskConsent?: { names: string[]; how: string; accepted: boolean };
   /** Prism Core loads late in this game (Denuvo): the Steam launch option the user sets. */
   lateLoad?: { launchOption: string; why: string };
+  /** The game has no DLSS: Prism Core runs on the presented frame (Present=1). */
+  presentMode?: boolean;
   /** The proxy DLL Prism Core loads through at start-up (version.dll, winmm.dll, ... beside the EXE). */
   loader?: string;
 }

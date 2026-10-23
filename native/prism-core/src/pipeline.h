@@ -26,6 +26,12 @@ using LogFn = void (*)(const char* fmt, ...);
 // One-time setup: where nvngx_dlssnr.dll lives, the game's DLSS create flags, the log, and the
 // game's device (for the Present hook the in-game panel draws from).
 void PipelineInit(const std::wstring& gameDir, int createFlags, LogFn log, ID3D12Device* device);
+// Present mode (Present=1 in prism-core.ini): Prism on the frame as it is presented, for games
+// without DLSS. PresentWanted: on, and no upscale has come for a moment. PipelinePresent records and
+// runs on the presenting queue q; bb is the back buffer (PRESENT state before and after); mode is
+// its encoding (0 SDR, 1 scRGB, 2 HDR10).
+bool PresentWanted();
+bool PipelinePresent(ID3D12CommandQueue* q, ID3D12Resource* bb, int mode);
 // Records Prism's passes for this frame. Returns false (and stays off) after any failure.
 bool PipelineRecord(const UpscaleCall& call);
 
@@ -56,6 +62,7 @@ struct LiveStats {
   float prismMs = 0.0f;        // Prism's GPU time on the game's queue per rendered frame
   float netMs = 0.0f;          // the asynchronous network's GPU time per launch
   float presentFps = 0.0f, renderFps = 0.0f;  // over the last second
+  bool present = false;        // present mode is processing the presented frame (no DLSS)
   int frames = 0;              // valid entries in renderMs, oldest first
   float renderMs[kFrameHistory] = {};  // rendered-frame intervals
 };
