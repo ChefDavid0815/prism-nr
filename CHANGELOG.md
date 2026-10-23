@@ -13,6 +13,11 @@
   and clean, for anime and stylised games), 低饱和 (restrained colour, cool whites: the film and
   series look) and 浓烈 (deep contrast, rich colour). They grade in scene light before the game's
   tone mapping, keep greys neutral and skin natural, and never clip colours. In the app and the panel.
+- Looks, third pass: the film-dye density now follows how much brighter each hue looks than grey
+  (Helmholtz-Kohlrausch), so blues and magentas deepen while yellows stay clean instead of olive;
+  bright reds pass through orange and bright blues through cyan on their way to white, as on film
+  (skin untouched); and colours are brought back into gamut by an ACES-style soft compression in
+  linear light, which removes the hard steps saturated blue gradients showed in 高饱和 and 浓烈.
 - New resolution scale for the every-frame tiers. The network's resolution is named by pixels
   relative to the flagship's base: 100% is the network at 62.5% of the output a side, its edit
   brought back up to native along the native picture's edges; 150% has half as many pixels again

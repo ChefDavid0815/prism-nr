@@ -5,8 +5,8 @@
 // colourist grades log footage: contrast in stops around mid grey on luminance alone, colour in
 // Oklab (perceptual and hue-linear). Muted colours gain more than strong ones (vibrance), greys
 // and whites stay neutral, skin takes only part of any change, highlights and deep shadows lose a
-// little chroma as film does, and colours that would leave the gamut are pulled back along their
-// own hue and lightness instead of being clipped.
+// little chroma as film does, and colours that would leave the gamut are compressed softly back
+// into it (ACES-style) instead of being clipped.
 //   0 默认    the network's result as it is
 //   1 高还原  the original's colour: only the network's light and shade, softly limited, less on skin
 //   2 高饱和  vivid and clean, for anime and stylised games
@@ -38,7 +38,6 @@ float3 LkLinear(float3 lab) {
                 dot(lms, float3(-0.0041960863, -0.7034186147, 1.7076147010)));
 }
 float LkY(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
-float LkMin(float3 c) { return min(c.r, min(c.g, c.b)); }
 
 // A raised-cosine bump around a hue (radians, wrapping).
 float LkHue(float h, float centre, float width) {
@@ -55,28 +54,22 @@ float LkSkin(float3 lab) {
   return LkHue(atan2(lab.z, lab.y), kLkSkinHue, 0.52) * smoothstep(0.018, 0.045, c) * (1.0 - smoothstep(0.15, 0.22, c)) * smoothstep(0.22, 0.38, lab.x);
 }
 
-// The largest Oklab chroma at lightness L along a hue direction that has no negative channel. With
-// no upper bound (scene light), it grows with L.
-float LkMaxChroma(float L, float2 dir) {
-  float c0 = 0.0, c1 = 0.8 * max(L, 0.0) + 0.01;
-  [unroll] for (int i = 0; i < 10; ++i) {
-    const float m = 0.5 * (c0 + c1);
-    // A channel that only grazes zero along the way (red, on the way to blue) must not stop it.
-    const float3 q = LkLinear(float3(L, dir * m));
-    if (LkMin(q) >= -0.002 * max(q.r, max(q.g, q.b))) c0 = m; else c1 = m;
-  }
-  return c0;
+// Into gamut (no negative light), softly, the way ACES's reference gamut compression does it: each
+// channel's distance below the largest, relative to it (0 the largest itself, 1 no light, beyond 1
+// negative), is compressed past the input's own distance (at least 0.75), approaching 1 without
+// reaching it. Colours keep the saturation they came with and nothing is clipped into flat patches.
+// It is continuous everywhere: Oklab's constant-lightness slices of the gamut are not convex
+// around blue, so the most chroma a hue can hold jumps there, and fitting along hue made hard steps
+// in saturated blue gradients.
+float3 LkDist(float3 x) {
+  const float a = max(x.r, max(x.g, x.b));
+  return a > 1e-9 ? (a - x) / a : 0.0;
 }
-
-// Into gamut (no negative light), softly: the chroma of ab at lightness L, where chroma gained
-// beyond the input's (c) approaches the most this lightness and hue can hold without reaching it,
-// so colours already at the edge (a pure blue) stay put instead of jumping, and nothing is clipped
-// into flat patches.
-float LkFit(float L, float2 ab, float c) {
-  const float ct = length(ab);
-  const float cm = LkMaxChroma(L, ab / max(ct, 1e-6));
-  const float base = min(c, cm);
-  return ct <= base || ct <= 1e-6 ? ct : base + (cm - base) * (1.0 - exp(-(ct - base) / max(cm - base, 1e-5)));
+float3 LkCompress(float3 x, float3 dIn) {
+  const float a = max(x.r, max(x.g, x.b));
+  const float3 d = LkDist(x), t = clamp(dIn, 0.75, 0.98);
+  const float3 dc = d <= t ? d : t + (1.0 - t) * (1.0 - exp(-(d - t) / (1.0 - t)));
+  return a > 1e-9 ? a - dc * a : 0.0;
 }
 
 struct LkParams {
@@ -92,27 +85,28 @@ struct LkParams {
   float density;    // subtractive saturation: lightness given up per unit of chroma gained (film dyes)
   float skinAlign;  // the share of the way skin's hue moves toward the skin line
   float skyDeepen;  // lightness taken from bright blues and cyans (a polariser's sky)
+  float hiTwist;    // radians: bright reds turn toward yellow and bright blues toward cyan (film)
 };
 
 LkParams LkFor(uint look) {
   LkParams p;
   p.contrast = 1.0; p.sat = 1.0; p.vibrance = 0.0; p.skinKeep = 1.0; p.hiDesat = 0.0; p.loDesat = 0.0;
   p.hue[0] = 1.0; p.hue[1] = 1.0; p.hue[2] = 1.0; p.hue[3] = 1.0; p.hue[4] = 1.0; p.hue[5] = 1.0;
-  p.tintLo = 0.0; p.tintHi = 0.0; p.density = 0.0; p.skinAlign = 0.0; p.skyDeepen = 0.0;
+  p.tintLo = 0.0; p.tintHi = 0.0; p.density = 0.0; p.skinAlign = 0.0; p.skyDeepen = 0.0; p.hiTwist = 0.0;
   if (look == 2u) {  // 高饱和
     p.contrast = 1.10; p.sat = 1.38; p.vibrance = 0.55; p.skinKeep = 0.40; p.hiDesat = 0.10; p.loDesat = 0.08;
     p.hue[0] = 0.92; p.hue[1] = 1.08; p.hue[2] = 1.12; p.hue[3] = 1.15; p.hue[4] = 1.00; p.hue[5] = 1.05;
-    p.density = 0.35; p.skinAlign = 0.25; p.skyDeepen = 0.04;
+    p.density = 0.35; p.skinAlign = 0.25; p.skyDeepen = 0.04; p.hiTwist = 0.10;
   } else if (look == 3u) {  // 低饱和
     p.contrast = 1.14; p.sat = 0.58; p.vibrance = 0.0; p.skinKeep = 0.45; p.hiDesat = 0.25; p.loDesat = 0.25;
     p.hue[0] = 0.95; p.hue[1] = 0.85; p.hue[2] = 0.78; p.hue[3] = 1.00; p.hue[4] = 1.00; p.hue[5] = 0.85;
     p.tintLo = float2(-0.010, -0.016); p.tintHi = float2(-0.004, -0.014);
-    p.skinAlign = 0.30;
+    p.skinAlign = 0.30; p.hiTwist = 0.08;
   } else if (look == 4u) {  // 浓烈
     p.contrast = 1.42; p.sat = 1.50; p.vibrance = 0.35; p.skinKeep = 0.40; p.hiDesat = 0.10; p.loDesat = 0.0;
     p.hue[0] = 0.95; p.hue[1] = 1.05; p.hue[2] = 1.08; p.hue[3] = 1.12; p.hue[4] = 1.08; p.hue[5] = 1.02;
     p.tintLo = float2(-0.008, -0.014); p.tintHi = float2(0.004, 0.012);
-    p.density = 0.55; p.skinAlign = 0.35; p.skyDeepen = 0.07;
+    p.density = 0.55; p.skinAlign = 0.35; p.skyDeepen = 0.07; p.hiTwist = 0.14;
   }
   return p;
 }
@@ -127,6 +121,7 @@ float3 LkGrade(float3 x, LkParams p) {
   const float l2 = l + (p.contrast - 1.0) * 2.5 * tanh(l / 2.5);
   x *= exp2(l2 - l);
   // Chroma in Oklab.
+  const float3 dIn = LkDist(x);
   const float3 lab0 = LkOklab(x);
   const float c = length(lab0.yz);
   const float h = atan2(lab0.z, lab0.y);
@@ -151,18 +146,28 @@ float3 LkGrade(float3 x, LkParams p) {
     const float turn = dh * p.skinAlign * skin, cs = cos(turn), sn = sin(turn);
     lab.yz = float2(lab.y * cs - lab.z * sn, lab.y * sn + lab.z * cs);
   }
+  // Bright colours take film's hue path: a red pushed toward white passes through orange and a
+  // blue through cyan (dye cross-talk; a flame that goes pink or a sky that goes violet reads as
+  // video). Skin is left alone.
+  if (p.hiTwist > 0.0) {
+    const float turn = p.hiTwist * smoothstep(1.0, 4.0, l2) * smoothstep(0.03, 0.10, c) * (1.0 - skin) * (LkHue(h, 0.506, 0.9) - 0.6 * LkHue(h, -1.676, 0.9));
+    const float cs = cos(turn), sn = sin(turn);
+    lab.yz = float2(lab.y * cs - lab.z * sn, lab.y * sn + lab.z * cs);
+  }
   // Split toning, growing with lightness so black stays black; skin keeps its own hue.
   const float hi = smoothstep(-0.5, 2.5, l2), lo = 1.0 - smoothstep(-4.0, -0.5, l2);
   lab.yz += (p.tintHi * hi + p.tintLo * lo) * (1.0 - 0.75 * skin) * min(lab0.x, 1.2);
   // Subtractive saturation: the chroma a colour really gains (what the gamut lets it keep) is paid
   // for in lightness, the way film dyes darken as they grow denser, so a richer colour reads deeper
-  // instead of neon. Bright blues and cyans give a little lightness too (a polarised sky).
-  const float gained = max(LkFit(lab0.x, lab.yz, c) - c, 0.0);
+  // instead of neon. The price follows how much brighter than grey each hue looks at the same
+  // luminance (Helmholtz-Kohlrausch; Fairchild and Pirrotta's hue weight, yellow least, blue most),
+  // so blues and magentas deepen and yellows stay clean instead of turning olive. Bright blues and
+  // cyans give a little lightness too (a polarised sky).
+  const float hkw = (0.116 * abs(sin((h - 1.920) * 0.5)) + 0.085) / 0.159;
+  const float gained = max(length(LkOklab(LkCompress(LkLinear(float3(lab0.x, lab.yz)), dIn)).yz) - c, 0.0) * hkw;
   const float sky = LkHue(h, -1.676, 0.9) * smoothstep(0.03, 0.10, c) * smoothstep(0.55, 0.85, lab0.x);
   lab.x = lab0.x - p.density * gained * (1.0 - 0.5 * skin) - p.skyDeepen * sky * lab0.x;
-  const float ct = length(lab.yz);
-  if (ct > 1e-6) lab.yz *= LkFit(lab.x, lab.yz, c) / ct;
-  return max(LkLinear(lab), 0.0);
+  return max(LkCompress(LkLinear(lab), dIn), 0.0);
 }
 
 // The frame with the network's edit e (log2 ratio per channel) and the chosen look. o is the
