@@ -105,8 +105,14 @@ async function main(): Promise<void> {
   assert(denuvoSections({ bitness: 'x64', imports: [], isGui: true, sections: ['.text', '.xtext', '.rdata', '.xtls'] }).join(',') === '.xtext,.xtls' &&
     denuvoSections({ bitness: 'x64', imports: [], isGui: true, sections: ['.text', '.rdata', '.detourc', '.xbld'] }).length === 0, 'Denuvo: found by its section names, and only by them');
   assert(launchOptionFor('E:\\Games\\Crimson Desert\\bin64') === '"E:\\Games\\Crimson Desert\\bin64\\PrismLaunch.exe" %command%', 'Late load: the Steam launch option quotes the launcher path');
-  assert(pickLoader(['dxgi', 'version', 'd3d12']) === 'version.dll' && pickLoader(['d3d12', 'winmm']) === 'winmm.dll' && pickLoader(['d3d12']) === 'd3d12.dll' && pickLoader([]) === 'dxgi.dll' && pickLoader(undefined) === 'dxgi.dll',
+  const pl = (i: string[] | undefined, o = {}) => pickLoader(i, o).name;
+  assert(pl(['dxgi', 'version', 'd3d12']) === 'version.dll' && pl(['d3d12', 'winmm']) === 'winmm.dll' && pl(['d3d12']) === 'd3d12.dll' && pl([]) === 'dxgi.dll' && pl(undefined) === 'dxgi.dll',
     'Loaders: version.dll first, then what the EXE imports, dxgi.dll when it imports none of them');
+  const ts = (names: string[]) => (n: string) => names.includes(n);
+  assert(pl(['dxgi', 'winmm'], { taken: ts(['winmm.dll']) }) === 'dxgi.dll' && pickLoader(['dxgi'], { taken: ts(['dxgi.dll']) }).chain && pickLoader(['dxgi'], { taken: ts(['dxgi.dll']) }).name === 'dxgi.dll' && !pickLoader(['dxgi', 'd3d11'], { taken: ts(['dxgi.dll']) }).chain,
+    'Loaders: a name another mod holds (ReShade, OptiScaler) is passed over; only when all are taken is it chained');
+  assert(pl(['d3d9'], { x86: true }) === 'd3d9.dll' && pl(['d3d12'], { x86: true }) === 'dxgi.dll' && pl([], { apis: ['dx9'] }) === 'd3d9.dll' && pl(['version'], { x86: true }) === 'version.dll',
+    'Loaders: 32-bit games have their own list (no d3d12); a DX9 game with no known import loads through d3d9.dll');
   // 1.2 installs keep working in 1.3: the old network resolution key moves to the new sizes.
   {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-nr-upgrade-'));

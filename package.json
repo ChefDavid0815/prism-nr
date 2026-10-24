@@ -62,7 +62,16 @@
         "filter": [
           "version.dll",
           "prism_nvngx.dll",
+          "prism_host.exe",
           "PrismLaunch.exe"
+        ]
+      },
+      {
+        "from": "native/prism-core/build/x86",
+        "to": "prism-core/x86",
+        "filter": [
+          "prism_nvngx.dll",
+          "loaders/*.dll"
         ]
       },
       {

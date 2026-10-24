@@ -81,8 +81,14 @@ export interface GameAnalysis {
   dlssFrameGen: boolean;
   /** The executable imports VERSION.dll, so Prism Core's loader is picked up at start-up. */
   importsVersionDll?: boolean;
-  /** Which of the DLLs Prism Core can load through (version, winmm, dinput8, dxgi, d3d12) the executable imports. */
+  /** Which of the DLLs Prism Core can load through (version, winmm, dinput8, dxgi, d3d9, d3d11, d3d12) the executable imports. */
   loaderImports?: string[];
+  /**
+   * How Prism Core reaches the frame: the game's DLSS (64-bit DX12 with DLSS), present mode (64-bit
+   * DX12 without), or the frame bridge to prism_host.exe (DX9, DX10, DX11, an API not recognised,
+   * and every 32-bit game: NVIDIA's runtime is 64-bit and D3D12 only).
+   */
+  coreMode?: 'dlss' | 'present' | 'bridge';
   /**
    * Denuvo Anti-Tamper found in the executable (its section names). Such games may refuse a proxy
    * DLL in their folder, so Prism Core loads late (PrismLaunch.exe) instead; nothing about the
@@ -220,6 +226,12 @@ export interface InstallPlan {
   lateLoad?: { launchOption: string; why: string };
   /** The game has no DLSS: Prism Core runs on the presented frame (Present=1). */
   presentMode?: boolean;
+  /** The frame bridge: DX9 / DX10 / DX11 or a 32-bit game, through prism_host.exe (Bridge=1). */
+  bridge?: boolean;
+  /** 32-bit game: the x86 Core and loader, with the 64-bit Core for prism_host.exe. */
+  x86?: boolean;
+  /** The loader's name is taken by another mod (ReShade, OptiScaler, ...): it is kept, renamed, and loaded through Prism's. */
+  loaderChain?: string;
   /** The proxy DLL Prism Core loads through at start-up (version.dll, winmm.dll, ... beside the EXE). */
   loader?: string;
 }
@@ -259,6 +271,8 @@ export interface InstallRecord {
   riskAcceptedAt?: string;
   /** Late-loading install (Denuvo): the Steam launch option it needs, to remove on rollback. */
   launchOption?: string;
+  /** A desktop shortcut that starts the game through PrismLaunch.exe (late loading without Steam). */
+  shortcut?: string;
 }
 
 export interface DiagnosticsReport {

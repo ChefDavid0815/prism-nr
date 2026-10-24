@@ -44,23 +44,45 @@ const SHADER_SUBDIR = path.join('reshade-shaders', 'Shaders', 'PrismNR');
 const CORE_INI = 'prism-core.ini';
 const CORE_FILES = ['version.dll', 'prism_nvngx.dll'];
 /**
- * The DLLs Prism Core can load through, in order of preference: the first the game's EXE imports
- * is used (version.dll, the original loader, first); with none imported, dxgi.dll, which DX12 games
- * load by name (the game's folder is searched first). A file of another mod by that name is
- * overwritten (backed up first, put back on rollback).
+ * The DLLs Prism Core can load through, in order of preference. The first the game's EXE imports
+ * whose name no other mod holds is used (ReShade and OptiScaler often sit on dxgi.dll, d3d9.dll,
+ * d3d11.dll or winmm.dll and are left alone); with none imported, the one the game's API loads by
+ * name. Only when every imported name is taken does the other mod's file move aside, to
+ * <name>.prism-chain.dll: Prism's loader loads it in place of the system DLL, so it keeps working.
  */
-const LOADERS = ['version.dll', 'winmm.dll', 'dinput8.dll', 'dxgi.dll', 'd3d12.dll'];
-export function pickLoader(imports: string[] | undefined): string {
-  return LOADERS.find((l) => (imports ?? []).includes(l.replace('.dll', ''))) ?? 'dxgi.dll';
+const LOADERS = ['version.dll', 'winmm.dll', 'dinput8.dll', 'dxgi.dll', 'd3d9.dll', 'd3d11.dll', 'd3d12.dll'];
+const LOADERS_X86 = ['version.dll', 'winmm.dll', 'dinput8.dll', 'dxgi.dll', 'd3d9.dll', 'd3d11.dll'];
+export function pickLoader(imports: string[] | undefined, opts: { x86?: boolean; apis?: string[]; taken?: (name: string) => boolean } = {}): { name: string; chain: boolean } {
+  const list = opts.x86 ? LOADERS_X86 : LOADERS;
+  const imported = list.filter((l) => (imports ?? []).includes(l.replace('.dll', '')));
+  const free = imported.find((l) => !opts.taken?.(l));
+  if (free) return { name: free, chain: false };
+  if (imported.length) return { name: imported[0], chain: true };
+  const apis = opts.apis ?? [];
+  const byApi = apis.includes('dx9') && !apis.includes('dx11') && !apis.includes('dx12') ? 'd3d9.dll' : 'dxgi.dll';
+  const fallback = [byApi, 'winmm.dll', 'version.dll'].find((l) => !opts.taken?.(l));
+  return fallback ? { name: fallback, chain: false } : { name: byApi, chain: true };
 }
-/** Where the app keeps a loader: version.dll beside Core, the others in loaders/. */
-function loaderSource(name: string): string {
+/** Where the app keeps a loader: version.dll beside Core, the others in loaders/; 32-bit ones in x86/loaders/. */
+function loaderSource(name: string, x86 = false): string {
+  if (x86) return path.join(coreDir, 'x86', 'loaders', name.toLowerCase());
   return name.toLowerCase() === 'version.dll' ? path.join(coreDir, 'version.dll') : path.join(coreDir, 'loaders', name.toLowerCase());
 }
+/** A 32-bit PE (machine 0x14c): the x86 Core files replace it on an upgrade. */
+function isX86(file: string): boolean {
+  try {
+    const b = fs.readFileSync(file);
+    return b.readUInt16LE(b.readUInt32LE(0x3c) + 4) === 0x14c;
+  } catch {
+    return false;
+  }
+}
+/** The name a chained mod's file moves to: Prism's loader of that name loads it. */
+export const chainName = (loader: string) => loader.replace(/\.dll$/i, '.prism-chain.dll');
 /** Late loading (Denuvo games): the launcher instead of the version.dll loader. */
 const LATE_FILES = ['PrismLaunch.exe', 'prism_nvngx.dll'];
 /** Every Core file an install may carry, lower case (what an upgrade refreshes). */
-const CORE_ALL = ['version.dll', 'winmm.dll', 'dinput8.dll', 'dxgi.dll', 'd3d12.dll', 'prism_nvngx.dll', 'prismlaunch.exe'];
+const CORE_ALL = ['version.dll', 'winmm.dll', 'dinput8.dll', 'dxgi.dll', 'd3d9.dll', 'd3d11.dll', 'd3d12.dll', 'prism_nvngx.dll', 'prism64_nvngx.dll', 'prism_host.exe', 'prismlaunch.exe'];
 
 /** The Steam launch option a late-loading install needs. */
 export function launchOptionFor(exeDir: string): string {
@@ -120,6 +142,9 @@ export function coreIni(values: Values, keep: string[] = []): string {
     // The network's size only applies to every-frame tiers; the asynchronous network runs native.
     `NetScale=${cadence === 1 ? netScaleFor(values['prism-core.netSize']).toFixed(4) : '1.00'}`,
     `Present=${values['prism-core.present'] === true || values['prism-core.present'] === '1' || values['prism-core.present'] === 1 ? 1 : 0}`,
+    `Bridge=${values['prism-core.bridge'] === true || values['prism-core.bridge'] === '1' || values['prism-core.bridge'] === 1 ? 1 : 0}`,
+    // Loaders load Core only into this executable (not a launcher or crash reporter beside it).
+    ...(values['prism-core.target'] ? [`Target=${String(values['prism-core.target']).replace(/[^\x20-\x7e]/g, '')}`] : []),
     `Look=${Math.max(0, Math.min(5, Math.round(Number(values['prism-core.look'] ?? 0)) || 0))}`,
     // The custom look's three slots (grade.ts), re-written in canonical form (ASCII).
     ...Array.from({ length: GRADE_SLOTS }, (_, i) => `${i === 0 ? 'Grade' : `Grade${i + 1}`}=${gradeFormat(gradeParse(String(values[gradeValueKey(i)] ?? '')))}`),
@@ -228,13 +253,22 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
 
   if (analysis.recommendedRoute === 'blocked') blockers.push(analysis.routeReason);
   else if (route === 'blocked') blockers.push('这个游戏用不了 Prism Core：它需要 DX12、64 位的游戏。');
-  // No DLSS: present mode, which runs the network on every presented frame (no history to carry).
-  const presentMode = route === 'prism-core' && !analysis.nativeDlss.present;
-  if (presentMode) {
-    values['prism-core.present'] = true;
+  // No DLSS: present mode (64-bit DX12) or the frame bridge (DX9-11, 32-bit), both on the final
+  // frame with no history to carry, so the network runs on every frame.
+  const x86 = analysis.bitness === 'x86';
+  const mode = analysis.coreMode ?? (analysis.nativeDlss.present ? 'dlss' : 'present');
+  const presentMode = route === 'prism-core' && mode !== 'dlss' && !x86;
+  const bridge = route === 'prism-core' && (mode === 'bridge' || x86);
+  if (presentMode || bridge) {
+    values['prism-core.present'] = presentMode;
+    values['prism-core.bridge'] = bridge;
     values['prism-core.cadence'] = '1';
     values['prism-core.async'] = false;
-    warnings.push('这个游戏没有 DLSS，Prism Core 用画面递交模式：处理的是最终画面，界面文字也会经过网络；没有运动矢量，网络每帧重新计算，快速运动时可能有轻微闪烁。');
+    warnings.push(
+      bridge
+        ? '这个游戏用画面桥：每帧画面送到 64 位辅助进程 prism_host.exe 跑网络再送回，界面文字也会经过网络；画面经过内存来回，帧率损失比 DX12 大。游戏内面板只在 DX12 游戏里有，这类游戏在 Prism NR 里调设置，游戏运行中约 1 秒生效。'
+        : '这个游戏没有 DLSS，Prism Core 用画面递交模式：处理的是最终画面，界面文字也会经过网络；没有运动矢量，网络每帧重新计算，快速运动时可能有轻微闪烁。',
+    );
   }
   if (!analysis.exe) blockers.push('没有找到游戏主程序。');
   const lock = tierLocked(PRESETS.find((p) => p.id === preset)!, gpu?.name);
@@ -243,22 +277,25 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   // Denuvo games may refuse a proxy DLL in their folder (Crimson Desert crashes at start with it):
   // Core loads late there, after the game has started, through PrismLaunch.exe. Nothing about the
   // protection is touched.
-  const late = route === 'prism-core' && Boolean(analysis.denuvo || profile?.coreLate);
+  // Late loading drives D3D12 only (64-bit): a 32-bit game with that protection loads at start-up.
+  const late = route === 'prism-core' && !x86 && mode !== 'bridge' && Boolean(analysis.denuvo || profile?.coreLate);
   let lateLoad: InstallPlan['lateLoad'];
-  const loaderName = late ? undefined : pickLoader(analysis.loaderImports ?? (analysis.importsVersionDll ? ['version'] : undefined));
+  const exeDirOf = analysis.exe ? path.dirname(analysis.exe) : '';
+  const taken = (name: string) => { const at = path.join(exeDirOf, name); return exists(at) && !isPrismLoader(at); };
+  const picked = late ? undefined : pickLoader(analysis.loaderImports ?? (analysis.importsVersionDll ? ['version'] : undefined), { x86, apis: analysis.apis, taken });
+  const loaderName = picked?.name;
   if (route === 'prism-core' && analysis.exe) {
     const exeDir = path.dirname(analysis.exe);
-    if (loaderName) {
-      const at = path.join(exeDir, loaderName);
-      if (exists(at) && !isPrismLoader(at))
-        warnings.push(`游戏目录里已有别的 ${loaderName}（可能是 ReShade 等其他 Mod）。Prism Core 会用它的位置加载，启用时先备份再覆盖，还原时放回。`);
-    }
-    if ((late ? [...LATE_FILES.map((f) => path.join(coreDir, f))] : [loaderSource(loaderName!), path.join(coreDir, 'prism_nvngx.dll')]).some((f) => !exists(f)))
-      blockers.push('这个 Prism NR 安装包里缺少 Prism Core 文件，请重新安装 Prism NR。');
+    if (picked?.chain)
+      warnings.push(`游戏会加载的 DLL 名字都已被其他 Mod 占用。${picked.name} 那个 Mod 不删除：它改名为 ${chainName(picked.name)}，由 Prism 的加载器先加载 Prism 再把它带起来，还原时放回原名。`);
+    const need = late
+      ? LATE_FILES.map((f) => path.join(coreDir, f))
+      : [loaderSource(loaderName!, x86), path.join(coreDir, x86 ? 'x86' : '', 'prism_nvngx.dll'), ...(bridge ? [path.join(coreDir, 'prism_host.exe'), path.join(coreDir, 'prism_nvngx.dll')] : [])];
+    if (need.some((f) => !exists(f))) blockers.push('这个 Prism NR 安装包里缺少 Prism Core 文件，请重新安装 Prism NR。');
     if (late) {
       const why = analysis.denuvo ? `检测到 D 加密（Denuvo，主程序里有 ${analysis.denuvo.sections.join('、')} 段）` : '这个游戏已知不接受游戏目录里的加载器';
       lateLoad = { launchOption: launchOptionFor(exeDir), why };
-      warnings.push(`${why}。为了和它共存，Prism Core 不在游戏启动时加载，改为进游戏后按 Home 再加载（不改游戏文件、不碰 D 加密）。启用后需要在 Steam 里设置一次启动项，下方会给出要填的内容。`);
+      warnings.push(`${why}。为了和它共存，Prism Core 不在游戏启动时加载，改为进游戏后按 Home 再加载（不改游戏文件、不碰 D 加密）。启用后用桌面上的"${game.name}（Prism）"快捷方式启动游戏；Steam 版也可以改为设置一次启动项，下方会给出要填的内容。`);
     }
     const ours = new Set(store.installs().filter((r) => r.gameId === game.id && r.status === 'active').flatMap((r) => r.files.map((x) => x.target.toLowerCase())));
     const addons = conflictingAddons(exeDir).filter((a) => !ours.has(a.toLowerCase()));
@@ -306,7 +343,10 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
     profileNotes: profile?.coreNotes ?? [],
     lateLoad,
     presentMode: presentMode || undefined,
+    bridge: bridge || undefined,
+    x86: x86 || undefined,
     loader: loaderName,
+    loaderChain: picked?.chain ? chainName(picked.name) : undefined,
   };
 }
 
@@ -512,10 +552,17 @@ function buildOps(plan: InstallPlan, analysis: GameAnalysis, comps: Components, 
     if (plan.lateLoad) for (const f of LATE_FILES) ops.push({ kind: 'copy', from: path.join(coreDir, f), to: path.join(exeDir, f), label: `Prism Core：${f}` });
     else {
       const loader = plan.loader ?? 'version.dll';
-      ops.push({ kind: 'copy', from: loaderSource(loader), to: path.join(exeDir, loader), label: `Prism Core 加载器：${loader}` });
-      ops.push({ kind: 'copy', from: path.join(coreDir, 'prism_nvngx.dll'), to: path.join(exeDir, 'prism_nvngx.dll'), label: 'Prism Core：prism_nvngx.dll' });
+      const at = path.join(exeDir, loader);
+      // Another mod on the loader's name: kept, under the chain name Prism's loader loads.
+      if (plan.loaderChain && exists(at) && !isPrismLoader(at)) ops.push({ kind: 'copy', from: at, to: path.join(exeDir, plan.loaderChain), label: `保留其他 Mod：${loader} → ${plan.loaderChain}` });
+      ops.push({ kind: 'copy', from: loaderSource(loader, plan.x86), to: at, label: `Prism Core 加载器：${loader}${plan.x86 ? '（32 位）' : ''}` });
+      ops.push({ kind: 'copy', from: path.join(coreDir, plan.x86 ? 'x86' : '', 'prism_nvngx.dll'), to: path.join(exeDir, 'prism_nvngx.dll'), label: `Prism Core：prism_nvngx.dll${plan.x86 ? '（32 位画面桥）' : ''}` });
     }
-    ops.push({ kind: 'write', to: path.join(exeDir, CORE_INI), content: coreIni(plan.values), label: 'Prism Core 设置' });
+    if (plan.bridge) {
+      ops.push({ kind: 'copy', from: path.join(coreDir, 'prism_host.exe'), to: path.join(exeDir, 'prism_host.exe'), label: 'Prism 辅助进程：prism_host.exe' });
+      if (plan.x86) ops.push({ kind: 'copy', from: path.join(coreDir, 'prism_nvngx.dll'), to: path.join(exeDir, 'prism64_nvngx.dll'), label: 'Prism Core（64 位，辅助进程用）：prism64_nvngx.dll' });
+    }
+    ops.push({ kind: 'write', to: path.join(exeDir, CORE_INI), content: coreIni({ ...plan.values, 'prism-core.target': path.basename(analysis.exe!) }), label: 'Prism Core 设置' });
     for (const a of conflictingAddons(exeDir)) ops.push({ kind: 'remove', to: a, label: `移走 ${path.basename(a)}` });
     return { ops, warnings };
   }
@@ -675,8 +722,14 @@ function restore(files: BackupRecord[]): string[] {
 /** Files Prism Core writes itself while the game runs; captures are the user's and stay. */
 function cleanupCore(r: InstallRecord): void {
   if (r.route !== 'prism-core') return;
-  const loader = r.files.find((f) => /[\\/]version\.dll$/i.test(f.target));
-  if (loader) fs.rmSync(path.join(path.dirname(loader.target), 'prism-core.log'), { force: true });
+  const core = r.files.find((f) => /[\\/]prism_nvngx\.dll$/i.test(f.target));
+  if (!core) return;
+  const dir = path.dirname(core.target);
+  try {
+    for (const f of fs.readdirSync(dir)) if (/^prism-(core|host)(-.*)?\.log$/i.test(f)) fs.rmSync(path.join(dir, f), { force: true });
+  } catch {
+    /* gone */
+  }
 }
 
 export async function runInstall(
@@ -725,6 +778,18 @@ export async function runInstall(
     throw new Error(`校验失败：${missing.target} 不存在，已自动撤回这次安装。`);
   }
 
+  // Late loading without Steam (any store, or none): a desktop shortcut that starts the game
+  // through PrismLaunch.exe; removed on rollback.
+  let shortcut: string | undefined;
+  if (plan.lateLoad) {
+    try {
+      shortcut = createShortcut(`${game.name}（Prism）`, path.join(exeDir, 'PrismLaunch.exe'), `"${analysis.exe}"`, exeDir);
+      if (shortcut) files.push({ target: shortcut, backup: null, sha256After: '' });
+    } catch (e) {
+      log(`shortcut: ${(e as Error).message}`);
+    }
+  }
+
   const record: InstallRecord = {
     id: recordId,
     gameId: game.id,
@@ -740,14 +805,35 @@ export async function runInstall(
     rollbackNotes: warnings.length ? warnings : undefined,
     riskAcceptedAt: plan.riskConsent?.accepted ? new Date().toISOString() : undefined,
     launchOption: plan.lateLoad?.launchOption,
+    shortcut,
   };
   store.saveInstalls([record, ...records]);
   const settings = store.settings();
   settings.styles[game.id] = plan.style;
   store.saveSettings(settings);
-  emit('done', plan.lateLoad ? '已就绪：先在 Steam 里设置启动项，再启动游戏' : '已就绪，可以直接启动游戏', 1);
+  emit('done', plan.lateLoad ? (shortcut ? '已就绪：用桌面上的 Prism 快捷方式启动游戏（Steam 版也可以设置启动项）' : '已就绪：先在 Steam 里设置启动项，再启动游戏') : '已就绪，可以直接启动游戏', 1);
   log(`install ${game.name}: ${files.length} files, route ${plan.route}`);
   return record;
+}
+
+/** A .lnk on the user's desktop (through Windows Script Host; the path comes back). */
+function createShortcut(name: string, target: string, args: string, workDir: string): string | undefined {
+  const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
+  const q = (v: string) => `'${v.replace(/'/g, "''")}'`;
+  const safe = name.replace(/[\\/:*?"<>|]/g, ' ').trim();
+  const script = [
+    `$d = [Environment]::GetFolderPath('Desktop')`,
+    `$p = Join-Path $d ${q(safe + '.lnk')}`,
+    `$s = (New-Object -ComObject WScript.Shell).CreateShortcut($p)`,
+    `$s.TargetPath = ${q(target)}`,
+    `$s.Arguments = ${q(args)}`,
+    `$s.WorkingDirectory = ${q(workDir)}`,
+    `$s.Save()`,
+    `[Console]::OutputEncoding = [Text.Encoding]::UTF8`,
+    `Write-Output $p`,
+  ].join('; ');
+  const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true }).trim();
+  return out && exists(out) ? out : undefined;
 }
 
 export function rollback(recordId: string): InstallRecord {
@@ -780,9 +866,15 @@ export function upgradeCoreInstalls(dlls: NvidiaDll[]): string[] {
     const notes: string[] = [];
     for (const f of r.files) {
       const name = path.basename(f.target).toLowerCase();
-      // A loader is refreshed only where it is Prism's (another mod's dxgi.dll it replaced is in the backup).
+      // A loader is refreshed only where it is Prism's (another mod's file it replaced is in the
+      // backup); a 32-bit install gets the x86 Core and loader, and prism64_nvngx.dll the 64-bit Core.
       const loaderFile = LOADERS.includes(name);
-      const from = loaderFile ? (isPrismLoader(f.target) ? loaderSource(name) : null) : CORE_ALL.includes(name) ? path.join(coreDir, name) : name === 'nvngx_dlssnr.dll' && nr ? nr.path : null;
+      const x86 = exists(f.target) && isX86(f.target);
+      const from = loaderFile
+        ? isPrismLoader(f.target) ? loaderSource(name, x86) : null
+        : name === 'prism_nvngx.dll' ? path.join(coreDir, x86 ? 'x86' : '', name)
+          : name === 'prism64_nvngx.dll' ? path.join(coreDir, 'prism_nvngx.dll')
+            : CORE_ALL.includes(name) ? path.join(coreDir, name) : name === 'nvngx_dlssnr.dll' && nr ? nr.path : null;
       if (!from || !exists(from) || !exists(f.target)) continue;
       const want = sha256File(from);
       if (want === sha256File(f.target)) continue;
@@ -897,6 +989,8 @@ export function syncCoreFromIni(): boolean {
     if (look !== undefined) next['prism-core.look'] = String(Math.max(0, Math.min(5, Math.round(look))));
     const present = num('present');
     if (present !== undefined) next['prism-core.present'] = present !== 0;
+    const bridgeOn = num('bridge');
+    if (bridgeOn !== undefined) next['prism-core.bridge'] = bridgeOn !== 0;
     // The custom look, as the in-game desk saved it.
     for (let i = 0; i < GRADE_SLOTS; i++) {
       const line = ini[i === 0 ? 'grade' : `grade${i + 1}`];

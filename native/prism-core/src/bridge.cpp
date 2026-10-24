@@ -43,6 +43,14 @@ struct Shared {
 bool Open() {
   if (sh.h) return true;
   if (sh.failed || gameDir.empty()) return false;
+  // Bridge= in prism-core.ini: on for the games the app routes here (DX9-11, 32-bit); off by default
+  // in the 64-bit Core, so a DX12 game's stray DX11 window (a launcher video) is left alone.
+#ifdef _WIN64
+  const int fallback = 0;
+#else
+  const int fallback = 1;
+#endif
+  if (!GetPrivateProfileIntW(L"Prism Core", L"Bridge", fallback, (gameDir + L"prism-core.ini").c_str())) return false;
   wchar_t m[64], p[64], d[64];
   BridgeNames(GetCurrentProcessId(), m, p, d, 64);
   sh.map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, DWORD(sizeof(BridgeHeader) + kBridgeMaxBytes), m);

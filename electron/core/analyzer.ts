@@ -6,7 +6,7 @@ import { denuvoSections, readPe } from './pe';
 import { exists, log, psJson, psQuote, walk } from './util';
 
 /** Bumped when the analysis gains a field or a route, so cached analyses are redone. */
-export const ANALYSIS_SCHEMA = 7;
+export const ANALYSIS_SCHEMA = 8;
 
 // Executables that are never the game itself.
 const NOT_GAME_EXE =
@@ -142,6 +142,7 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
   const routes: Route[] = [];
   let recommendedRoute: Route = 'unknown';
   let routeReason = '';
+  let coreMode: GameAnalysis['coreMode'];
 
   // Anti-cheat blocks the install, except in games whose profile says it can be avoided offline
   // (every detected anti-cheat must be one the profile names).
@@ -156,37 +157,26 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
   } else if (!exe) {
     routeReason = '没有找到游戏主程序。可以在详情里手动指定。';
   } else {
-    const modern = apis.includes('dx12') || apis.includes('dx11');
-    // Prism Core drives the network through its own D3D12 pipeline: DX12, 64-bit, the game's own DLSS.
-    const core = nativeDlss.present && apis.includes('dx12') && pe?.bitness === 'x64';
-    if (nativeDlss.present && modern) {
-      if (core) routes.push('prism-core');
-      routes.push('native-hook');
-      routes.push('optiscaler');
-      recommendedRoute = core ? 'prism-core' : 'native-hook';
-      routeReason = core
-        ? '游戏是 DX12 并自带 DLSS，可以用 Prism Core：拦截游戏的 DLSS 调用，网络隔几帧跑一次全分辨率，不需要 ReShade。'
-        : '游戏自带 DLSS，可以直接挂钩它的 DLSS 调用。性能优先的方案会改用 OptiScaler，在超分之前执行神经渲染。';
-    } else if (apis.includes('dx12') && pe?.bitness === 'x64') {
-      // No DLSS: Prism Core's present mode runs on the frame as it is presented (Present=1).
-      routes.push('prism-core');
-      recommendedRoute = 'prism-core';
-      routeReason = '游戏是 DX12 但没有 DLSS，Prism Core 用画面递交模式：在游戏把画面交给屏幕时处理整帧（包括界面文字），没有运动矢量，网络每帧重新计算。';
-    } else if (apis.length) {
-      routes.push('feeder');
-      // OptiScaler needs an upscaler call to replace; FSR 2/3 or XeSS works too.
-      if (modern && pe?.bitness === 'x64' && otherUpscaler) routes.push('optiscaler');
-      recommendedRoute = 'feeder';
-      routeReason = '游戏没有 DLSS，需要用 Feeder 从 ReShade 深度缓冲和估算的运动矢量补全输入。快速运动时可能拖影。';
-      if (pe?.bitness === 'x86') warnings.push('32 位游戏要走辅助进程，帧率大约减半。');
-      if (apis.includes('dx9') || apis.includes('dx10')) warnings.push('DX9 / DX10 只能用 DLAA 模式，需要 dgVoodoo2 或 DXVK 转换。');
-    } else {
-      routeReason = '没有识别出图形 API。可能是启动器而不是游戏本体。';
-    }
+    // Prism Core takes any game, whatever its store, API or bitness: the game's DLSS where a 64-bit
+    // DX12 game has it, present mode where it does not, and the frame bridge to prism_host.exe for
+    // DX9, DX10, DX11, an API not recognised, and every 32-bit game.
+    routes.push('prism-core');
+    recommendedRoute = 'prism-core';
+    const x86 = pe?.bitness === 'x86';
+    coreMode = !x86 && apis.includes('dx12') && nativeDlss.present ? 'dlss' : !x86 && apis.includes('dx12') ? 'present' : 'bridge';
+    const api = apis.filter((a) => a !== 'opengl' && a !== 'vulkan').map((a) => a.toUpperCase()).join(' / ') || '未识别的图形 API';
+    routeReason =
+      coreMode === 'dlss'
+        ? '游戏是 DX12 并自带 DLSS，Prism Core 拦截游戏的 DLSS 调用，在超分之后接手画面，不需要 ReShade。'
+        : coreMode === 'present'
+          ? '游戏是 DX12 但没有 DLSS，Prism Core 用画面递交模式：在游戏把画面交给屏幕时处理整帧（包括界面文字），没有运动矢量，网络每帧重新计算。'
+          : `游戏是 ${x86 ? '32 位' : '64 位'} ${api}，Prism Core 用画面桥：每帧把画面交给 64 位的辅助进程 prism_host.exe 跑网络再送回（包括界面文字）。画面经过内存来回，帧率损失比 DX12 大。`;
+    if (apis.includes('opengl') || apis.includes('vulkan')) warnings.push('这个游戏可能用 OpenGL 或 Vulkan，画面桥只接 DX9 / DX10 / DX11 / DX12；如果游戏实际不用 DirectX，Prism 不会生效。');
   }
   if (optInApplies) routeReason = `检测到 ${antiCheat.map((a) => a.name).join('、')}，这款游戏可以离线玩、不启动反作弊。了解并接受风险后才能启用。${routeReason ? ' ' + routeReason : ''}`;
   if (proxies.length && !existing.prism) warnings.push(`游戏目录里已有 ${proxies.join('、')}，可能是其他 Mod。安装时会先备份。`);
-  if (existing.optiscaler && !existing.prism) warnings.push('检测到已安装的 OptiScaler，同时使用两个神经渲染插件会让其中一个静默失效。');
+  if (existing.optiscaler) warnings.push('检测到 OptiScaler：保留不动。Prism 挂在游戏实际调用的超分入口上，在 OptiScaler 的超分之后接手画面（Prism 优先）。');
+  if (existing.reshade) warnings.push('检测到 ReShade：保留不动，两者可以同时使用。');
   if (/witcher|巫师/i.test(entry.name)) warnings.push('这个游戏的原作风格容易被神经渲染改变，建议用“原片优先”方案。');
 
   log(`analyze ${entry.name}: exe=${exe ? path.basename(exe) : '-'} apis=${apis.join('/')} dlss=${nativeDlss.present} ac=${antiCheat.length} route=${recommendedRoute}`);
@@ -202,7 +192,8 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
     dlssFrameGen,
     antiCheatOptIn: optInApplies ? optIn : undefined,
     importsVersionDll: pe ? pe.imports.includes('version.dll') : undefined,
-    loaderImports: pe ? ['version', 'winmm', 'dinput8', 'dxgi', 'd3d12'].filter((n) => pe.imports.includes(n + '.dll')) : undefined,
+    loaderImports: pe ? ['version', 'winmm', 'dinput8', 'dxgi', 'd3d9', 'd3d11', 'd3d12'].filter((n) => pe.imports.includes(n + '.dll')) : undefined,
+    coreMode,
     denuvo: pe && denuvoSections(pe).length ? { sections: denuvoSections(pe) } : undefined,
     antiCheat,
     existing,

@@ -8,13 +8,34 @@
 
 namespace {
 HMODULE real = nullptr;
+HMODULE self = nullptr;
+
+// Another mod that held this DLL's name (ReShade, OptiScaler, ...) moved aside to
+// <name>.prism-chain.dll when Prism was installed: it is loaded in the system DLL's place, so it
+// keeps working (and itself loads the system DLL), with Prism Core loaded first.
+HMODULE LoadChain(HMODULE self, const wchar_t* name) {
+  wchar_t path[MAX_PATH];
+  const DWORD n = GetModuleFileNameW(self, path, MAX_PATH);
+  for (DWORD i = n; i > 0; --i) {
+    if (path[i - 1] == L'\\' || path[i - 1] == L'/') { path[i] = 0; break; }
+  }
+  lstrcatW(path, name);
+  const int len = lstrlenW(path);
+  if (len > 4) path[len - 4] = 0;  // drop ".dll"
+  lstrcatW(path, L".prism-chain.dll");
+  if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return nullptr;
+  HMODULE m = LoadLibraryW(path);
+  if (m == self) { FreeLibrary(m); return nullptr; }  // Prism's own loader under that name: never itself
+  return m;
+}
 
 FARPROC Real(const char* name) {
   if (!real) {
     wchar_t path[MAX_PATH];
     GetSystemDirectoryW(path, MAX_PATH);
     lstrcatW(path, L"\\version.dll");
-    real = LoadLibraryW(path);
+    real = LoadChain(self, L"version.dll");
+    if (!real) real = LoadLibraryW(path);
   }
   return real ? GetProcAddress(real, name) : nullptr;
 }
@@ -72,9 +93,10 @@ FORWARD(VerLanguageNameW)
 FORWARD(VerQueryValueA)
 FORWARD(VerQueryValueW)
 
-BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
+BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
-    DisableThreadLibraryCalls(self);
+    self = module;
+    DisableThreadLibraryCalls(module);
     LoadCore(self);
   }
   return TRUE;

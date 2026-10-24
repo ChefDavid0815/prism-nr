@@ -19,12 +19,32 @@ const Export kExports[] = {
 #include PRISM_PROXY_TABLE
 };
 
-void Bind() {
+// Another mod that held this DLL's name (ReShade, OptiScaler, ...) moved aside to
+// <name>.prism-chain.dll when Prism was installed: it is loaded in the system DLL's place, so it
+// keeps working (and itself loads the system DLL), with Prism Core loaded first.
+HMODULE LoadChain(HMODULE self, const wchar_t* name) {
+  wchar_t path[MAX_PATH];
+  const DWORD n = GetModuleFileNameW(self, path, MAX_PATH);
+  for (DWORD i = n; i > 0; --i) {
+    if (path[i - 1] == L'\\' || path[i - 1] == L'/') { path[i] = 0; break; }
+  }
+  lstrcatW(path, name);
+  const int len = lstrlenW(path);
+  if (len > 4) path[len - 4] = 0;  // drop ".dll"
+  lstrcatW(path, L".prism-chain.dll");
+  if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return nullptr;
+  HMODULE m = LoadLibraryW(path);
+  if (m == self) { FreeLibrary(m); return nullptr; }  // Prism's own loader under that name: never itself
+  return m;
+}
+
+void Bind(HMODULE self) {
   wchar_t path[MAX_PATH];
   GetSystemDirectoryW(path, MAX_PATH);
   lstrcatW(path, L"\\");
   lstrcatW(path, PRISM_PROXY_NAME);
-  HMODULE real = LoadLibraryW(path);
+  HMODULE real = LoadChain(self, PRISM_PROXY_NAME);
+  if (!real) real = LoadLibraryW(path);
   if (!real) return;
   for (size_t i = 0; i < sizeof(kExports) / sizeof(kExports[0]); ++i)
     PrismReal[i] = reinterpret_cast<void*>(GetProcAddress(real, kExports[i].name ? kExports[i].name : MAKEINTRESOURCEA(kExports[i].ordinal)));
@@ -59,7 +79,10 @@ void LoadCore(HMODULE self) {
 BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     DisableThreadLibraryCalls(self);
-    Bind();
+    // The real exports first (Core imports some of them: its calls must find the table filled),
+    // then Core. Prism's precedence comes from where it hooks (the outermost NGX entry, Present),
+    // not from the load order.
+    Bind(self);
     LoadCore(self);
   }
   return TRUE;
