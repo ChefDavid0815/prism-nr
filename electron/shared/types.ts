@@ -326,6 +326,8 @@ export interface PrismApi {
   exportDiagnostics(): Promise<string | null>;
   openPath(p: string): Promise<void>;
   openExternal(url: string): Promise<void>;
+  /** Which of these executable names are running now. */
+  runningExes(names: string[]): Promise<string[]>;
   // Accounts (1.5, experimental; see shared/account.ts).
   account: {
     state(): Promise<AccountState>;

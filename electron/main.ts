@@ -6,6 +6,7 @@ import { setBundledNvidiaDir } from './core/nvidia';
 import { setBundledComponentsDir } from './core/components';
 import { PrismService } from './core/service';
 import { AccountService } from './core/account';
+import { runningExes } from './core/running';
 import type { AdminAction, CommunityQuery } from './shared/account';
 import { initStore } from './core/store';
 import { log } from './core/util';
@@ -116,6 +117,7 @@ app.whenReady().then(() => {
   handle('settings', () => service.getSettings());
   handle('setMotion', (m: 'max' | 'standard' | 'off') => service.setMotion(m));
   handle('openPath', (p: string) => shell.openPath(p).then(() => undefined));
+  handle('runningExes', (names: string[]) => runningExes(Array.isArray(names) ? names.slice(0, 500).map(String) : []));
   handle('openExternal', (url: string) => (/^https:\/\//.test(url) ? shell.openExternal(url) : undefined));
 
   createWindow();

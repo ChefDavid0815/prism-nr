@@ -160,6 +160,8 @@ function createPreviewApi(): PrismApi {
     openExternal: async (url) => {
       window.open(url, '_blank');
     },
+    // Preview: CONTROL Resonant is "running", to show the community's now-playing section.
+    runningExes: async (names) => names.filter((n) => /^controlresonant\.exe$/i.test(n)),
     account: previewAccount(),
     community: previewCommunity(),
   };

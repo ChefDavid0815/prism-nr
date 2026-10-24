@@ -47,10 +47,32 @@ function CommunityGate({ onSignIn }: { onSignIn: () => void }) {
 
 type Place = { kind: 'home' } | { kind: 'game'; game: CommunityGame } | { kind: 'mine' };
 
+/** The library games running right now (by their executables), checked every few seconds. */
+function useRunning(games: GameEntry[], analyses: Record<string, GameAnalysis>): string[] {
+  const [ids, setIds] = useState<string[]>([]);
+  useEffect(() => {
+    const byExe = new Map<string, string>();
+    for (const g of games) {
+      const exe = analyses[g.id]?.exe?.replace(/^.*[\\/]/, '').toLowerCase();
+      if (exe) byExe.set(exe, g.id);
+    }
+    if (!byExe.size) return;
+    let alive = true;
+    const tick = () => api.runningExes([...byExe.keys()])
+      .then((names) => { if (alive) setIds(names.map((n) => byExe.get(n.toLowerCase())!).filter(Boolean)); })
+      .catch(() => undefined);
+    tick();
+    const t = setInterval(tick, 4000);
+    return () => { alive = false; clearInterval(t); };
+  }, [games, analyses]);
+  return ids;
+}
+
 function Community({ account, games, analyses, installs, onImported }: Props) {
   const [place, setPlace] = useState<Place>({ kind: 'home' });
   const isAdmin = Boolean(account?.signedIn && isStaff(account.profile?.role));
-  const lists = { games, analyses, installs, isAdmin, onImported };
+  const running = useRunning(games, analyses);
+  const lists = { games, analyses, installs, isAdmin, onImported, running };
 
   if (place.kind === 'game') return <GamePage game={place.game} onBack={() => setPlace({ kind: 'home' })} {...lists} />;
   return <Home tab={place.kind} onTab={(t) => setPlace({ kind: t })} onGame={(g) => setPlace({ kind: 'game', game: g })} {...lists} />;
@@ -62,6 +84,8 @@ interface ListProps {
   installs: InstallRecord[];
   isAdmin: boolean;
   onImported: () => void;
+  /** Library game ids running now. */
+  running: string[];
 }
 
 /** A community game as the library knows it: which library game it is, and whether Prism is on there. */
@@ -71,12 +95,23 @@ function inLibrary(g: CommunityGame, games: GameEntry[], analyses: Record<string
   return { target, enabled };
 }
 
-function Home({ tab, onTab, onGame, games, analyses, installs, isAdmin, onImported }: ListProps & { tab: 'home' | 'mine'; onTab: (t: 'home' | 'mine') => void; onGame: (g: CommunityGame) => void }) {
+function Home({ tab, onTab, onGame, games, analyses, installs, isAdmin, onImported, running }: ListProps & { tab: 'home' | 'mine'; onTab: (t: 'home' | 'mine') => void; onGame: (g: CommunityGame) => void }) {
   const [q, setQ] = useState('');
   const [found, setFound] = useState<CommunityGame[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [paste, setPaste] = useState('');
+  const [every, setEvery] = useState<CommunityGame[]>([]);
+
+  // Every game with looks, unsearched: to find the one being played.
+  useEffect(() => {
+    api.community.games('').then((r) => setEvery(r.games)).catch(() => undefined);
+  }, []);
+  const playing = running.map((id) => {
+    const entry = games.find((g) => g.id === id)!;
+    const game = every.find((g) => inLibrary(g, games, analyses, installs).target?.id === id) ?? null;
+    return { entry, game, enabled: installs.some((r) => r.gameId === id && r.status === 'active' && r.route === 'prism-core') };
+  }).filter((x) => x.entry);
 
   useEffect(() => {
     if (tab !== 'home') return;
@@ -111,6 +146,21 @@ function Home({ tab, onTab, onGame, games, analyses, installs, isAdmin, onImport
         <p>按游戏找调色：搜中文名、英文名或者常用简称都可以。每个游戏里有官方调色和大家分享的调色，一键导入到你游戏库里的那个游戏。</p>
       </header>
 
+      {playing.map(({ entry, game, enabled }) => (
+        <section key={entry.id} className="block block-wide now-playing" aria-live="polite">
+          <h2 className="block-title"><i className="live-dot" aria-hidden="true" />正在运行：{game ? game.name_zh || game.name_en : entry.name}</h2>
+          {!game ? (
+            <p className="block-text">社区里还没有这个游戏的调色。在调色台里调好以后点"分享到社区"，做第一个。</p>
+          ) : (
+            <>
+              <p className="block-text">{enabled ? '选一套点"一键导入"，调色马上在游戏里生效，不用退出游戏。' : '这个游戏还没启用 Prism Core：先在游戏库里一键启用，再开游戏导入。'}</p>
+              <ShareList query={{ gkey: game.key }} empty="这个游戏还没有调色。" games={games} analyses={analyses} installs={installs} isAdmin={isAdmin} onImported={onImported} running={running} />
+              {game.shares > 0 && <button className="btn btn-line btn-small now-playing-more" onClick={() => onGame(game)}>打开 {game.name_zh || game.name_en} 的页面</button>}
+            </>
+          )}
+        </section>
+      ))}
+
       <section className="block block-wide">
         <div className="admin-bar community-bar">
           <div className="segmented segmented-2 community-tabs" role="tablist" aria-label="社区">
@@ -133,7 +183,7 @@ function Home({ tab, onTab, onGame, games, analyses, installs, isAdmin, onImport
             )}
           </>
         ) : (
-          <ShareList query={{ mine: true }} showGame empty={'你还没有分享过调色：在调色台里点"分享到社区"。'} games={games} analyses={analyses} installs={installs} isAdmin={isAdmin} onImported={onImported} />
+          <ShareList query={{ mine: true }} showGame empty={'你还没有分享过调色：在调色台里点"分享到社区"。'} games={games} analyses={analyses} installs={installs} isAdmin={isAdmin} onImported={onImported} running={running} />
         )}
       </section>
 
@@ -174,8 +224,9 @@ function GameGroup({ title, rows, onGame }: { title: string; rows: { g: Communit
   );
 }
 
-function GamePage({ game, onBack, games, analyses, installs, isAdmin, onImported }: ListProps & { game: CommunityGame; onBack: () => void }) {
+function GamePage({ game, onBack, games, analyses, installs, isAdmin, onImported, running }: ListProps & { game: CommunityGame; onBack: () => void }) {
   const { target, enabled } = inLibrary(game, games, analyses, installs);
+  const live = Boolean(target && running.includes(target.id));
   return (
     <div className="page">
       <header className="page-head cgame-head">
@@ -183,18 +234,18 @@ function GamePage({ game, onBack, games, analyses, installs, isAdmin, onImported
         <h1>{game.name_zh || game.name_en}</h1>
         <p>
           {game.name_zh && <span className="mono">{game.name_en}　</span>}
-          {enabled ? `你游戏库里的 ${target!.name} 已启用 Prism Core，选好调色点"一键导入"即可。` : target ? `你游戏库里有这个游戏（${target.name}），先在游戏库里一键启用 Prism Core，再回来导入。` : '你的游戏库里没有这个游戏，可以先复制调色码，装好游戏后再导入。'}
+          {live && enabled ? '游戏正在运行：点"一键导入"，调色马上在游戏里生效。' : enabled ? `你游戏库里的 ${target!.name} 已启用 Prism Core，选好调色点"一键导入"即可。` : target ? `你游戏库里有这个游戏（${target.name}），先在游戏库里一键启用 Prism Core，再回来导入。` : '你的游戏库里没有这个游戏，可以先复制调色码，装好游戏后再导入。'}
         </p>
       </header>
       <section className="block block-wide">
-        <ShareList query={{ gkey: game.key }} empty="这个游戏还没有调色。" games={games} analyses={analyses} installs={installs} isAdmin={isAdmin} onImported={onImported} />
+        <ShareList query={{ gkey: game.key }} empty="这个游戏还没有调色。" games={games} analyses={analyses} installs={installs} isAdmin={isAdmin} onImported={onImported} running={running} />
       </section>
     </div>
   );
 }
 
 /** Looks, official first: each row opens to what it changes, the import, the code and the switches. */
-function ShareList({ query, showGame, empty, games, analyses, installs, isAdmin, onImported }: ListProps & { query: CommunityQuery; showGame?: boolean; empty: string }) {
+function ShareList({ query, showGame, empty, games, analyses, installs, isAdmin, onImported, running }: ListProps & { query: CommunityQuery; showGame?: boolean; empty: string }) {
   const [shares, setShares] = useState<CommunityShare[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -252,7 +303,7 @@ function ShareList({ query, showGame, empty, games, analyses, installs, isAdmin,
                 <div className="community-detail">
                   {s.description && <p className="block-text">{s.description}</p>}
                   <Changed grade={grade} />
-                  <Importer grade={grade} gameName={s.game_name} target={target} installs={installs} shareId={s.id} onDone={() => { onImported(); void load(); }} />
+                  <Importer grade={grade} gameName={s.game_name} target={target} installs={installs} shareId={s.id} live={Boolean(target && running.includes(target.id))} onDone={() => { onImported(); void load(); }} />
                   <div className="acct-row">
                     <CopyButton text={s.code} />
                     {isAdmin && <OfficialSwitch id={s.id} official={s.official} onDone={() => void load()} />}
@@ -296,7 +347,7 @@ function Changed({ grade }: { grade: GradeValues }) {
   );
 }
 
-function Importer({ grade, gameName, target, installs, shareId, onDone }: { grade: GradeValues; gameName: string; target: GameEntry | null; installs: InstallRecord[]; shareId?: string; onDone: () => void }) {
+function Importer({ grade, gameName, target, installs, shareId, live, onDone }: { grade: GradeValues; gameName: string; target: GameEntry | null; installs: InstallRecord[]; shareId?: string; live?: boolean; onDone: () => void }) {
   const record = target ? installs.find((r) => r.gameId === target.id && r.status === 'active' && r.route === 'prism-core') : undefined;
   const [slot, setSlot] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -310,7 +361,7 @@ function Importer({ grade, gameName, target, installs, shareId, onDone }: { grad
     try {
       await api.updateCoreConfig(record.id, { [gradeValueKey(slot)]: gradeFormat(grade), 'prism-core.gradeSlot': String(slot), 'prism-core.look': '5' });
       if (shareId) await api.community.imported(shareId);
-      setNote(`已导入到 ${target!.name} 的方案 ${slot + 1}，色彩风格已切到自定义。游戏运行中约 1 秒生效。`);
+      setNote(live ? `已导入到方案 ${slot + 1}，正在运行的 ${target!.name} 约 1 秒内换上这套调色，游戏里会提示"已应用 Prism NR 里的设置"。` : `已导入到 ${target!.name} 的方案 ${slot + 1}，色彩风格已切到自定义。下次进游戏就是这套调色，游戏运行中导入约 1 秒生效。`);
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -330,7 +381,7 @@ function Importer({ grade, gameName, target, installs, shareId, onDone }: { grad
               <button key={i} role="radio" aria-checked={slot === i} className={slot === i ? 'is-on' : ''} onClick={() => setSlot(i)}>方案 {i + 1}</button>
             ))}
           </div>
-          <button className="btn btn-line" disabled={busy} onClick={() => void run()}>{busy ? '正在导入' : '一键导入'}</button>
+          <button className="btn btn-line" disabled={busy} onClick={() => void run()}>{busy ? '正在导入' : live ? '一键导入，立即生效' : '一键导入'}</button>
         </div>
       )}
       {note && <p className="block-note" role="status">{note}</p>}

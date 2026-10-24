@@ -34,6 +34,7 @@ const api: PrismApi = {
   setMotion: (m) => call('setMotion', m),
   openPath: (p) => call('openPath', p),
   openExternal: (url) => call('openExternal', url),
+  runningExes: (names) => call('runningExes', names),
   account: {
     state: () => call('account.state'),
     signUp: (args) => call('account.signUp', args),
