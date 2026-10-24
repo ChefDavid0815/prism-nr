@@ -1918,7 +1918,7 @@ button.admin-row::before {
   clip-path: inset(0 100% 0 0);
   transition: clip-path 320ms var(--ease);
 }
-button.admin-row:hover {
+.admin-item:not(.is-open) button.admin-row:hover {
   background: #0d0d0d;
 }
 .admin-item.is-open button.admin-row {
@@ -1986,4 +1986,183 @@ button.admin-row:hover {
 .admin-figures div,
 .admin-figures div:nth-child(n + 5) {
   display: block;
+}
+
+/* ---------------------------------------------------------------- community */
+.community-paste {
+  display: flex;
+  gap: 12px;
+}
+.community-paste .admin-search {
+  max-width: none;
+}
+.community-filter {
+  width: 300px;
+  flex: none;
+}
+.community-filter button {
+  height: 32px;
+  font-size: 12px;
+}
+.community-filter button:disabled {
+  color: var(--grey-2);
+  cursor: not-allowed;
+}
+.community-list {
+  border-top: 1px solid var(--rule);
+}
+.community-row {
+  display: grid;
+  grid-template-columns: 2px minmax(0, 1.4fr) 200px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  width: 100%;
+  min-height: 56px;
+  padding: 0 4px;
+  text-align: left;
+  border-bottom: 1px solid var(--rule-2);
+  position: relative;
+  isolation: isolate;
+}
+.community-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--white);
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 320ms var(--ease);
+}
+.community-item:not(.is-open) .community-row:hover {
+  background: #0d0d0d;
+}
+.community-item.is-open .community-row {
+  color: var(--black);
+}
+.community-item.is-open .community-row::before {
+  clip-path: inset(0 0 0 0);
+}
+.community-mark {
+  width: 2px;
+  height: 22px;
+}
+.community-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.community-title strong {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.community-title .dim {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.community-item.is-open .community-title .dim {
+  color: #444;
+}
+.community-print {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 22px;
+}
+.community-print i {
+  flex: 1;
+  min-width: 1px;
+  background: currentColor;
+}
+.community-meta {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--grey);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.community-item.is-open .community-meta {
+  color: #333;
+}
+.community-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 4px 20px;
+  border-bottom: 1px solid var(--rule);
+}
+.community-changed {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 4px 20px;
+  list-style: none;
+  font-size: 12px;
+}
+.community-changed li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--rule-2);
+  color: var(--grey);
+}
+.community-changed li .mono {
+  color: var(--white);
+}
+.community-import {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+.community-slots {
+  width: 270px;
+}
+.community-slots button {
+  height: 32px;
+  font-size: 12px;
+}
+.grade-export {
+  position: relative;
+  display: flex;
+  gap: 8px;
+}
+.grade-share {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 10;
+  width: 360px;
+  padding: 16px;
+  background: var(--black);
+  border: 1px solid var(--white);
+}
+.grade-share textarea {
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--white);
+  background: var(--black);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  resize: vertical;
+  outline: none;
+}
+.grade-share textarea:focus-visible {
+  border-color: var(--white);
+}
+@media (prefers-reduced-motion: reduce) {
+  .community-row::before {
+    transition: none;
+  }
+}
+.community-meta span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

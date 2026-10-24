@@ -1,6 +1,8 @@
 import { PLUGINS, PRESETS, resolveValues } from '../electron/shared/catalog';
 import { matchProfile } from '../electron/shared/profiles';
-import { normPhone, type AccountProfile, type AdminUser } from '../electron/shared/account';
+import { normPhone, type AccountProfile, type AdminUser, type CommunityShare } from '../electron/shared/account';
+import { encodeGradeCode } from '../electron/shared/gradecode';
+import { gradeFromPreset, gradeParse } from '../electron/shared/grade';
 import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PresetId, PrismApi, Route, SystemInfo } from '../electron/shared/types';
 
 declare global {
@@ -159,6 +161,41 @@ function createPreviewApi(): PrismApi {
       window.open(url, '_blank');
     },
     account: previewAccount(),
+    community: previewCommunity(),
+  };
+}
+
+/** Community in preview mode: a few shares for the sample library, in memory. */
+function previewCommunity(): PrismApi['community'] {
+  const day = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
+  const mk = (id: string, title: string, description: string, game: { name: string; exe?: string; steamAppId?: string }, grade: ReturnType<typeof gradeParse>, author: string, imports: number, age: number): CommunityShare =>
+    ({ id, title, description, game_name: game.name, game_exe: game.exe ?? null, steam_app_id: game.steamAppId ?? null, code: encodeGradeCode(game, grade), imports, created_at: day(age), author, own: false });
+  const shares: CommunityShare[] = [
+    mk('s1', '雨夜胶片', '压暗高光、暗部偏青，霓虹更有层次。适合夜里的城区。', { name: 'Cyberpunk 2077', exe: 'Cyberpunk2077.exe', steamAppId: '1091500' }, gradeParse('Exposure:-0.20,Contrast:30,Highlights:-35,ShadowHue:200,ShadowAmount:60,HighlightHue:40,HighlightAmount:30,Density:40,Grain:15,Vignette:-25'), '晨风', 128, 1),
+    mk('s2', '控制局冷白', '低饱和起点，白色更冷，混凝土的质感更硬。', { name: 'CONTROL Resonant', exe: 'CONTROLResonant.exe' }, gradeFromPreset(2), 'pixel_hunter', 42, 2),
+    mk('s3', '黑神话·暖阳', '提亮中间调、黄绿更鲜，秋天的山更暖。', { name: 'Black Myth: Wukong', exe: 'b1-Win64-Shipping.exe', steamAppId: '2358720' }, gradeParse('Midtones:20,Temperature:18,Vibrance:25,SatYellow:15,SatGreen:12,HueGreen:-6,Sky:30,HighlightTwist:40'), '晨风', 77, 3),
+    mk('s4', '赛博老胶片', '整体褪色加颗粒，像 90 年代的录像带。', { name: 'Cyberpunk 2077', exe: 'Cyberpunk2077.exe', steamAppId: '1091500' }, gradeParse('Contrast:-20,Blacks:35,Saturation:-30,Grain:60,Vignette:-40,CurveR5:20,CurveB1:30'), 'retro', 9, 0),
+  ];
+  return {
+    list: async (query) => {
+      const q = (query.q ?? '').toLowerCase();
+      const rows = shares.filter((s) => (!q || s.title.toLowerCase().includes(q) || s.game_name.toLowerCase().includes(q) || s.author.toLowerCase().includes(q)) &&
+        (!query.steam && !query.exe ? true : s.steam_app_id === query.steam || (query.exe && s.game_exe?.toLowerCase() === query.exe.toLowerCase())) && (!query.mine || s.own));
+      return { shares: rows, total: rows.length };
+    },
+    share: async ({ title, description, code }) => {
+      const { decodeGradeCode } = await import('../electron/shared/gradecode');
+      const { game } = decodeGradeCode(code);
+      shares.unshift({ id: 's' + (shares.length + 1), title, description, game_name: game.name, game_exe: game.exe ?? null, steam_app_id: game.steamAppId ?? null, code, imports: 0, created_at: new Date().toISOString(), author: '你', own: true });
+    },
+    remove: async (id) => {
+      const i = shares.findIndex((s) => s.id === id);
+      if (i >= 0) shares.splice(i, 1);
+    },
+    imported: async (id) => {
+      const s = shares.find((x) => x.id === id);
+      if (s) s.imports++;
+    },
   };
 }
 

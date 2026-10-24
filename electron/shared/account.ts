@@ -60,13 +60,37 @@ export interface AdminStats {
   new_today: number;
 }
 
+/** A look shared in the community (the grade_shares table). */
+export interface CommunityShare {
+  id: string;
+  title: string;
+  description: string;
+  game_name: string;
+  game_exe: string | null;
+  steam_app_id: string | null;
+  code: string;
+  imports: number;
+  created_at: string;
+  author: string;
+  own: boolean;
+}
+export interface CommunityQuery {
+  q?: string;
+  /** Only shares for this game (Steam app id, or executable name). */
+  steam?: string | null;
+  exe?: string | null;
+  mine?: boolean;
+  page?: number;
+}
+
 export type AdminAction =
   | { action: 'stats' }
   | { action: 'list'; q?: string; page?: number; size?: number }
   | { action: 'update'; id: string; username?: string; phone?: string | null; role?: 'user' | 'admin' }
   | { action: 'ban'; id: string; banned: boolean }
   | { action: 'delete'; id: string }
-  | { action: 'password'; id: string; password: string };
+  | { action: 'password'; id: string; password: string }
+  | { action: 'deleteShare'; id: string };
 
 export const USERNAME_RULE = /^[0-9A-Za-z_一-龥]{2,20}$/;
 export const USERNAME_HELP = '2–20 个字，可以用中文、字母、数字和下划线';

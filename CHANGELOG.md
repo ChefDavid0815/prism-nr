@@ -1,7 +1,17 @@
 # Changelog
 
-## 1.5.0 (experimental) — 2026-10-24 · accounts
+## 1.5.0 (experimental) — 2026-10-24 · accounts, grade codes, the community
 
+- Grade codes: the grading desk exports the slot's look as one line of text (PRISM1.…) that
+  carries the game it was made for (its name, executable and Steam id) and a checksum, so a code
+  cut short in copying is caught. Paste one anywhere in the app to import it.
+- The community (社区): looks people share from the desk, with a title and a note. Each names its
+  game, which is found in your library by itself (Steam id, then executable, so a GOG copy matches
+  a Steam code, then name); a filter shows only shares for your games. One press writes a look into
+  that game's custom look (a slot of your choice) and switches it to 自定义; a running game takes it
+  within a second. Each share shows a fingerprint: one bar per control, as tall as its change from
+  neutral. Anyone may browse and import; sharing needs an account; authors and administrators can
+  delete.
 - Accounts, for the first time, and optional: Prism works the same without signing in. Sign up
   with an email (a 6-digit code goes to it to prove it is real) and a password, optionally a
   username and a phone number (mainland numbers as typed, other countries with + and the country

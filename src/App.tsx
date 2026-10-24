@@ -13,9 +13,10 @@ import { PluginsView } from './views/PluginsView';
 import { SettingsView } from './views/SettingsView';
 import { AccountView } from './views/AccountView';
 import { AdminView } from './views/AdminView';
+import { CommunityView } from './views/CommunityView';
 import type { AccountState } from '../electron/shared/account';
 
-type View = 'library' | 'plugins' | 'history' | 'diagnostics' | 'settings' | 'account' | 'admin';
+type View = 'library' | 'plugins' | 'history' | 'diagnostics' | 'settings' | 'account' | 'admin' | 'community';
 
 const TIER_LABEL: Record<string, string> = { flagship: '旗舰', high: '高端', mainstream: '主流', entry: '入门', legacy: '上代', unsupported: '不支持' };
 
@@ -80,6 +81,7 @@ export function App() {
 
   const nav: { id: View; label: string; count?: string }[] = [
     { id: 'library', label: '游戏库', count: String(games.length).padStart(2, '0') },
+    { id: 'community', label: '社区' },
     { id: 'plugins', label: '插件', count: String(PLUGINS.filter((p) => p.routes.includes('prism-core')).length).padStart(2, '0') },
     { id: 'history', label: '还原记录', count: String(activeCount).padStart(2, '0') },
     { id: 'diagnostics', label: '诊断' },
@@ -165,6 +167,7 @@ export function App() {
           {view === 'diagnostics' && <DiagnosticsView />}
           {view === 'settings' && <SettingsView motion={motion} onMotion={setMotion} />}
           {view === 'account' && <AccountView account={account} onChange={setAccount} />}
+          {view === 'community' && <CommunityView account={account} games={games} analyses={analyses} installs={installs} onImported={refreshInstalls} />}
           {view === 'admin' && isAdmin && <AdminView selfId={account!.profile!.id} />}
         </main>
         <Sweep run={sweep} onDone={() => setSweep(0)} />

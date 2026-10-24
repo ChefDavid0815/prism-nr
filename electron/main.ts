@@ -6,7 +6,7 @@ import { setBundledNvidiaDir } from './core/nvidia';
 import { setBundledComponentsDir } from './core/components';
 import { PrismService } from './core/service';
 import { AccountService } from './core/account';
-import type { AdminAction } from './shared/account';
+import type { AdminAction, CommunityQuery } from './shared/account';
 import { initStore } from './core/store';
 import { log } from './core/util';
 import type { InstallPlan, PlanRequest } from './shared/types';
@@ -73,6 +73,10 @@ app.whenReady().then(() => {
   handle('account.signOut', () => account.signOut());
   handle('account.updateProfile', (patch: { username?: string; phone?: string | null }) => account.updateProfile(patch));
   handle('account.admin', (action: AdminAction) => account.admin(action));
+  handle('community.list', (query: CommunityQuery) => account.communityList(query));
+  handle('community.share', (args: { title: string; description: string; code: string }) => account.communityShare(args));
+  handle('community.remove', (id: string, asAdmin?: boolean) => account.communityDelete(id, asAdmin));
+  handle('community.imported', (id: string) => account.communityImported(id));
 
   handle('system', () => service.getSystem());
   handle('scan', () => service.scanGames());

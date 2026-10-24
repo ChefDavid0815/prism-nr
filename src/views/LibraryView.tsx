@@ -8,6 +8,7 @@ import { RollingNumber } from '../components/RollingNumber';
 import { TickRange } from '../components/TickRange';
 import { GRADE, gradeParse, gradeValueKey, GRADE_VALUE_KEYS } from '../../electron/shared/grade';
 import { GradeDesk } from './GradeDesk';
+import { gameOf, type GradeCodeGame } from '../../electron/shared/gradecode';
 import { fingerprint, routeTone, TONE_COLOR } from '../lib/fingerprint';
 
 export const ROUTE_LABEL: Record<Route, string> = {
@@ -437,7 +438,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
         )}
 
         {plan && !blocked && (
-          <CoreSettings key={tierNonce} values={pickCore(plan.values)} tier={PRESETS.find((p) => p.id === preset) ?? PRESETS[1]} live={record?.route === 'prism-core' ? record : null} gameName={game.name} onChange={setCoreValues} onTuned={onTuned} />
+          <CoreSettings key={tierNonce} values={pickCore(plan.values)} tier={PRESETS.find((p) => p.id === preset) ?? PRESETS[1]} live={record?.route === 'prism-core' ? record : null} gameName={game.name} codeGame={gameOf(game, analysis)} onChange={setCoreValues} onTuned={onTuned} />
         )}
 
         {plan && (plan.profileNotes.length > 0 || plan.warnings.length > 0) && (
@@ -583,11 +584,12 @@ interface CoreSettingsProps {
   /** The active Core install, when there is one: changes are written to it right away. */
   live: InstallRecord | null;
   gameName: string;
+  codeGame: GradeCodeGame;
   onChange: (v: CoreValues) => void;
   onTuned: () => void;
 }
 
-function CoreSettings({ values, tier, live, gameName, onChange, onTuned }: CoreSettingsProps) {
+function CoreSettings({ values, tier, live, gameName, codeGame, onChange, onTuned }: CoreSettingsProps) {
   const [desk, setDesk] = useState(false);
   const [status, setStatus] = useState<'idle' | 'writing' | 'written' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -661,7 +663,7 @@ function CoreSettings({ values, tier, live, gameName, onChange, onTuned }: CoreS
           );
         })()}
       </div>
-      {desk && <GradeDesk gameName={gameName} values={values} set={set} status={statusText} onClose={() => setDesk(false)} />}
+      {desk && <GradeDesk gameName={gameName} codeGame={codeGame} values={values} set={set} status={statusText} onClose={() => setDesk(false)} />}
 
       <div className="core-field">
         <span className="core-field-label" id="core-cadence-label">网络节奏</span>

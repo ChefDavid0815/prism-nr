@@ -44,6 +44,12 @@ const api: PrismApi = {
     updateProfile: (patch) => call('account.updateProfile', patch),
     admin: (action) => call('account.admin', action),
   },
+  community: {
+    list: (query) => call('community.list', query),
+    share: (args) => call('community.share', args),
+    remove: (id, asAdmin) => call('community.remove', id, asAdmin),
+    imported: (id) => call('community.imported', id),
+  },
 };
 
 contextBridge.exposeInMainWorld('prism', api);

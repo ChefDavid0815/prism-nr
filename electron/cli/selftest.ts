@@ -14,6 +14,7 @@ import { netScaleFor, netSizeFor, PRESETS, resolveValues, tierLocked, tierOf } f
 import { nrCostFor, planNr } from '../shared/nrplan';
 import { GRADE, gradeFormat, gradeFromPreset, gradeParse, gradeToShader } from '../shared/grade';
 import { ACCOUNT_KEY, normPhone, showPhone, USERNAME_RULE } from '../shared/account';
+import { decodeGradeCode, encodeGradeCode, matchGame } from '../shared/gradecode';
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) {
@@ -122,6 +123,22 @@ async function main(): Promise<void> {
   assert(USERNAME_RULE.test('晨风') && USERNAME_RULE.test('pixel_hunter') && !USERNAME_RULE.test('a') && !USERNAME_RULE.test('has space') && !USERNAME_RULE.test('x'.repeat(21)),
     'Accounts: usernames of 2-20 Chinese characters, letters, digits and underscores');
   assert(/^sb_publishable_/.test(ACCOUNT_KEY), 'Accounts: the app carries only the publishable key, never a service key');
+  {
+    const g = gradeParse('Contrast:24,Saturation:-34,ShadowHue:200,ShadowAmount:60,CurveB1:25,Grain:15');
+    const code = encodeGradeCode({ name: '赛博朋克 2077', exe: 'Cyberpunk2077.exe', steamAppId: '1091500' }, g);
+    const back = decodeGradeCode('  ' + code.slice(0, 20) + '\n' + code.slice(20) + ' ');
+    assert(/^PRISM1\./.test(code) && back.game.name === '赛博朋克 2077' && back.game.steamAppId === '1091500' && gradeFormat(back.grade) === gradeFormat(g),
+      'Grade codes: a look and its game survive the round trip (spaces and line breaks from pasting ignored)');
+    let cut = '';
+    try { decodeGradeCode(code.slice(0, -10) + code.slice(-9)); } catch (e) { cut = (e as Error).message; }
+    let wrong = '';
+    try { decodeGradeCode('hello'); } catch (e) { wrong = (e as Error).message; }
+    assert(/不完整/.test(cut) && /不是 Prism 的调色码/.test(wrong), 'Grade codes: a code cut short or not a code at all is refused with a reason');
+    const lib = [{ id: 'a', name: 'CONTROL Resonant', store: 'steam' as const, installDir: 'x', evidence: '' }, { id: 'b', name: 'Cyberpunk 2077', store: 'gog' as const, installDir: 'y', evidence: '' }];
+    const an = { b: { exe: 'D:\\GOG\\Cyberpunk 2077\\bin\\x64\\Cyberpunk2077.exe' } } as never;
+    assert(matchGame(back.game, lib, an)?.id === 'b' && matchGame({ name: 'control  resonant' }, lib, {})?.id === 'a' && matchGame({ name: 'Other' }, lib, {}) === null,
+      'Grade codes: the game is found in the library by Steam id, executable or name (GOG copy of a Steam code matched by its executable)');
+  }
   const pl = (i: string[] | undefined, o = {}) => pickLoader(i, o).name;
   assert(pl(['dxgi', 'version', 'd3d12']) === 'version.dll' && pl(['d3d12', 'winmm']) === 'winmm.dll' && pl(['d3d12']) === 'd3d12.dll' && pl([]) === 'dxgi.dll' && pl(undefined) === 'dxgi.dll',
     'Loaders: version.dll first, then what the EXE imports, dxgi.dll when it imports none of them');

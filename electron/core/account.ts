@@ -10,8 +10,9 @@ import * as path from 'node:path';
 import { safeStorage } from 'electron';
 import {
   ACCOUNT_BASES, ACCOUNT_KEY, USERNAME_HELP, USERNAME_RULE, normPhone,
-  type AccountPending, type AccountProfile, type AccountState, type AdminAction,
+  type AccountPending, type AccountProfile, type AccountState, type AdminAction, type CommunityQuery, type CommunityShare,
 } from '../shared/account';
+import { decodeGradeCode } from '../shared/gradecode';
 import { log } from './util';
 
 interface Session {
@@ -202,6 +203,52 @@ export class AccountService {
     }
     this.profile = null;
     return this.state();
+  }
+
+  // ------------------------------------------------------------ the community (anyone reads; sharing needs an account)
+
+  async communityList(query: CommunityQuery): Promise<{ shares: CommunityShare[]; total: number }> {
+    const size = 50;
+    const token = this.session ? await this.token().catch(() => undefined) : undefined;
+    const { status, data } = await this.request('/rest/v1/rpc/community_list', {
+      method: 'POST',
+      token,
+      json: { q: query.q?.trim() || null, steam: query.steam || null, exe: query.exe || null, mine: Boolean(query.mine && token), lim: size, off: (query.page ?? 0) * size },
+    });
+    if (status >= 400) throw new Error(String((data as Json).message ?? `社区加载失败（${status}）`));
+    const rows = (Array.isArray(data) ? data : []) as (CommunityShare & { total: number })[];
+    return { shares: rows.map(({ total: _t, ...r }) => r), total: rows.length ? Number(rows[0].total) : 0 };
+  }
+
+  async communityShare(args: { title: string; description: string; code: string }): Promise<void> {
+    const title = args.title.trim();
+    if (!title) throw new Error('给这套调色起个名字。');
+    if (title.length > 40) throw new Error('名字最多 40 个字。');
+    if (args.description.length > 300) throw new Error('说明最多 300 个字。');
+    const { game } = decodeGradeCode(args.code);
+    const token = await this.token();
+    const { status, data } = await this.request('/rest/v1/grade_shares', {
+      method: 'POST',
+      token,
+      headers: { Prefer: 'return=minimal' },
+      json: { title, description: args.description.trim(), game_name: game.name, game_exe: game.exe ?? null, steam_app_id: game.steamAppId ?? null, code: args.code.trim() },
+    });
+    if (status >= 400) throw new Error(String(data.message ?? `分享失败（${status}）`));
+  }
+
+  /** The author's own share; an administrator's goes through the admin function. */
+  async communityDelete(id: string, asAdmin = false): Promise<void> {
+    if (asAdmin) {
+      await this.admin({ action: 'deleteShare', id });
+      return;
+    }
+    const token = await this.token();
+    const { status, data } = await this.request(`/rest/v1/grade_shares?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', token });
+    if (status >= 400) throw new Error(String(data.message ?? `删除失败（${status}）`));
+  }
+
+  async communityImported(id: string): Promise<void> {
+    await this.request('/rest/v1/rpc/community_imported', { method: 'POST', json: { share: id } }).catch(() => undefined);
   }
 
   async admin(action: AdminAction): Promise<Json> {

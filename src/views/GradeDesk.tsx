@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { encodeGradeCode, type GradeCodeGame } from '../../electron/shared/gradecode';
+import { api } from '../api';
 import {
   byHue, curveAt, CURVE_CHANNELS, CURVE_STOPS, G, G_CURVE, G_HUE_LIGHT, G_HUE_SAT, G_HUE_SHIFT, GRADE, GRADE_PAGES, GRADE_SLOTS,
   gradeFormat, gradeFromPreset, gradeParse, gradeText, gradeTone, gradeToShader, gradeValueKey, HUE_CENTRES, hueCss, neutralGrade, type GradeValues,
@@ -9,6 +11,8 @@ type CoreValues = Record<string, number | boolean | string>;
 
 interface Props {
   gameName: string;
+  /** The game's facts a grade code carries (name, executable, Steam id). */
+  codeGame: GradeCodeGame;
   values: CoreValues;
   /** Writes through to prism-core.ini (debounced by the caller). */
   set: (patch: CoreValues) => void;
@@ -29,7 +33,7 @@ const WHEELS = [
  * from, the tone curve and hue ring (both draggable), and a live preview that runs the same grade
  * as the game (a WebGL port of look_hlsl.h) on a chart or a screenshot of your own.
  */
-export function GradeDesk({ gameName, values, set, status, onClose }: Props) {
+export function GradeDesk({ gameName, codeGame, values, set, status, onClose }: Props) {
   const slot = Math.max(0, Math.min(GRADE_SLOTS - 1, Math.round(Number(values['prism-core.gradeSlot'] ?? 0)) || 0));
   const grade = useMemo(() => gradeParse(String(values[gradeValueKey(slot)] ?? '')), [values, slot]);
   const [page, setPage] = useState(0);
@@ -70,6 +74,7 @@ export function GradeDesk({ gameName, values, set, status, onClose }: Props) {
             </button>
           ))}
         </div>
+        <ExportShare code={encodeGradeCode(codeGame, grade)} />
         <button className="btn btn-line" onClick={onClose}>完成</button>
       </header>
 
@@ -507,6 +512,70 @@ function Preview({ grade }: { grade: GradeValues }) {
         <span className="grade-tag grade-tag-left">原画</span>
         <span className="grade-tag grade-tag-right">自定义</span>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** The slot's look as a grade code: copied, or shared to the community (with an account). */
+function ExportShare({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (open) api.account.state().then((s) => setSignedIn(s.signedIn)).catch(() => setSignedIn(false));
+  }, [open]);
+  const share = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.community.share({ title, description, code });
+      setNote('已分享到社区，所有人都能看到并一键导入。');
+      setTitle('');
+      setDescription('');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="grade-export">
+      <button className="btn btn-line btn-small" onClick={() => void navigator.clipboard.writeText(code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); })}>
+        {copied ? '已复制调色码' : '导出调色码'}
+      </button>
+      <button className="btn btn-line btn-small" aria-expanded={open} onClick={() => { setOpen(!open); setNote(null); setError(null); }}>分享到社区</button>
+      {open && (
+        <div className="grade-share" role="dialog" aria-label="分享到社区">
+          {signedIn === false ? (
+            <p className="block-text">登录以后才能分享：在左侧栏点"登录"。不登录也可以点"导出调色码"，把码直接发给朋友。</p>
+          ) : (
+            <form className="acct-form" onSubmit={(e) => { e.preventDefault(); void share(); }}>
+              <label className="acct-field">
+                <span className="acct-label">名字</span>
+                <input autoFocus maxLength={40} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：雨夜胶片" />
+              </label>
+              <label className="acct-field">
+                <span className="acct-label">说明（选填）</span>
+                <textarea maxLength={300} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="适合什么场景、调了哪里" />
+              </label>
+              <p className="acct-hint">分享的是当前方案的调色，会标上这个游戏，大家导入时会自动对上。</p>
+              {error && <p className="foot-error" role="alert">{error}</p>}
+              {note && <p className="block-note" role="status">{note}</p>}
+              <div className="acct-row">
+                <button className="btn btn-line btn-small" type="submit" disabled={busy || !title.trim()}>{busy ? '正在分享' : '分享'}</button>
+                <button className="btn btn-line btn-small" type="button" onClick={() => setOpen(false)}>关闭</button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
     </div>
   );
 }
