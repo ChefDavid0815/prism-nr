@@ -69,7 +69,8 @@ int wmain(int argc, wchar_t** argv) {
   GetModuleFileNameW(nullptr, exe, MAX_PATH);
   std::wstring dir = exe;
   dir.resize(dir.find_last_of(L"\\/") + 1);
-  if (!LoadLibraryW((dir + L"prism_nvngx.dll").c_str())) { std::fprintf(stderr, "prism_nvngx.dll did not load (%lu)\n", GetLastError()); return 1; }
+  // PRISM_DEMO_LOADER: Core comes in through a loader beside the exe (dxgi.dll, d3d12.dll), as in a game.
+  if (!std::getenv("PRISM_DEMO_LOADER") && !LoadLibraryW((dir + L"prism_nvngx.dll").c_str())) { std::fprintf(stderr, "prism_nvngx.dll did not load (%lu)\n", GetLastError()); return 1; }
 
   // The adapter with the most video memory (the NVIDIA card on a laptop, not the integrated GPU).
   IDXGIFactory4* pick = nullptr;

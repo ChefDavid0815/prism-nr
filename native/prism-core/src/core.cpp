@@ -6,13 +6,20 @@
 //
 // Stage 1: observe and log only. The picture is not touched.
 #include <windows.h>
+#define PSAPI_VERSION 2
+#include <psapi.h>
 
+#include <array>
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
+
+#include <cstring>
 
 #include "MinHook.h"
 #include "ngx_param.h"
@@ -51,13 +58,17 @@ using CreateFn = ngx::Result (*)(ID3D12GraphicsCommandList*, unsigned, void*, ng
 using EvaluateFn = ngx::Result (*)(ID3D12GraphicsCommandList*, const ngx::Handle*, const void*, void*);
 
 struct Hooked {
-  const char* module;
+  char module[64] = {};
   CreateFn create = nullptr;
   EvaluateFn evaluate = nullptr;
   EvaluateFn evaluateC = nullptr;
 };
-// The NGX core of the driver and the DLSS feature module; each exports the D3D12 API.
-Hooked hooked[] = {{"_nvngx.dll"}, {"nvngx_dlss.dll"}, {"nvngx.dll"}};
+// Every module that exports NGX's D3D12 API: the driver's NGX core (_nvngx.dll), the DLSS feature
+// module, and anything that stands in for them (OptiScaler, another mod's copy). Each is hooked;
+// nested calls (one forwarding into another) count once, at the outermost, so Prism sees the
+// frame the game finally gets, after whichever upscaler ran.
+constexpr size_t kHookSlots = 8;
+Hooked hooked[kHookSlots];
 
 std::mutex featureMutex;
 std::unordered_map<const ngx::Handle*, unsigned> featureOf;
@@ -179,7 +190,7 @@ void Process(ID3D12GraphicsCommandList* list, const ngx::Handle* h, const void* 
   PipelineRecord(c);
 }
 
-template <int I>
+template <size_t I>
 ngx::Result HookCreate(ID3D12GraphicsCommandList* list, unsigned feature, void* p, ngx::Handle** out) {
   ++depth;
   const ngx::Result r = hooked[I].create(list, feature, p, out);
@@ -204,7 +215,7 @@ ngx::Result HookCreate(ID3D12GraphicsCommandList* list, unsigned feature, void* 
   return r;
 }
 
-template <int I, bool C>
+template <size_t I, bool C>
 ngx::Result HookEvaluate(ID3D12GraphicsCommandList* list, const ngx::Handle* h, const void* p, void* cb) {
   const bool outer = depth == 0;
   ++depth;
@@ -217,7 +228,7 @@ ngx::Result HookEvaluate(ID3D12GraphicsCommandList* list, const ngx::Handle* h, 
   return r;
 }
 
-template <int I>
+template <size_t I>
 void HookModule(HMODULE m) {
   auto hook = [&](const char* name, void* detour, void** original) {
     void* target = reinterpret_cast<void*>(GetProcAddress(m, name));
@@ -230,12 +241,11 @@ void HookModule(HMODULE m) {
   hook("NVSDK_NGX_D3D12_EvaluateFeature_C", reinterpret_cast<void*>(&HookEvaluate<I, true>), reinterpret_cast<void**>(&hooked[I].evaluateC));
 }
 
-// Present mode (Present=1): a game without DLSS never creates an upscale, so Core hooks Present on
-// its own once the game has D3D12 and DXGI up (a short-lived device of its own finds the vtables;
-// every device and swap chain of the process shares them).
+// Core hooks Present on its own once the game has D3D12 and DXGI up, whether or not the game ever
+// creates an upscale: the panel opens in menus, in games whose DLSS goes through a module Core did
+// not see, and in present mode (Present=1, games without DLSS). A short-lived device of its own
+// finds the vtables; every device and swap chain of the process shares them.
 DWORD WINAPI PresentWatch(void*) {
-  const std::wstring ini = ModuleDir(nullptr) + L"prism-core.ini";
-  if (!GetPrivateProfileIntW(L"Prism Core", L"Present", 0, ini.c_str())) return 0;
   int seen = 0;
   for (int tick = 0; tick < 20 * 600 && seen < 40; ++tick) {  // up to ten minutes; two seconds after D3D12 and DXGI load
     if (pipelineStarted) return 0;
@@ -248,21 +258,43 @@ DWORD WINAPI PresentWatch(void*) {
   ID3D12Device* dev = nullptr;
   if (!create || FAILED(create(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void**)&dev)) || !dev) { Log("present mode: no D3D12 device to find Present with"); return 0; }
   // Reverse depth: present mode's constant depth of zero reads as far.
-  PipelineInit(ModuleDir(nullptr), 1 << 3, &Log, dev);
+  PipelineInit(ModuleDir(nullptr), -1, &Log, dev);
   dev->Release();
-  Log("present mode: Present hooked without the game's DLSS");
+  Log("Present hooked before any upscale (the panel is ready; present mode %s)",
+      GetPrivateProfileIntW(L"Prism Core", L"Present", 0, (ModuleDir(nullptr) + L"prism-core.ini").c_str()) ? "on" : "off");
   return 0;
 }
 
-// NGX modules load late (when the game initialises DLSS); watch for them.
+template <size_t... I>
+constexpr std::array<void (*)(HMODULE), sizeof...(I)> MakeHookers(std::index_sequence<I...>) { return {&HookModule<I>...}; }
+constexpr auto kHookers = MakeHookers(std::make_index_sequence<kHookSlots>{});
+
+// NGX modules load late (when the game initialises DLSS, or an upscaler mod loads its own): the
+// process's modules are looked through as they come, quickly for ten minutes, then once a second.
 DWORD WINAPI Watch(void*) {
-  bool done[3] = {};
-  for (int tick = 0; tick < 20 * 60 * 10; ++tick) {  // ten minutes
-    if (!done[0]) if (HMODULE m = GetModuleHandleA(hooked[0].module)) { HookModule<0>(m); done[0] = true; }
-    if (!done[1]) if (HMODULE m = GetModuleHandleA(hooked[1].module)) { HookModule<1>(m); done[1] = true; }
-    if (!done[2]) if (HMODULE m = GetModuleHandleA(hooked[2].module)) { HookModule<2>(m); done[2] = true; }
-    if (done[0] && done[1]) break;
-    Sleep(50);
+  std::unordered_set<HMODULE> seen;
+  size_t used = 0;
+  HMODULE self = nullptr;
+  GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&Watch, &self);
+  for (unsigned tick = 0;; ++tick) {
+    HMODULE mods[1024];
+    DWORD bytes = 0;
+    if (EnumProcessModules(GetCurrentProcess(), mods, sizeof mods, &bytes)) {
+      for (DWORD i = 0; i < bytes / sizeof(HMODULE) && i < 1024; ++i) {
+        HMODULE m = mods[i];
+        if (m == self || !seen.insert(m).second) continue;
+        if (!GetProcAddress(m, "NVSDK_NGX_D3D12_EvaluateFeature") || !GetProcAddress(m, "NVSDK_NGX_D3D12_CreateFeature")) continue;
+        char path[MAX_PATH] = {};
+        GetModuleFileNameA(m, path, MAX_PATH);
+        const char* name = std::strrchr(path, '\\') ? std::strrchr(path, '\\') + 1 : path;
+        if (!lstrcmpiA(name, "nvngx_dlssnr.dll")) continue;  // the network Prism itself runs
+        if (used == kHookSlots) { Log("NGX module %s not hooked: no slot left", name); continue; }
+        lstrcpynA(hooked[used].module, name, sizeof hooked[used].module);
+        kHookers[used](m);
+        ++used;
+      }
+    }
+    Sleep(tick < 20 * 60 * 10 ? 50 : 1000);
   }
   return 0;
 }
@@ -273,7 +305,18 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     DisableThreadLibraryCalls(self);
     const std::wstring dir = ModuleDir(self);
-    logFile = _wfopen((dir + L"prism-core.log").c_str(), L"w");
+    // One log per process: a second process from the game's folder (a launcher, a crash reporter)
+    // that loads Core writes prism-core-<exe>.log instead of overwriting the game's.
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring exe = exePath;
+    exe = exe.substr(exe.find_last_of(L"\\/") + 1);
+    std::wstring mutexName = L"Local\\PrismCoreLog-";
+    for (wchar_t c : dir) mutexName += (c == L'\\' || c == L':' || c == L'/') ? L'_' : c;
+    CreateMutexW(nullptr, FALSE, mutexName.substr(0, 240).c_str());
+    const bool second = GetLastError() == ERROR_ALREADY_EXISTS;
+    logFile = _wfopen((dir + (second ? L"prism-core-" + exe + L".log" : std::wstring(L"prism-core.log"))).c_str(), L"w");
+    Log("process %ls (pid %lu)", exe.c_str(), GetCurrentProcessId());
     // Late: the game had already created its renderer and loaded NGX before Core.
     lateLoad = GetModuleHandleW(L"d3d12.dll") && (GetModuleHandleA("_nvngx.dll") || GetModuleHandleA("nvngx_dlss.dll"));
     Log("Prism Core 1.4.0 (Home panel, F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded%s",

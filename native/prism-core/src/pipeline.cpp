@@ -25,7 +25,7 @@ namespace {
 
 LogFn Log = nullptr;
 std::wstring gameDir;
-int gameCreateFlags = 0;
+int gameCreateFlags = 1 << 3;  // the game's DLSS create flags; present mode's constant depth of zero reads as far with reverse depth
 bool failed = false;
 bool enabled = true;
 bool split = false;
@@ -1691,7 +1691,7 @@ void WriteRecording() {
 
 void PipelineInit(const std::wstring& dir, int createFlags, LogFn log, ID3D12Device* dev) {
   gameDir = dir;
-  gameCreateFlags = createFlags;
+  if (createFlags >= 0) gameCreateFlags = createFlags;  // -1: Present hooked early; the game's flags come with its upscale
   Log = log;
   LoadConfig();
   static bool presentHooked = false;

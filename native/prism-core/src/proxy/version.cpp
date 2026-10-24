@@ -21,12 +21,27 @@ FARPROC Real(const char* name) {
 
 using Fn = uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 
+// Target= in prism-core.ini names the game's executable; any other process from the folder that
+// loads this DLL (a launcher, a crash reporter) gets the system DLL only, not Prism Core.
+bool IsTarget(const wchar_t* dir) {
+  wchar_t ini[MAX_PATH], want[MAX_PATH] = {}, exe[MAX_PATH];
+  lstrcpynW(ini, dir, MAX_PATH);
+  lstrcatW(ini, L"prism-core.ini");
+  GetPrivateProfileStringW(L"Prism Core", L"Target", L"", want, MAX_PATH, ini);
+  if (!want[0]) return true;
+  const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  const wchar_t* name = exe;
+  for (DWORD i = 0; i < n; ++i) if (exe[i] == L'\\' || exe[i] == L'/') name = exe + i + 1;
+  return lstrcmpiW(name, want) == 0;
+}
+
 void LoadCore(HMODULE self) {
   wchar_t path[MAX_PATH];
   const DWORD n = GetModuleFileNameW(self, path, MAX_PATH);
   for (DWORD i = n; i > 0; --i) {
     if (path[i - 1] == L'\\' || path[i - 1] == L'/') { path[i] = 0; break; }
   }
+  if (!IsTarget(path)) return;
   lstrcatW(path, L"prism_nvngx.dll");
   LoadLibraryW(path);
 }
