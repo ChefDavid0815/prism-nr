@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { safeStorage } from 'electron';
 import {
-  ACCOUNT_KEY, ACCOUNT_URL, USERNAME_HELP, USERNAME_RULE, normPhone,
+  ACCOUNT_BASES, ACCOUNT_KEY, USERNAME_HELP, USERNAME_RULE, normPhone,
   type AccountPending, type AccountProfile, type AccountState, type AdminAction,
 } from '../shared/account';
 import { log } from './util';
@@ -25,6 +25,8 @@ type Json = Record<string, any>;
 
 export class AccountService {
   private session: Session | null = null;
+  /** The server address in use (the direct one or the mirror), picked by whichever answers first. */
+  private base: Promise<string> | null = null;
   private profile: AccountProfile | null = null;
   private readonly file: string;
 
@@ -46,14 +48,38 @@ export class AccountService {
     }
   }
 
-  private async request(url: string, init: RequestInit & { json?: unknown; token?: string } = {}): Promise<{ status: number; data: Json }> {
+  /** Both addresses at once: the first to answer the health check is used. */
+  private pick(): Promise<string> {
+    if (!this.base) {
+      this.base = new Promise<string>((resolve) => {
+        let left = ACCOUNT_BASES.length;
+        for (const b of ACCOUNT_BASES)
+          fetch(`${b}/auth/v1/health`, { headers: { apikey: ACCOUNT_KEY }, signal: AbortSignal.timeout(6000) })
+            .then((r) => { if (r.ok) resolve(b); else if (--left === 0) resolve(ACCOUNT_BASES[0]); })
+            .catch(() => { if (--left === 0) resolve(ACCOUNT_BASES[0]); });
+      }).then((b) => { log(`account: using ${b}`); return b; });
+    }
+    return this.base;
+  }
+
+  /** A request to the account server (path from /auth, /rest or /functions); on a network failure, once more through the other address. */
+  private async request(pathAndQuery: string, init: RequestInit & { json?: unknown; token?: string } = {}): Promise<{ status: number; data: Json }> {
     const headers: Record<string, string> = { apikey: ACCOUNT_KEY, 'Content-Type': 'application/json', ...(init.headers as Record<string, string>) };
     if (init.token) headers.Authorization = `Bearer ${init.token}`;
+    const send = (base: string) => fetch(base + pathAndQuery, { ...init, headers, body: init.json !== undefined ? JSON.stringify(init.json) : init.body, signal: AbortSignal.timeout(12000) });
     let r: Response;
+    const first = await this.pick();
     try {
-      r = await fetch(url, { ...init, headers, body: init.json !== undefined ? JSON.stringify(init.json) : init.body, signal: AbortSignal.timeout(15000) });
+      r = await send(first);
     } catch {
-      throw new Error('连不上账号服务器，请检查网络后再试。');
+      const other = ACCOUNT_BASES.find((b) => b !== first)!;
+      try {
+        r = await send(other);
+        this.base = Promise.resolve(other);
+        log(`account: ${first} stopped answering; using ${other}`);
+      } catch {
+        throw new Error('连不上账号服务器，请检查网络后再试。');
+      }
     }
     const text = await r.text();
     let data: Json = {};
@@ -66,7 +92,7 @@ export class AccountService {
   }
 
   private async fn(name: string, body: unknown, token?: string): Promise<Json> {
-    const { status, data } = await this.request(`${ACCOUNT_URL}/functions/v1/${name}`, { method: 'POST', json: body, token });
+    const { status, data } = await this.request(`/functions/v1/${name}`, { method: 'POST', json: body, token });
     if (status >= 400 && data.error !== 'unconfirmed') throw new Error(String(data.message ?? `请求失败（${status}）`));
     return { ...data, status };
   }
@@ -85,7 +111,7 @@ export class AccountService {
   private async token(): Promise<string> {
     if (!this.session) throw new Error('请先登录。');
     if (this.session.expires_at - 60 < Date.now() / 1000) {
-      const { status, data } = await this.request(`${ACCOUNT_URL}/auth/v1/token?grant_type=refresh_token`, { method: 'POST', json: { refresh_token: this.session.refresh_token } });
+      const { status, data } = await this.request(`/auth/v1/token?grant_type=refresh_token`, { method: 'POST', json: { refresh_token: this.session.refresh_token } });
       if (status >= 400) {
         this.session = null;
         this.profile = null;
@@ -100,7 +126,7 @@ export class AccountService {
   private async loadProfile(): Promise<AccountProfile | null> {
     if (!this.session) return null;
     const token = await this.token();
-    const { status, data } = await this.request(`${ACCOUNT_URL}/rest/v1/profiles?id=eq.${this.session.user.id}&select=*`, { token });
+    const { status, data } = await this.request(`/rest/v1/profiles?id=eq.${this.session.user.id}&select=*`, { token });
     const row = Array.isArray(data) ? (data as Json[])[0] : null;
     if (status >= 400 || !row) return null;
     this.profile = { id: row.id, username: row.username, phone: row.phone, role: row.role, createdAt: row.created_at, email: this.session.user.email };
@@ -127,8 +153,8 @@ export class AccountService {
   async verify(email: string, code: string): Promise<AccountState> {
     const token = code.replace(/\s/g, '');
     if (!/^\d{6}$/.test(token)) throw new Error('验证码是邮件里的 6 位数字。');
-    let r = await this.request(`${ACCOUNT_URL}/auth/v1/verify`, { method: 'POST', json: { type: 'email', email, token } });
-    if (r.status >= 400) r = await this.request(`${ACCOUNT_URL}/auth/v1/verify`, { method: 'POST', json: { type: 'signup', email, token } });
+    let r = await this.request(`/auth/v1/verify`, { method: 'POST', json: { type: 'email', email, token } });
+    if (r.status >= 400) r = await this.request(`/auth/v1/verify`, { method: 'POST', json: { type: 'signup', email, token } });
     if (r.status >= 400) throw new Error('验证码不对或已过期，请重新发送。');
     this.adopt(r.data);
     this.profile = null;
@@ -149,7 +175,7 @@ export class AccountService {
   }
 
   async signOut(): Promise<void> {
-    if (this.session) await this.request(`${ACCOUNT_URL}/auth/v1/logout`, { method: 'POST', token: this.session.access_token }).catch(() => undefined);
+    if (this.session) await this.request(`/auth/v1/logout`, { method: 'POST', token: this.session.access_token }).catch(() => undefined);
     this.session = null;
     this.profile = null;
     this.save();
@@ -169,7 +195,7 @@ export class AccountService {
       body.phone = p;
     }
     const token = await this.token();
-    const { status, data } = await this.request(`${ACCOUNT_URL}/rest/v1/profiles?id=eq.${this.session!.user.id}`, { method: 'PATCH', json: body, token, headers: { Prefer: 'return=minimal' } });
+    const { status, data } = await this.request(`/rest/v1/profiles?id=eq.${this.session!.user.id}`, { method: 'PATCH', json: body, token, headers: { Prefer: 'return=minimal' } });
     if (status >= 400) {
       if (String(data.code) === '23505') throw new Error(String(data.message ?? '').includes('phone') ? '这个手机号已被其他账号使用。' : '这个用户名已经有人用了。');
       throw new Error(String(data.message ?? `保存失败（${status}）`));

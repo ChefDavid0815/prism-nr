@@ -16,6 +16,11 @@
 - The server is the prism-nr Supabase project: row-level security keeps each profile to its owner
   (the role column cannot be changed by its owner), sign-in by phone or username resolves the
   email server-side (no way to look one up), and failures always read 账号或密码不对.
+- A mirror for mainland China: account.chefzc.dev, a reverse proxy on Vercel's edge (Hong Kong
+  first) in front of the same server, so there is still one set of accounts. The app checks both
+  addresses at start, uses whichever answers first, and moves to the other if one stops answering.
+  Measured from 54 locations (chinaz.com): the mirror averages 52 ms from mainland nodes (Beijing
+  89 ms), the direct address 72 ms (Beijing 331 ms); both resolve without DNS pollution.
 
 ## 1.4.2 — 2026-10-24 · the best path first
 

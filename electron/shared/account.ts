@@ -7,6 +7,13 @@
  */
 
 export const ACCOUNT_URL = 'https://zqcqvjjxxwiurlqwppwb.supabase.co';
+/**
+ * The same server through a mirror on Vercel's edge (account.chefzc.dev, Hong Kong first for users
+ * in mainland China): a reverse proxy, not a copy, so there is one set of accounts. The app uses
+ * whichever answers first and moves to the other when one stops answering.
+ */
+export const ACCOUNT_MIRROR = 'https://account.chefzc.dev';
+export const ACCOUNT_BASES = [ACCOUNT_URL, ACCOUNT_MIRROR];
 export const ACCOUNT_KEY = 'sb_publishable_VYoxuPnb8Y81Ee3Cus0GMg_c_Drcb3z';
 
 export interface AccountProfile {
