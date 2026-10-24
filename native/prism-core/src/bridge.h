@@ -14,6 +14,8 @@ using BridgeLogFn = void (*)(const char* fmt, ...);
 void BridgeInit(const std::wstring& gameDir, BridgeLogFn log);
 // A DX10 or DX11 swap chain's frame, from a Present hook; false (untouched) for any other kind.
 bool BridgeDxgiPresent(IDXGISwapChain* sc);
+// A D3D12 frame was just presented: the bridge stands aside while they come (DX12 first).
+void BridgeNoteD3D12();
 // Hooks Direct3D 9's Present (and Reset, which must see Prism's own video memory released first).
 void BridgeHookD3D9();
 // Hooks DXGI's Present for DX10 / DX11 games where nothing else does (the 32-bit Core).

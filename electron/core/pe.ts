@@ -113,3 +113,37 @@ export function readPe(file: string): PeInfo | null {
     fs.closeSync(fd);
   }
 }
+
+/**
+ * Whether a file holds any of the strings, ASCII or UTF-16, in any letter case: how an engine that
+ * loads its renderer at run time (LoadLibrary("d3d12.dll"), GetProcAddress("D3D12CreateDevice"))
+ * still shows it. Reads in chunks, up to maxBytes.
+ */
+export function fileMentions(file: string, needles: string[], maxBytes = 768 * 1024 * 1024): boolean {
+  const forms: Buffer[] = [];
+  for (const n of needles) for (const v of new Set([n, n.toLowerCase(), n.toUpperCase()])) forms.push(Buffer.from(v, 'latin1'), Buffer.from(v, 'utf16le'));
+  const longest = Math.max(...forms.map((f) => f.length));
+  let fd: number;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch {
+    return false;
+  }
+  try {
+    const chunk = 8 * 1024 * 1024;
+    const buf = Buffer.alloc(chunk + longest);
+    let pos = 0, carry = 0;
+    while (pos < maxBytes) {
+      const n = fs.readSync(fd, buf, carry, chunk, pos);
+      if (n <= 0) break;
+      const view = buf.subarray(0, carry + n);
+      if (forms.some((f) => view.includes(f))) return true;
+      carry = Math.min(longest - 1, view.length);
+      view.copy(buf, 0, view.length - carry);
+      pos += n;
+    }
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
+}

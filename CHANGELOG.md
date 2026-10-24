@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.2 — 2026-10-24 · the best path first
+
+- A game that has DX12 now goes the DX12 way: the best path first, the others only behind it
+  (the game's DLSS, then present mode, then the frame bridge). The analysis finds DX12 where 1.4.1
+  missed it: an executable that imports D3D11 is still searched for a D3D12 renderer in its side
+  DLLs, an engine that loads D3D12 at run time is found by its name in the binary, and of a game's
+  DX11 and DX12 executables (bin\x64 and bin\x64_dx12) the DX12 one is picked. A game that can run
+  either gets both paths, and Core takes whichever the game presents with, D3D12 first: the bridge
+  stands aside while D3D12 frames come. The app suggests choosing DX12 in such a game's settings.
+- Fixed: present mode and the frame bridge failed (the pipeline stopped) when the settings had the
+  asynchronous network on (every 2 frames, the default outside every-frame tiers); they run
+  synchronously now, whatever that setting is.
+
 ## 1.4.1 — 2026-10-24 · any game: DX9 to DX12, 32 and 64-bit, any store
 
 - Any game, wherever it came from: Prism no longer depends on a store. Games added by folder

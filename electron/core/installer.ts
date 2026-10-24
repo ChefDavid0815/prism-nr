@@ -256,17 +256,31 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
   else if (route === 'blocked') blockers.push('这个游戏用不了 Prism Core：它需要 DX12、64 位的游戏。');
   // No DLSS: present mode (64-bit DX12) or the frame bridge (DX9-11, 32-bit), both on the final
   // frame with no history to carry, so the network runs on every frame.
+  // The best path first, the others behind it: the game's DLSS, then present mode (any D3D12 frame),
+  // then the frame bridge (DX9-11). A game that can run either D3D12 or an older API (a setting, a
+  // launcher choice) gets both, and Core takes whichever the game actually presents with, D3D12
+  // first: the bridge stands aside while D3D12 frames come.
   const x86 = analysis.bitness === 'x86';
   const mode = analysis.coreMode ?? (analysis.nativeDlss.present ? 'dlss' : 'present');
-  const presentMode = route === 'prism-core' && mode !== 'dlss' && !x86;
-  const bridge = route === 'prism-core' && (mode === 'bridge' || x86);
+  const apis = analysis.apis ?? [];
+  const unknownApi = !apis.some((a) => a === 'dx12' || a === 'dx11' || a === 'dx10' || a === 'dx9');
+  const older = apis.some((a) => a === 'dx11' || a === 'dx10' || a === 'dx9');
+  const presentMode = route === 'prism-core' && !x86 && mode !== 'dlss' && (apis.includes('dx12') || unknownApi);
+  const bridge = route === 'prism-core' && (x86 || mode === 'bridge' || older || unknownApi);
+  const dx12AndOlder = !x86 && apis.includes('dx12') && older;
   if (presentMode || bridge) {
     values['prism-core.present'] = presentMode;
     values['prism-core.bridge'] = bridge;
-    values['prism-core.cadence'] = '1';
-    values['prism-core.async'] = false;
+    if (mode !== 'dlss') {
+      values['prism-core.cadence'] = '1';
+      values['prism-core.async'] = false;
+    }
+  }
+  if (dx12AndOlder)
+    warnings.push(`这个游戏同时支持 DX12 和 ${apis.filter((a) => a !== 'dx12' && a !== 'vulkan' && a !== 'opengl').map((a) => a.toUpperCase()).join(' / ')}。Prism 两种都装好，游戏用 DX12 时自动走${mode === 'dlss' ? ' DLSS' : '画面递交模式'}（效果最好、损失最小），用老版本时才走画面桥。建议在游戏设置里选 DX12。`);
+  if ((presentMode || bridge) && mode !== 'dlss' && !dx12AndOlder) {
     warnings.push(
-      bridge
+      bridge && !presentMode
         ? '这个游戏用画面桥：每帧画面送到 64 位辅助进程 prism_host.exe 跑网络再送回，界面文字也会经过网络；画面经过内存来回，帧率损失比 DX12 大。游戏内面板只在 DX12 游戏里有，这类游戏在 Prism NR 里调设置，游戏运行中约 1 秒生效。'
         : '这个游戏没有 DLSS，Prism Core 用画面递交模式：处理的是最终画面，界面文字也会经过网络；没有运动矢量，网络每帧重新计算，快速运动时可能有轻微闪烁。',
     );
@@ -321,7 +335,8 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
     manualSteps.push(`在 Steam 库里右键这个游戏 → 属性 → 通用 → 启动选项，填入：${lateLoad.launchOption}`);
     manualSteps.push('正常启动游戏，进入游戏画面后按一次 Home：Prism Core 这时才加载，面板会自动打开。');
   }
-  manualSteps.push(bridge ? '不需要改游戏设置：直接启动游戏，Prism 通过画面桥处理每一帧（第一帧要等辅助进程准备好网络，约 2 秒）。' : presentMode ? '游戏没有 DLSS，不需要改游戏设置：Prism Core 在画面递交时处理。' : '在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。');
+  if (dx12AndOlder) manualSteps.push(mode === 'dlss' ? '在游戏设置里选 DX12 并开启 DLSS（超分、DLAA 或光线重建都可以）。' : '在游戏设置里选 DX12（有的游戏在启动器里选）。');
+  else manualSteps.push(bridge && !presentMode ? '不需要改游戏设置：直接启动游戏，Prism 通过画面桥处理每一帧（第一帧要等辅助进程准备好网络，约 2 秒）。' : presentMode ? '游戏没有 DLSS，不需要改游戏设置：Prism Core 在画面递交时处理。' : '在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。');
   if (plugins.includes('framegen') && values['framegen.mode'] !== 'off') manualSteps.push(`在游戏设置或 NVIDIA App 里开启 ${values['framegen.mode']} 帧生成。`);
   manualSteps.push('游戏里按 F8 开关 Prism Core、F4 分屏对比原画。档位、遍数和强度在这里调，游戏运行中约 1 秒内生效。');
 

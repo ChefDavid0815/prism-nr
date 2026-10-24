@@ -1346,7 +1346,9 @@ void OnPresent(UINT flags) {
 // A DX10 / DX11 swap chain goes to the frame bridge (prism_host.exe runs the network); D3D12 ones
 // to present mode and the panel.
 void PresentFrame(IDXGISwapChain* sc) {
-  if (!BridgeDxgiPresent(sc)) OverlayPresent(sc);
+  if (BridgeDxgiPresent(sc)) return;
+  BridgeNoteD3D12();  // a D3D12 swap chain: the best path serves it, the bridge stands aside
+  OverlayPresent(sc);
 }
 HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* sc, UINT sync, UINT flags) {
   if (presentDepth++ == 0) { OnPresent(flags); if (!(flags & DXGI_PRESENT_TEST)) PresentFrame(sc); }
@@ -1929,7 +1931,7 @@ bool PipelineRecord(const UpscaleCall& c) {
   // A new network priority: rebuild the compute queue between launches.
   static int builtPriority = -1;
   if (computeQueue && builtPriority != netPriority && !inFlight) ReleaseAsync();
-  if (asyncMode && !computeQueue) {
+  if (asyncMode && !computeQueue && !presenting) {  // present mode and the bridge run synchronously
     if (!SetupAsync(c)) return false;
     builtPriority = netPriority;
   }

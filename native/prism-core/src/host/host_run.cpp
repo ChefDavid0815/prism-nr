@@ -27,7 +27,7 @@ void Barrier(ID3D12GraphicsCommandList* l, ID3D12Resource* r, D3D12_RESOURCE_STA
 namespace prism {
 
 int HostRun(unsigned long pid, const std::wstring& dir, LogFn Log) {
-  Log("prism_host 1.4.1 for process %lu", pid);
+  Log("prism_host 1.4.2 for process %lu", pid);
 
   HANDLE game = OpenProcess(SYNCHRONIZE, FALSE, pid);
   wchar_t mName[64], pName[64], dName[64];

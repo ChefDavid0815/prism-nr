@@ -25,6 +25,9 @@ namespace prism {
 namespace {
 
 BridgeLogFn Log = nullptr;
+volatile ULONGLONG lastD3D12 = 0;  // GetTickCount64 of the last D3D12 frame
+// The game presents with D3D12 (present mode or its DLSS serve it): nothing for the bridge.
+bool D3D12Active() { return lastD3D12 && GetTickCount64() - lastD3D12 < 3000; }
 std::wstring gameDir;
 std::mutex bridgeMutex;
 
@@ -299,7 +302,7 @@ ResetEx9Fn realResetEx9 = nullptr;
 
 void Frame9(IDirect3DDevice9* dev, IDirect3DSwapChain9* sc) {
   std::lock_guard<std::mutex> lock(bridgeMutex);
-  if (!Open()) return;
+  if (D3D12Active() || !Open()) return;
   IDirect3DSurface9* bb = nullptr;
   if (sc ? FAILED(sc->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &bb)) : FAILED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) return;
   Present9(dev, bb);
@@ -374,6 +377,11 @@ HRESULT STDMETHODCALLTYPE HkDxgiPresent1(IDXGISwapChain1* sc, UINT sync, UINT fl
 
 }  // namespace
 
+void BridgeNoteD3D12() {
+  if (!lastD3D12 && sh.h) BLOG("bridge: the game presents with D3D12; the bridge stands aside");
+  lastD3D12 = GetTickCount64();
+}
+
 void BridgeInit(const std::wstring& dir, BridgeLogFn log) {
   gameDir = dir;
   Log = log;
@@ -383,12 +391,12 @@ bool BridgeDxgiPresent(IDXGISwapChain* sc) {
   ID3D11Device* dev11 = nullptr;
   ID3D10Device* dev10 = nullptr;
   if (SUCCEEDED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&dev11)) && dev11) {
-    { std::lock_guard<std::mutex> lock(bridgeMutex); if (Open()) Present11(sc, dev11); }
+    { std::lock_guard<std::mutex> lock(bridgeMutex); if (!D3D12Active() && Open()) Present11(sc, dev11); }
     dev11->Release();
     return true;
   }
   if (SUCCEEDED(sc->GetDevice(__uuidof(ID3D10Device), (void**)&dev10)) && dev10) {
-    { std::lock_guard<std::mutex> lock(bridgeMutex); if (Open()) Present10(sc, dev10); }
+    { std::lock_guard<std::mutex> lock(bridgeMutex); if (!D3D12Active() && Open()) Present10(sc, dev10); }
     dev10->Release();
     return true;
   }

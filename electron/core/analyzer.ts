@@ -2,11 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AntiCheatHit, GameAnalysis, GameEntry, GraphicsApi, Route } from '../shared/types';
 import { matchProfile } from '../shared/profiles';
-import { denuvoSections, readPe } from './pe';
+import { denuvoSections, fileMentions, readPe } from './pe';
 import { exists, log, psJson, psQuote, walk } from './util';
 
 /** Bumped when the analysis gains a field or a route, so cached analyses are redone. */
-export const ANALYSIS_SCHEMA = 8;
+export const ANALYSIS_SCHEMA = 9;
 
 // Executables that are never the game itself.
 const NOT_GAME_EXE =
@@ -40,6 +40,10 @@ function apiFromImports(imports: string[]): GraphicsApi[] {
   return [...set];
 }
 
+/** The graphics APIs, best first: what Prism prefers when a game has several. */
+const API_RANK: GraphicsApi[] = ['dx12', 'dx11', 'dx10', 'dx9', 'vulkan', 'opengl'];
+const byRank = (apis: GraphicsApi[]) => [...new Set(apis)].sort((a, b) => API_RANK.indexOf(a) - API_RANK.indexOf(b));
+
 /** Ranks candidate executables: Unreal shipping binaries first, then by size. */
 function pickExe(entry: GameEntry, exes: { file: string; size: number }[]): string[] {
   const scored = exes
@@ -50,6 +54,8 @@ function pickExe(entry: GameEntry, exes: { file: string; size: number }[]): stri
       if (/-win64-shipping\.exe$/.test(base)) score += 40;
       if (/\\binaries\\win64\\/i.test(e.file)) score += 10;
       if (/\\bin\\x64\\/i.test(e.file)) score += 8;
+      // A DX12 build of the game beside a DX11 one (bin\x64_dx12, Game_DX12.exe): the better one first.
+      if (/dx12|d3d12/i.test(path.relative(entry.installDir, e.file))) score += 9;
       if (entry.storeExe && path.resolve(entry.storeExe).toLowerCase() === path.resolve(e.file).toLowerCase()) score += 15;
       const nameTokens = entry.name.toLowerCase().replace(/[^a-z0-9]/g, '');
       if (nameTokens && base.replace(/[^a-z0-9]/g, '').includes(nameTokens.slice(0, 6))) score += 6;
@@ -99,6 +105,10 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
   );
 
   const candidates = pickExe(entry, exes);
+  // Of the leading candidates (the game's executables, not tools), one that imports D3D12 goes first.
+  const lead = candidates.slice(0, 4).filter((c, i) => i === 0 || exes.find((e) => e.file === c)!.size > (exes.find((e) => e.file === candidates[0])!.size) * 0.5);
+  const dx12First = lead.find((c) => readPe(c)?.imports.includes('d3d12.dll'));
+  if (dx12First && dx12First !== candidates[0]) candidates.splice(candidates.indexOf(dx12First), 1), candidates.unshift(dx12First);
   const exe = candidates[0] ?? null;
   const pe = exe ? readPe(exe) : null;
   let apis = pe ? apiFromImports(pe.imports) : [];
@@ -108,8 +118,10 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
     if (info) apis = [...new Set([...apis, ...apiFromImports(info.imports)])];
   }
   const exeDir = exe ? path.dirname(exe) : root;
-  // Renderers often live in a side DLL next to the executable (Northlight, id Tech, custom engines).
-  if (exe && !apis.includes('dx12') && !apis.includes('dx11')) {
+  // Renderers often live in a side DLL next to the executable (Northlight, id Tech, custom engines);
+  // an executable that imports D3D11 may still render with D3D12 through one, so DX12 is looked
+  // for until found.
+  if (exe && !apis.includes('dx12')) {
     try {
       const sideDlls = fs
         .readdirSync(exeDir)
@@ -125,6 +137,9 @@ export async function analyzeGame(entry: GameEntry): Promise<GameAnalysis> {
     // The D3D12 Agility SDK ships as a D3D12 folder beside the executable.
     if (exists(path.join(exeDir, 'D3D12', 'D3D12Core.dll'))) apis = [...new Set<GraphicsApi>([...apis, 'dx12'])];
   }
+  // Engines that load D3D12 at run time (LoadLibrary, GetProcAddress) still name it in the binary.
+  if (exe && !apis.includes('dx12') && fileMentions(exe, ['d3d12.dll', 'D3D12CreateDevice'])) apis = [...apis, 'dx12'];
+  apis = byRank(apis);
   // OpenGL imports on a DX game are usually a launcher dependency; drop them when DX is present.
   if ((apis.includes('dx12') || apis.includes('dx11')) && apis.includes('opengl')) apis = apis.filter((a) => a !== 'opengl');
   // A dxgi-only import with DLSS present is almost always DX12 or DX11.

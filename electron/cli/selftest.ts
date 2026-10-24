@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { coreIni, launchOptionFor, panelLines, pickLoader, setCoreDir, setShaderDir, upgradeCoreInstalls } from '../core/installer';
-import { denuvoSections } from '../core/pe';
+import { denuvoSections, fileMentions } from '../core/pe';
 import { store } from '../core/store';
 import type { InstallRecord } from '../shared/types';
 import { parseVdf } from '../core/scanner';
@@ -107,6 +107,14 @@ async function main(): Promise<void> {
   assert(denuvoSections({ bitness: 'x64', imports: [], isGui: true, sections: ['.text', '.xtext', '.rdata', '.xtls'] }).join(',') === '.xtext,.xtls' &&
     denuvoSections({ bitness: 'x64', imports: [], isGui: true, sections: ['.text', '.rdata', '.detourc', '.xbld'] }).length === 0, 'Denuvo: found by its section names, and only by them');
   assert(launchOptionFor('E:\\Games\\Crimson Desert\\bin64') === '"E:\\Games\\Crimson Desert\\bin64\\PrismLaunch.exe" %command%', 'Late load: the Steam launch option quotes the launcher path');
+  {
+    const f = path.join(os.tmpdir(), 'prism-nr-selftest-mentions.bin');
+    fs.writeFileSync(f, Buffer.concat([Buffer.alloc(9 * 1024 * 1024 - 7, 1), Buffer.from('D3D12.DLL', 'utf16le'), Buffer.alloc(64, 2)]));
+    const g = path.join(os.tmpdir(), 'prism-nr-selftest-mentions2.bin');
+    fs.writeFileSync(g, Buffer.concat([Buffer.from('MZ d3d11.dll '), Buffer.alloc(1024, 3)]));
+    assert(fileMentions(f, ['d3d12.dll', 'D3D12CreateDevice']) && !fileMentions(g, ['d3d12.dll', 'D3D12CreateDevice']),
+      'DX12 first: a renderer loaded at run time is found by name in the binary (UTF-16, any case, across a chunk boundary)');
+  }
   const pl = (i: string[] | undefined, o = {}) => pickLoader(i, o).name;
   assert(pl(['dxgi', 'version', 'd3d12']) === 'version.dll' && pl(['d3d12', 'winmm']) === 'winmm.dll' && pl(['d3d12']) === 'd3d12.dll' && pl([]) === 'dxgi.dll' && pl(undefined) === 'dxgi.dll',
     'Loaders: version.dll first, then what the EXE imports, dxgi.dll when it imports none of them');
