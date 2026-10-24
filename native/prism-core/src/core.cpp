@@ -20,9 +20,11 @@
 #include <utility>
 
 #include <cstring>
+#include <cwchar>
 
 #include "MinHook.h"
 #include "ngx_param.h"
+#include "bridge.h"
 #include "pipeline.h"
 
 namespace {
@@ -241,18 +243,20 @@ void HookModule(HMODULE m) {
   hook("NVSDK_NGX_D3D12_EvaluateFeature_C", reinterpret_cast<void*>(&HookEvaluate<I, true>), reinterpret_cast<void**>(&hooked[I].evaluateC));
 }
 
-// Core hooks Present on its own once the game has D3D12 and DXGI up, whether or not the game ever
+// Core hooks Present on its own once the game's graphics API is up, whether or not the game ever
 // creates an upscale: the panel opens in menus, in games whose DLSS goes through a module Core did
 // not see, and in present mode (Present=1, games without DLSS). A short-lived device of its own
-// finds the vtables; every device and swap chain of the process shares them.
+// finds the vtables; every device and swap chain of the process shares them. DX9, DX10 and DX11
+// games go through the frame bridge (bridge.cpp): prism_host.exe runs the network for them.
 DWORD WINAPI PresentWatch(void*) {
-  int seen = 0;
-  for (int tick = 0; tick < 20 * 600 && seen < 40; ++tick) {  // up to ten minutes; two seconds after D3D12 and DXGI load
+  // Core itself imports d3d12.dll and dxgi.dll, so they are always there: two seconds after load.
+  // DX10 / DX11 swap chains share D3D12's Present, so this one hook serves them too (they go on
+  // to the bridge); Direct3D 9 is watched for in Watch.
+  for (int tick = 0; tick < 40; ++tick) {
     if (pipelineStarted) return 0;
-    if (GetModuleHandleW(L"d3d12.dll") && GetModuleHandleW(L"dxgi.dll")) ++seen;
     Sleep(50);
   }
-  if (pipelineStarted || seen < 40) return 0;
+  if (pipelineStarted) return 0;
   using CreateDeviceFn = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
   auto create = (CreateDeviceFn)(void*)GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12CreateDevice");
   ID3D12Device* dev = nullptr;
@@ -294,6 +298,9 @@ DWORD WINAPI Watch(void*) {
         ++used;
       }
     }
+    // Direct3D 9: its Present goes to the frame bridge (prism_host.exe runs the network).
+    static bool d3d9 = false;
+    if (!d3d9 && GetModuleHandleW(L"d3d9.dll")) { d3d9 = true; BridgeHookD3D9(); }
     Sleep(tick < 20 * 60 * 10 ? 50 : 1000);
   }
   return 0;
@@ -301,10 +308,23 @@ DWORD WINAPI Watch(void*) {
 
 }  // namespace
 
+// prism_host.exe calls this (the frame bridge's 64-bit side), with Core loaded into the host.
+extern "C" __declspec(dllexport) int PrismHostRun(unsigned long pid) { return HostRun(pid, ModuleDir(nullptr), &Log); }
+
 BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     DisableThreadLibraryCalls(self);
     const std::wstring dir = ModuleDir(self);
+    // Inside prism_host.exe: only the host loop runs (PrismHostRun); no hooks, no watchers.
+    {
+      wchar_t hostExe[MAX_PATH] = {};
+      GetModuleFileNameW(nullptr, hostExe, MAX_PATH);
+      const wchar_t* base = std::wcsrchr(hostExe, L'\\') ? std::wcsrchr(hostExe, L'\\') + 1 : hostExe;
+      if (!lstrcmpiW(base, L"prism_host.exe")) {
+        logFile = _wfopen((dir + L"prism-host.log").c_str(), L"w");
+        return TRUE;
+      }
+    }
     // One log per process: a second process from the game's folder (a launcher, a crash reporter)
     // that loads Core writes prism-core-<exe>.log instead of overwriting the game's.
     wchar_t exePath[MAX_PATH] = {};
@@ -319,9 +339,10 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
     Log("process %ls (pid %lu)", exe.c_str(), GetCurrentProcessId());
     // Late: the game had already created its renderer and loaded NGX before Core.
     lateLoad = GetModuleHandleW(L"d3d12.dll") && (GetModuleHandleA("_nvngx.dll") || GetModuleHandleA("nvngx_dlss.dll"));
-    Log("Prism Core 1.4.0 (Home panel, F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded%s",
+    Log("Prism Core 1.4.1 (Home panel, F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded%s",
         lateLoad ? " late, into a running game" : "");
     if (MH_Initialize() != MH_OK) { Log("MinHook init failed"); return TRUE; }
+    BridgeInit(ModuleDir(nullptr), &Log);
     CloseHandle(CreateThread(nullptr, 0, Watch, nullptr, 0, nullptr));
     CloseHandle(CreateThread(nullptr, 0, PresentWatch, nullptr, 0, nullptr));
   }

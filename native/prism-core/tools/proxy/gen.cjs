@@ -1,16 +1,21 @@
-// Generates Prism Core's loader proxies (dxgi.dll, d3d12.dll, winmm.dll, dinput8.dll): for each, the
-// export list read from the system's own DLL, a .def that exports every name (and ordinal) as a
-// thunk, and the thunks themselves (x64 GAS): each jumps through a table that src/proxy/proxy.cpp
-// fills from the real system DLL at load, so every export keeps its exact signature (floats, any
-// number of arguments) and its behaviour.
-// Usage: node tools/proxy/gen.cjs   (writes build/proxy/<name>.def and <name>_thunks.S)
+// Generates Prism Core's loader proxies: for each, the export list read from the system's own DLL,
+// a .def that exports every name (and ordinal) as a thunk, and the thunks themselves (GAS): each
+// jumps through a table that src/proxy/proxy.cpp fills from the real system DLL at load, so every
+// export keeps its exact signature (floats, any number of arguments, any calling convention) and
+// its behaviour.
+// Usage: node tools/proxy/gen.cjs        64-bit (System32): build/proxy/<name>.def, _thunks.S, _table.inc
+//        node tools/proxy/gen.cjs 32     32-bit (SysWOW64): build/proxy32/... (version.dll too)
 const fs = require('fs');
 const path = require('path');
 
-const NAMES = ['dxgi', 'd3d12', 'winmm', 'dinput8'];
-const sys = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
-const out = path.join(__dirname, '..', '..', 'build', 'proxy');
+const x86 = process.argv[2] === '32';
+const NAMES = x86 ? ['version', 'winmm', 'dinput8', 'dxgi', 'd3d9', 'd3d11'] : ['dxgi', 'd3d12', 'winmm', 'dinput8', 'd3d9', 'd3d11'];
+const sys = path.join(process.env.SystemRoot || 'C:\\Windows', x86 ? 'SysWOW64' : 'System32');
+const out = path.join(__dirname, '..', '..', 'build', x86 ? 'proxy32' : 'proxy');
 fs.mkdirSync(out, { recursive: true });
+// x86 C symbols carry a leading underscore; .def files name them without it.
+const sym = (n) => (x86 ? '_' + n : n);
+const slot = x86 ? 4 : 8;
 
 function exportsOf(file) {
   const b = fs.readFileSync(file);
@@ -47,12 +52,12 @@ for (const n of NAMES) {
   const table = [];
   list.forEach((x, i) => {
     def.push(x.name ? `    ${x.name}=PrismThunk${i} @${x.ordinal}` : `    PrismOrd${x.ordinal}=PrismThunk${i} @${x.ordinal} NONAME`);
-    asm.push(`    .globl PrismThunk${i}`, `PrismThunk${i}:`, `    jmp *PrismReal+${i * 8}(%rip)`);
+    asm.push(`    .globl ${sym('PrismThunk' + i)}`, `${sym('PrismThunk' + i)}:`, x86 ? `    jmp *${sym('PrismReal')}+${i * slot}` : `    jmp *PrismReal+${i * slot}(%rip)`);
     table.push(x.name ? `{"${x.name}", 0}` : `{nullptr, ${x.ordinal}}`);
   });
-  asm.push('    .data', '    .globl PrismReal', '    .p2align 3', 'PrismReal:', `    .fill ${list.length}, 8, 0`);
+  asm.push('    .data', `    .globl ${sym('PrismReal')}`, `    .p2align ${x86 ? 2 : 3}`, `${sym('PrismReal')}:`, `    .fill ${list.length}, ${slot}, 0`);
   fs.writeFileSync(path.join(out, `${n}.def`), def.join('\n') + '\n');
   fs.writeFileSync(path.join(out, `${n}_thunks.S`), asm.join('\n') + '\n');
   fs.writeFileSync(path.join(out, `${n}_table.inc`), `// ${n}.dll exports, in thunk order (name, or ordinal when unnamed)\n` + table.join(',\n') + '\n');
-  console.log(`${n}: ${list.length} exports (${list.filter((x) => !x.name).length} by ordinal only)`);
+  console.log(`${x86 ? 'x86' : 'x64'} ${n}: ${list.length} exports (${list.filter((x) => !x.name).length} by ordinal only)`);
 }

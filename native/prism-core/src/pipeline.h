@@ -32,6 +32,14 @@ void PipelineInit(const std::wstring& gameDir, int createFlags, LogFn log, ID3D1
 // its encoding (0 SDR, 1 scRGB, 2 HDR10).
 bool PresentWanted();
 bool PipelinePresent(ID3D12CommandQueue* q, ID3D12Resource* bb, int mode);
+// Prism on one frame, as present mode does it but whether or not it is on: prism_host.exe runs the
+// frames the bridge (DX9 / DX10 / DX11, 32-bit games) hands it through this. bb is in the COMMON
+// (PRESENT) state before and after.
+bool PipelineFrame(ID3D12CommandQueue* q, ID3D12Resource* bb, int mode);
+// DX10 / DX11 games (no d3d12.dll): Present hooked through a D3D11 probe, for the frame bridge.
+void HookPresentWithoutD3D12(const std::wstring& gameDir, LogFn log);
+// prism_host.exe's loop (host/host_run.cpp): serves the game pid's frame bridge until it exits.
+int HostRun(unsigned long pid, const std::wstring& gameDir, LogFn log);
 // Records Prism's passes for this frame. Returns false (and stays off) after any failure.
 bool PipelineRecord(const UpscaleCall& call);
 

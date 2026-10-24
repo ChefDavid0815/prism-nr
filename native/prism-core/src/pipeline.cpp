@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <d3dcompiler.h>
 #include <dxgi1_2.h>
+#include <d3d11.h>
 
 #include <algorithm>
 #include <atomic>
@@ -17,6 +18,7 @@
 
 #include "MinHook.h"
 #include "look_hlsl.h"
+#include "bridge.h"
 #include "ngx_param.h"
 #include "overlay.h"
 
@@ -1341,14 +1343,19 @@ void OnPresent(UINT flags) {
   std::lock_guard<std::mutex> lock(statsMutex);
   Record(sPresent, NowMs(), 'P');
 }
+// A DX10 / DX11 swap chain goes to the frame bridge (prism_host.exe runs the network); D3D12 ones
+// to present mode and the panel.
+void PresentFrame(IDXGISwapChain* sc) {
+  if (!BridgeDxgiPresent(sc)) OverlayPresent(sc);
+}
 HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* sc, UINT sync, UINT flags) {
-  if (presentDepth++ == 0) { OnPresent(flags); if (!(flags & DXGI_PRESENT_TEST)) OverlayPresent(sc); }
+  if (presentDepth++ == 0) { OnPresent(flags); if (!(flags & DXGI_PRESENT_TEST)) PresentFrame(sc); }
   const HRESULT hr = realPresent(sc, sync, flags);
   --presentDepth;
   return hr;
 }
 HRESULT STDMETHODCALLTYPE HookPresent1(IDXGISwapChain1* sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* pp) {
-  if (presentDepth++ == 0) { OnPresent(flags); if (!(flags & DXGI_PRESENT_TEST)) OverlayPresent(sc); }
+  if (presentDepth++ == 0) { OnPresent(flags); if (!(flags & DXGI_PRESENT_TEST)) PresentFrame(sc); }
   const HRESULT hr = realPresent1(sc, sync, flags, pp);
   --presentDepth;
   return hr;
@@ -1369,9 +1376,20 @@ void SetupPresentHook(ID3D12Device* dev) {
   DXGI_SWAP_CHAIN_DESC1 d = {};
   d.Width = 8; d.Height = 8; d.Format = DXGI_FORMAT_R8G8B8A8_UNORM; d.SampleDesc.Count = 1;
   d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; d.BufferCount = 2; d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-  if (!HookExecuteOnce(dev)) Log("panel: ExecuteCommandLists not hooked");
-  if (wnd && dev && SUCCEEDED(dev->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), (void**)&q)) &&
-      SUCCEEDED(factory->CreateSwapChainForHwnd(q, wnd, &d, nullptr, nullptr, &sc))) {
+  if (dev && !HookExecuteOnce(dev)) Log("panel: ExecuteCommandLists not hooked");
+  // No D3D12 in the game (DX10 / DX11): the probe swap chain comes from a D3D11 device instead.
+  ID3D11Device* dev11 = nullptr;
+  if (!dev) {
+    using Create11Fn = HRESULT(WINAPI*)(IDXGIAdapter*, D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL*, UINT, UINT, ID3D11Device**, D3D_FEATURE_LEVEL*, ID3D11DeviceContext**);
+    wchar_t p11[MAX_PATH];
+    GetSystemDirectoryW(p11, MAX_PATH);
+    lstrcatW(p11, L"\\d3d11.dll");
+    auto create11 = (Create11Fn)(void*)GetProcAddress(LoadLibraryW(p11), "D3D11CreateDevice");
+    if (create11) create11(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &dev11, nullptr, nullptr);
+  }
+  IUnknown* owner = dev ? nullptr : static_cast<IUnknown*>(dev11);
+  if (wnd && (dev ? SUCCEEDED(dev->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), (void**)&q)) : dev11 != nullptr) &&
+      SUCCEEDED(factory->CreateSwapChainForHwnd(dev ? static_cast<IUnknown*>(q) : owner, wnd, &d, nullptr, nullptr, &sc))) {
     void** vt = *reinterpret_cast<void***>(sc);
     const bool ok = MH_CreateHook(vt[8], (void*)&HookPresent, (void**)&realPresent) == MH_OK && MH_EnableHook(vt[8]) == MH_OK &&
                     MH_CreateHook(vt[22], (void*)&HookPresent1, (void**)&realPresent1) == MH_OK && MH_EnableHook(vt[22]) == MH_OK;
@@ -1382,6 +1400,7 @@ void SetupPresentHook(ID3D12Device* dev) {
   }
   if (sc) sc->Release();
   if (q) q->Release();
+  if (dev11) dev11->Release();
   factory->Release();
   if (wnd) DestroyWindow(wnd);
 }
@@ -1688,6 +1707,12 @@ void WriteRecording() {
 }
 
 }  // namespace
+
+void HookPresentWithoutD3D12(const std::wstring& dir, LogFn log) {
+  if (!Log) { gameDir = dir; Log = log; LoadConfig(); }
+  static bool hooked = false;
+  if (!hooked) { hooked = true; SetupPresentHook(nullptr); }
+}
 
 void PipelineInit(const std::wstring& dir, int createFlags, LogFn log, ID3D12Device* dev) {
   gameDir = dir;
@@ -2434,7 +2459,11 @@ bool PresentBuild(ID3D12CommandQueue* q, ID3D12Resource* bb) {
 bool PresentWanted() { return presentMode && !failed && !pres.broken && NowMs() - lastUpscaleMs > 1500.0; }
 
 bool PipelinePresent(ID3D12CommandQueue* q, ID3D12Resource* bb, int mode) {
-  if (!q || !bb || !Log || !PresentWanted()) return false;
+  return PresentWanted() && PipelineFrame(q, bb, mode);
+}
+
+bool PipelineFrame(ID3D12CommandQueue* q, ID3D12Resource* bb, int mode) {
+  if (!q || !bb || !Log || failed || pres.broken) return false;
   const D3D12_RESOURCE_DESC bd = bb->GetDesc();
   if (!pres.dev || UINT(bd.Width) != pres.w || bd.Height != pres.h || bd.Format != pres.fmt)
     if (!PresentBuild(q, bb)) return false;
