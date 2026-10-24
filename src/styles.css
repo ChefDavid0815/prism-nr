@@ -1988,6 +1988,560 @@ button.admin-row::before {
   display: block;
 }
 
+/* ---------------------------------------------------------------- marks: nameplates, seals, avatars */
+/* Drawn from the brand mark: white light into the prism, out as red, yellow, green, blue. */
+.marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  vertical-align: middle;
+}
+.marks-lg {
+  gap: 10px;
+}
+.plate {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 16px;
+  padding: 0 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  isolation: isolate;
+}
+.plate-word {
+  position: relative;
+  z-index: 1;
+  /* The letter-spacing trails after the last letter; pull it back so the word sits centred. */
+  margin-right: -0.16em;
+}
+.plate-lg {
+  height: 22px;
+  padding: 0 9px;
+  gap: 7px;
+  font-size: 11px;
+}
+/* Basic: a hairline frame. */
+.plate-basic {
+  color: #d0d0d0;
+  box-shadow: inset 0 0 0 1px #6e6e6e;
+}
+/* Pro: a white plate with the spectrum along its trailing edge. */
+.plate-pro {
+  color: var(--black);
+  background: var(--white);
+  padding-right: 11px;
+}
+.plate-lg.plate-pro {
+  padding-right: 15px;
+}
+.plate-spectrum {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+}
+.plate-spectrum i {
+  width: 1px;
+  margin-left: 1px;
+}
+.plate-lg .plate-spectrum i {
+  width: 1.5px;
+  margin-left: 1.5px;
+}
+.plate-spectrum i:nth-child(1) { background: var(--blocked); }
+.plate-spectrum i:nth-child(2) { background: var(--caution); }
+.plate-spectrum i:nth-child(3) { background: var(--ready); }
+.plate-spectrum i:nth-child(4) { background: var(--info); }
+/* Ultra: holographic foil. The spectrum drifts under the word and a sheen crosses it now and then. */
+.plate-ultra {
+  color: var(--black);
+  background: linear-gradient(105deg, #ffb2ac 0%, #ffe08a 18%, #a4f0cb 36%, #a9d2ff 54%, #e3c4ff 72%, #ffb2ac 90%, #ffe08a 100%);
+  background-size: 260% 100%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55), 0 0 14px -4px rgba(169, 210, 255, 0.55);
+  animation: holo-drift 7s linear infinite;
+}
+.plate-ultra::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(100deg, transparent 35%, rgba(255, 255, 255, 0.85) 50%, transparent 65%);
+  transform: translateX(-130%);
+  animation: holo-sheen 4.2s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+.plate-glyph {
+  position: relative;
+  z-index: 1;
+  width: 16px;
+  height: 10px;
+  flex: none;
+}
+.plate-lg .plate-glyph {
+  width: 21px;
+  height: 13px;
+}
+@keyframes holo-drift {
+  to { background-position: 260% 0; }
+}
+@keyframes holo-sheen {
+  0%, 55% { transform: translateX(-130%); }
+  85%, 100% { transform: translateX(130%); }
+}
+.seal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.seal svg {
+  height: 13px;
+  width: auto;
+  flex: none;
+}
+.marks-lg .seal svg,
+.shelf-mark .seal svg {
+  height: 18px;
+}
+.seal-contrib svg {
+  fill: var(--ready);
+}
+.seal-contrib svg {
+  height: 11px;
+}
+.marks-lg .seal-contrib svg,
+.shelf-mark .seal-contrib svg {
+  height: 15px;
+}
+.role-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 11px;
+  white-space: nowrap;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+.marks-lg .role-tag {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 13px;
+}
+.role-owner {
+  color: var(--black);
+  background: var(--white);
+  box-shadow: none;
+  font-weight: 700;
+}
+.official-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  margin-right: 8px;
+  padding: 0 6px 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--black);
+  background: var(--white);
+  vertical-align: 2px;
+}
+.official-mark svg {
+  width: 10px;
+  height: 9px;
+}
+.community-item.is-open .official-mark {
+  color: var(--white);
+  background: var(--black);
+}
+.avatar {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  overflow: hidden;
+  isolation: isolate;
+  background: #141414;
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+.avatar img,
+.avatar-mono {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+}
+.avatar img {
+  object-fit: cover;
+  display: block;
+}
+.avatar-mono {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: var(--white);
+  background: #141414;
+}
+/* Ultra wears the spectrum: a ring turning slowly behind the picture. */
+.avatar-ultra {
+  padding: 2px;
+  box-shadow: none;
+}
+.avatar-ultra::before {
+  content: '';
+  position: absolute;
+  inset: -60%;
+  z-index: 0;
+  background: conic-gradient(from 0deg, #ff3b30, #ffc400, #3ddc97, #4da3ff, #c77dff, #ff3b30);
+  animation: ring-turn 6s linear infinite;
+}
+@keyframes ring-turn {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plate-ultra,
+  .plate-ultra::after,
+  .avatar-ultra::before,
+  .idcard-ultra::before {
+    animation: none;
+  }
+  .plate-ultra::after {
+    opacity: 0;
+  }
+}
+.rail-me {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.rail-me > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The identity card at the top of the profile. */
+.idcard {
+  position: relative;
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  max-width: 880px;
+  margin: 0 32px 8px;
+  padding: 28px 0 26px;
+  border-bottom: 1px solid var(--rule);
+}
+.idcard-ultra::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #ff3b30, #ffc400, #3ddc97, #4da3ff, #c77dff, #ff3b30);
+  background-size: 200% 100%;
+  animation: holo-drift 10s linear infinite;
+}
+.idcard-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 4px;
+}
+.idcard-name {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.idcard-name h1 {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.idcard-bio {
+  font-size: 14px;
+  color: #d0d0d0;
+  max-width: 60ch;
+  white-space: pre-wrap;
+}
+.idcard-bio.is-empty {
+  color: var(--grey-2);
+}
+.idcard-meta {
+  font-size: 11px;
+  color: var(--grey);
+}
+.avatar-edit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.acct-bio {
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--white);
+  background: var(--black);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  outline: none;
+  resize: vertical;
+  min-height: 76px;
+  transition: border-color 160ms var(--ease);
+}
+.acct-bio:hover {
+  border-color: var(--grey-2);
+}
+.acct-bio:focus-visible {
+  border-color: var(--white);
+}
+.acct-bio::placeholder {
+  color: var(--grey-2);
+}
+/* Every mark, lit when the account has it. */
+.cabinet {
+  list-style: none;
+  margin-top: 14px;
+  border-top: 1px solid var(--rule);
+}
+.shelf {
+  display: grid;
+  grid-template-columns: 96px 108px minmax(0, 1fr) 52px;
+  gap: 16px;
+  align-items: center;
+  min-height: 52px;
+  border-bottom: 1px solid var(--rule-2);
+  font-size: 13px;
+}
+.shelf-mark {
+  display: flex;
+  align-items: center;
+}
+.shelf:not(.is-on) .shelf-mark {
+  filter: grayscale(1);
+  opacity: 0.32;
+}
+.shelf-name {
+  font-weight: 700;
+}
+.shelf:not(.is-on) .shelf-name {
+  color: var(--grey);
+  font-weight: 400;
+}
+.shelf-text {
+  color: var(--grey);
+  font-size: 12px;
+}
+.shelf-state {
+  font-size: 11px;
+  color: var(--grey-2);
+  text-align: right;
+}
+.shelf.is-on .shelf-state {
+  color: var(--ready);
+}
+.community-tabs {
+  width: 200px;
+  flex: none;
+}
+.community-tabs button {
+  height: 32px;
+  font-size: 12px;
+}
+.community-bar .community-search {
+  max-width: none;
+}
+/* The community's games: a row per game, its Chinese name first. */
+.cgames {
+  margin-top: 8px;
+}
+.cgames + .cgames {
+  margin-top: 28px;
+}
+.cgames-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  height: 32px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--grey);
+  border-bottom: 1px solid var(--rule);
+}
+.cgames-title .mono {
+  color: var(--grey-2);
+}
+.cgame {
+  display: grid;
+  grid-template-columns: 2px minmax(0, 1fr) 150px 96px;
+  gap: 16px;
+  align-items: center;
+  width: 100%;
+  min-height: 58px;
+  padding: 0 4px;
+  text-align: left;
+  border-bottom: 1px solid var(--rule-2);
+  position: relative;
+  isolation: isolate;
+}
+.cgame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--white);
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 320ms var(--ease);
+}
+.cgame:hover {
+  color: var(--black);
+}
+.cgame:hover::before {
+  clip-path: inset(0 0 0 0);
+}
+.cgame:hover .official-mark {
+  color: var(--white);
+  background: var(--black);
+}
+.cgame:hover .dim {
+  color: #444;
+}
+.cgame-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.cgame-name strong {
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cgame-name .dim {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cgame-count {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 12px;
+}
+.cgame-count .official-mark {
+  margin-right: 10px;
+}
+.cgame-imports {
+  font-size: 11px;
+  text-align: right;
+}
+.cgame-head .cgame-back {
+  display: block;
+  margin-bottom: 18px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cgame::before {
+    transition: none;
+  }
+}
+.community-gate .block-text {
+  margin-bottom: 20px;
+}
+.community-gate-go {
+  flex: none;
+  width: 220px;
+}
+.community-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  color: #d0d0d0;
+}
+.community-when {
+  font-size: 11px;
+  white-space: pre;
+}
+.community-author-name {
+  min-width: 4.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.community-item.is-open .community-author .seal-contrib svg {
+  fill: #1a7f55;
+}
+.admin-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.admin-name em {
+  margin-left: 0;
+}
+.admin-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-name em.em-owner {
+  color: var(--black);
+  background: var(--white);
+  border-color: var(--white);
+  font-weight: 700;
+}
+.admin-item.is-open .admin-name em.em-owner {
+  color: var(--white);
+  background: var(--black);
+  border-color: var(--black);
+}
+.admin-marks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule-2);
+}
+.admin-plans {
+  width: 330px;
+  flex: none;
+}
+.admin-plans button {
+  height: 32px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.admin-mark-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.admin-mark-toggle:not(.is-on) .seal {
+  filter: grayscale(1);
+  opacity: 0.4;
+}
+.admin-mark-toggle.is-on {
+  border-color: var(--white);
+}
+
 /* ---------------------------------------------------------------- plugin packs */
 .packs {
   margin-bottom: 24px;
@@ -2253,7 +2807,7 @@ button.admin-row::before {
 }
 .community-row {
   display: grid;
-  grid-template-columns: 2px minmax(0, 1.4fr) 200px minmax(0, 1fr);
+  grid-template-columns: 2px minmax(0, 1.3fr) 180px minmax(0, 1.1fr);
   gap: 16px;
   align-items: center;
   width: 100%;
@@ -2319,8 +2873,10 @@ button.admin-row::before {
 }
 .community-meta {
   display: flex;
-  justify-content: flex-end;
-  gap: 16px;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
   font-size: 12px;
   color: var(--grey);
   white-space: nowrap;

@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useState } from 'react';
-import { showPhone, type AdminStats, type AdminUser } from '../../electron/shared/account';
+import { showPhone, type AccountPlan, type AccountRole, type AdminStats, type AdminUser } from '../../electron/shared/account';
 import { api } from '../api';
 import { TONE_COLOR } from '../lib/fingerprint';
 import { AdminPacks, UserPacks } from './AdminPacks';
+import { Avatar, ContributorMark, FounderSeal, Nameplate, PLAN_NAME } from '../components/Badges';
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
 
 /**
  * The administrator's page: how many accounts there are and how they are doing, every account with
- * a search, and per account a new username, phone or role, disabling, a new password, or deletion.
+ * a search, and per account a new username, phone or role, its nameplate and marks, disabling, a new
+ * password, or deletion. The owner is above every administrator: only the owner appoints
+ * administrators, and nobody else can change the owner's account.
  * Plugin packs and their redeem codes below that. Everything goes through the admin edge function,
  * which checks the role server-side.
  */
-export function AdminView({ selfId }: { selfId: string }) {
+export function AdminView({ selfId, selfRole }: { selfId: string; selfRole: AccountRole }) {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [total, setTotal] = useState(0);
@@ -51,7 +54,7 @@ export function AdminView({ selfId }: { selfId: string }) {
     ['今日新增', stats?.new_today],
     ['7 天新增', stats?.new_7d],
     ['7 天活跃', stats?.active_7d],
-    ['管理员', stats?.admins],
+    ['站长和管理员', stats?.admins],
     ['已停用', stats?.banned],
   ];
 
@@ -90,7 +93,12 @@ export function AdminView({ selfId }: { selfId: string }) {
           {users.map((u) => (
             <div key={u.id} className={`admin-item ${open === u.id ? 'is-open' : ''}`}>
               <button className="admin-row" role="row" aria-expanded={open === u.id} onClick={() => setOpen(open === u.id ? null : u.id)}>
-                <span role="cell" className="admin-name">{u.username}{u.role === 'admin' && <em>管理员</em>}{u.id === selfId && <em>你</em>}</span>
+                <span role="cell" className="admin-name">
+                  <Avatar name={u.username} src={u.avatar} size={22} plan={u.plan} />
+                  <span className="admin-name-text">{u.username}</span>
+                  {u.role !== 'user' && <em className={u.role === 'owner' ? 'em-owner' : ''}>{u.role === 'owner' ? '站长' : '管理员'}</em>}
+                  {u.id === selfId && <em>你</em>}
+                </span>
                 <span role="cell" className="admin-cut">{u.email}</span>
                 <span role="cell" className="mono">{showPhone(u.phone) || '—'}</span>
                 <span role="cell" className="mono">{when(u.created_at)}</span>
@@ -100,7 +108,7 @@ export function AdminView({ selfId }: { selfId: string }) {
                   {u.banned ? '已停用' : u.confirmed ? '正常' : '未验证'}
                 </span>
               </button>
-              {open === u.id && <Editor user={u} self={u.id === selfId} onDone={() => void load()} />}
+              {open === u.id && <Editor user={u} self={u.id === selfId} viewer={selfRole} onDone={() => void load()} />}
             </div>
           ))}
           {!loading && users.length === 0 && <p className="block-note admin-empty">{q ? '没有匹配的账号。' : '还没有账号。'}</p>}
@@ -111,7 +119,7 @@ export function AdminView({ selfId }: { selfId: string }) {
   );
 }
 
-function Editor({ user, self, onDone }: { user: AdminUser; self: boolean; onDone: () => void }) {
+function Editor({ user, self, viewer, onDone }: { user: AdminUser; self: boolean; viewer: AccountRole; onDone: () => void }) {
   const [username, setUsername] = useState(user.username);
   const [phone, setPhone] = useState(showPhone(user.phone));
   const [password, setPassword] = useState('');
@@ -134,6 +142,15 @@ function Editor({ user, self, onDone }: { user: AdminUser; self: boolean; onDone
       setBusy(false);
     }
   };
+  // The owner's account is out of every administrator's reach.
+  if (user.role === 'owner' && !self) {
+    return (
+      <div className="admin-editor">
+        <p className="block-note">这是站长账号：站长高于所有管理员，管理员不能修改、停用或删除它。</p>
+      </div>
+    );
+  }
+  const owner = viewer === 'owner';
   const save = () => act(() => api.account.admin({ action: 'update', id: user.id, ...(username.trim() !== user.username ? { username } : {}), ...(phone.trim() !== showPhone(user.phone) ? { phone: phone.trim() || null } : {}) }), '已保存');
 
   return (
@@ -149,9 +166,11 @@ function Editor({ user, self, onDone }: { user: AdminUser; self: boolean; onDone
         </label>
         <div className="admin-actions">
           <button className="btn btn-line btn-small" disabled={busy || (username.trim() === user.username && phone.trim() === showPhone(user.phone))} onClick={() => void save()}>保存资料</button>
-          <button className="btn btn-line btn-small" disabled={busy || self} onClick={() => void act(() => api.account.admin({ action: 'update', id: user.id, role: user.role === 'admin' ? 'user' : 'admin' }), user.role === 'admin' ? '已取消管理员' : '已设为管理员')}>
-            {user.role === 'admin' ? '取消管理员' : '设为管理员'}
-          </button>
+          {owner && !self && (
+            <button className="btn btn-line btn-small" disabled={busy} onClick={() => void act(() => api.account.admin({ action: 'update', id: user.id, role: user.role === 'admin' ? 'user' : 'admin' }), user.role === 'admin' ? '已取消管理员' : '已设为管理员')}>
+              {user.role === 'admin' ? '取消管理员' : '设为管理员'}
+            </button>
+          )}
           <button className="btn btn-line btn-small" disabled={busy || self} onClick={() => void act(() => api.account.admin({ action: 'ban', id: user.id, banned: !user.banned }), user.banned ? '已恢复' : '已停用')}>
             {user.banned ? '恢复账号' : '停用账号'}
           </button>
@@ -168,8 +187,29 @@ function Editor({ user, self, onDone }: { user: AdminUser; self: boolean; onDone
           </button>
         </div>
       </div>
+      <div className="admin-marks">
+        <span className="acct-label">铭牌和徽章</span>
+        <div className="acct-row">
+          <div className="segmented segmented-4 admin-plans" role="radiogroup" aria-label="铭牌">
+            {(['free', 'basic', 'pro', 'ultra'] as AccountPlan[]).map((pl) => (
+              <button key={pl} role="radio" aria-checked={user.plan === pl} className={user.plan === pl ? 'is-on' : ''} disabled={busy}
+                onClick={() => void act(() => api.account.admin({ action: 'update', id: user.id, plan: pl }), pl === 'free' ? '已取下铭牌' : `已换成 ${PLAN_NAME[pl]} 铭牌`)}>
+                {pl === 'free' ? '无' : <Nameplate plan={pl} />}
+              </button>
+            ))}
+          </div>
+          <button className={`btn btn-line btn-small admin-mark-toggle ${user.founder ? 'is-on' : ''}`} aria-pressed={user.founder} disabled={busy}
+            onClick={() => void act(() => api.account.admin({ action: 'update', id: user.id, founder: !user.founder }), user.founder ? '已取消创始人认证' : '已授予创始人认证')}>
+            <FounderSeal /> 创始人认证
+          </button>
+          <button className={`btn btn-line btn-small admin-mark-toggle ${user.contributor ? 'is-on' : ''}`} aria-pressed={user.contributor} disabled={busy}
+            onClick={() => void act(() => api.account.admin({ action: 'update', id: user.id, contributor: !user.contributor }), user.contributor ? '已取消社区贡献者' : '已授予社区贡献者')}>
+            <ContributorMark /> 社区贡献者
+          </button>
+        </div>
+      </div>
       <UserPacks userId={user.id} />
-      {self && <p className="block-note">这是你自己的账号：不能停用、删除或取消管理员。</p>}
+      {self && <p className="block-note">这是你自己的账号：不能停用、删除，也不能改变自己的身份。</p>}
       {error && <p className="foot-error" role="alert">{error}</p>}
       {note && <p className="block-note" role="status">{note}</p>}
     </div>

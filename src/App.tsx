@@ -14,7 +14,8 @@ import { SettingsView } from './views/SettingsView';
 import { AccountView } from './views/AccountView';
 import { AdminView } from './views/AdminView';
 import { CommunityView } from './views/CommunityView';
-import type { AccountState } from '../electron/shared/account';
+import { isStaff, type AccountState } from '../electron/shared/account';
+import { Avatar } from './components/Badges';
 
 type View = 'library' | 'plugins' | 'history' | 'diagnostics' | 'settings' | 'account' | 'admin' | 'community';
 
@@ -61,7 +62,7 @@ export function App() {
     void scan();
     api.account.state().then(setAccount).catch(() => setAccount({ signedIn: false }));
   }, [scan, refreshInstalls]);
-  const isAdmin = account?.signedIn && account.profile?.role === 'admin';
+  const isAdmin = Boolean(account?.signedIn && isStaff(account.profile?.role));
   useEffect(() => {
     if (view === 'admin' && !isAdmin) setView('account');
   }, [view, isAdmin]);
@@ -79,14 +80,15 @@ export function App() {
   const gpu = system?.primary;
   const readyCount = useMemo(() => Object.values(analyses).filter((a) => coreRoute(a) === 'prism-core').length, [analyses]);
 
-  const nav: { id: View; label: string; count?: string }[] = [
+  const me = account?.signedIn ? account.profile : undefined;
+  const nav: { id: View; label: string; count?: string; face?: boolean }[] = [
     { id: 'library', label: '游戏库', count: String(games.length).padStart(2, '0') },
     { id: 'community', label: '社区' },
     { id: 'plugins', label: '插件', count: String(PLUGINS.filter((p) => p.routes.includes('prism-core')).length).padStart(2, '0') },
     { id: 'history', label: '还原记录', count: String(activeCount).padStart(2, '0') },
     { id: 'diagnostics', label: '诊断' },
     { id: 'settings', label: '设置' },
-    { id: 'account', label: account?.signedIn && account.profile ? account.profile.username : '登录' },
+    { id: 'account', label: me ? me.username : '登录', face: Boolean(me) },
     ...(isAdmin ? [{ id: 'admin' as View, label: '管理' }] : []),
   ];
 
@@ -139,7 +141,14 @@ export function App() {
         <nav className="rail" aria-label="主导航">
           {nav.map((n) => (
             <button key={n.id} className={`rail-item ${view === n.id ? 'is-active' : ''}`} onClick={() => setView(n.id)} aria-current={view === n.id ? 'page' : undefined}>
-              <span>{n.label}</span>
+              {n.face && me ? (
+                <span className="rail-me">
+                  <Avatar name={me.username} src={me.avatar} size={20} plan={me.plan} />
+                  <span>{n.label}</span>
+                </span>
+              ) : (
+                <span>{n.label}</span>
+              )}
               {n.count && <span className="rail-count">{n.count}</span>}
             </button>
           ))}
@@ -167,8 +176,8 @@ export function App() {
           {view === 'diagnostics' && <DiagnosticsView />}
           {view === 'settings' && <SettingsView motion={motion} onMotion={setMotion} />}
           {view === 'account' && <AccountView account={account} onChange={setAccount} />}
-          {view === 'community' && <CommunityView account={account} games={games} analyses={analyses} installs={installs} onImported={refreshInstalls} />}
-          {view === 'admin' && isAdmin && <AdminView selfId={account!.profile!.id} />}
+          {view === 'community' && <CommunityView account={account} games={games} analyses={analyses} installs={installs} onImported={refreshInstalls} onSignIn={() => setView('account')} />}
+          {view === 'admin' && isAdmin && <AdminView selfId={account!.profile!.id} selfRole={account!.profile!.role} />}
         </main>
         <Sweep run={sweep} onDone={() => setSweep(0)} />
       </div>

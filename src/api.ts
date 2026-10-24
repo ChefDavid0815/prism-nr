@@ -1,6 +1,6 @@
 import { PLUGINS, PRESETS, resolveValues } from '../electron/shared/catalog';
 import { matchProfile } from '../electron/shared/profiles';
-import { isRedeemCode, normPhone, normRedeemCode, REDEEM_ALPHABET, type AccountProfile, type AdminCode, type AdminPack, type AdminUser, type AdminUserPack, type CommunityShare } from '../electron/shared/account';
+import { isRedeemCode, normPhone, normRedeemCode, REDEEM_ALPHABET, type AccountPlan, type AccountProfile, type AdminCode, type AdminPack, type AdminUser, type AdminUserPack, type CommunityShare } from '../electron/shared/account';
 import { encodeGradeCode } from '../electron/shared/gradecode';
 import { gradeFromPreset, gradeParse } from '../electron/shared/grade';
 import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PresetId, PrismApi, Route, SystemInfo } from '../electron/shared/types';
@@ -165,28 +165,56 @@ function createPreviewApi(): PrismApi {
   };
 }
 
-/** Community in preview mode: a few shares for the sample library, in memory. */
+/** Community in preview mode: a few shares for the sample library, official ones first, in memory. */
 function previewCommunity(): PrismApi['community'] {
   const day = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
-  const mk = (id: string, title: string, description: string, game: { name: string; exe?: string; steamAppId?: string }, grade: ReturnType<typeof gradeParse>, author: string, imports: number, age: number): CommunityShare =>
-    ({ id, title, description, game_name: game.name, game_exe: game.exe ?? null, steam_app_id: game.steamAppId ?? null, code: encodeGradeCode(game, grade), imports, created_at: day(age), author, own: false });
+  const AUTHORS: Record<string, { id: string; plan: AccountPlan; founder: boolean; contributor: boolean }> = {
+    ChefZC: { id: 'u0', plan: 'ultra', founder: true, contributor: false },
+    晨风: { id: 'u1', plan: 'pro', founder: false, contributor: true },
+    pixel_hunter: { id: 'u2', plan: 'basic', founder: false, contributor: false },
+    retro: { id: 'u5', plan: 'free', founder: false, contributor: false },
+  };
+  const mk = (id: string, title: string, description: string, game: { name: string; exe?: string; steamAppId?: string }, grade: ReturnType<typeof gradeParse>, author: string, imports: number, age: number, official = false): CommunityShare => {
+    const a = AUTHORS[author];
+    return { id, title, description, game_name: game.name, game_exe: game.exe ?? null, steam_app_id: game.steamAppId ?? null, code: encodeGradeCode(game, grade), imports, created_at: day(age), author, own: false, official,
+      author_id: a.id, author_avatar: null, author_plan: a.plan, author_founder: a.founder, author_contributor: a.contributor };
+  };
   const shares: CommunityShare[] = [
+    mk('o1', '野兽派冷光', '混凝土的冷灰配上标志性的红：暗部偏青、整体收一点饱和，只把红色留得浓烈。', { name: 'CONTROL Resonant', exe: 'controlresonant.exe', steamAppId: '3669870' }, gradeParse('Contrast:18,Pivot:-0.20,Highlights:-12,Blacks:-10,Temperature:-12,Saturation:-18,ShadowHue:200,ShadowAmount:25,SatRed:35,Density:30,Vignette:-15'), 'ChefZC', 312, 0, true),
+    mk('o2', '霓虹夜之城', '夜之城的青与品红：暗部染青、亮部带一点品红，霓虹更浓但皮肤基本不动。', { name: 'Cyberpunk 2077', exe: 'cyberpunk2077.exe', steamAppId: '1091500' }, gradeParse('Contrast:20,Pivot:-0.30,Blacks:-8,Tint:6,Saturation:10,Vibrance:20,ShadowHue:195,ShadowAmount:40,HighlightHue:320,HighlightAmount:15,Density:35'), 'ChefZC', 205, 0, true),
+    mk('o3', '黑泽明胶片', '黑白胶片：高反差、纯黑、明显的颗粒和暗角。', { name: "Ghost of Tsushima DIRECTOR'S CUT", steamAppId: '2215430' }, gradeParse('Contrast:30,Saturation:-100,SkinProtect:0,Vignette:-22,Grain:30'), 'ChefZC', 96, 0, true),
     mk('s1', '雨夜胶片', '压暗高光、暗部偏青，霓虹更有层次。适合夜里的城区。', { name: 'Cyberpunk 2077', exe: 'Cyberpunk2077.exe', steamAppId: '1091500' }, gradeParse('Exposure:-0.20,Contrast:30,Highlights:-35,ShadowHue:200,ShadowAmount:60,HighlightHue:40,HighlightAmount:30,Density:40,Grain:15,Vignette:-25'), '晨风', 128, 1),
-    mk('s2', '控制局冷白', '低饱和起点，白色更冷，混凝土的质感更硬。', { name: 'CONTROL Resonant', exe: 'CONTROLResonant.exe' }, gradeFromPreset(2), 'pixel_hunter', 42, 2),
+    mk('s2', '控制局冷白', '低饱和起点，白色更冷，混凝土的质感更硬。', { name: 'CONTROL Resonant', exe: 'CONTROLResonant.exe', steamAppId: '3669870' }, gradeFromPreset(2), 'pixel_hunter', 42, 2),
     mk('s3', '黑神话·暖阳', '提亮中间调、黄绿更鲜，秋天的山更暖。', { name: 'Black Myth: Wukong', exe: 'b1-Win64-Shipping.exe', steamAppId: '2358720' }, gradeParse('Midtones:20,Temperature:18,Vibrance:25,SatYellow:15,SatGreen:12,HueGreen:-6,Sky:30,HighlightTwist:40'), '晨风', 77, 3),
     mk('s4', '赛博老胶片', '整体褪色加颗粒，像 90 年代的录像带。', { name: 'Cyberpunk 2077', exe: 'Cyberpunk2077.exe', steamAppId: '1091500' }, gradeParse('Contrast:-20,Blacks:35,Saturation:-30,Grain:60,Vignette:-40,CurveR5:20,CurveB1:30'), 'retro', 9, 0),
   ];
+  const keyOf = (s: CommunityShare) => s.steam_app_id || 'n:' + s.game_name.trim().toLowerCase();
+  const ZH: Record<string, [string, string[]]> = {
+    '3669870': ['控制：共振', ['共振']], '1091500': ['赛博朋克 2077', ['cp2077', '2077']], '2215430': ['对马岛之魂 导演剪辑版', ['对马岛']], '2358720': ['黑神话：悟空', ['悟空', '黑神话']],
+  };
+  const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9一-龥]/g, '');
   return {
+    games: async (q) => {
+      const byKey = new Map<string, CommunityShare[]>();
+      for (const s of shares) byKey.set(keyOf(s), [...(byKey.get(keyOf(s)) ?? []), s]);
+      const nq = norm(q);
+      const games = [...byKey.entries()].map(([key, list]) => ({
+        key, steam_app_id: list[0].steam_app_id, name_en: list[0].game_name, name_zh: ZH[key]?.[0] ?? '', game_exe: list[0].game_exe,
+        shares: list.length, official: list.filter((s) => s.official).length, imports: list.reduce((n, s) => n + s.imports, 0), latest: list[0].created_at,
+      })).filter((g) => !nq || [g.name_en, g.name_zh, ...(ZH[g.key]?.[1] ?? [])].some((t) => norm(t).includes(nq)))
+        .sort((a, b) => b.official - a.official || b.imports - a.imports);
+      return { games, total: games.length };
+    },
     list: async (query) => {
       const q = (query.q ?? '').toLowerCase();
       const rows = shares.filter((s) => (!q || s.title.toLowerCase().includes(q) || s.game_name.toLowerCase().includes(q) || s.author.toLowerCase().includes(q)) &&
-        (!query.steam && !query.exe ? true : s.steam_app_id === query.steam || (query.exe && s.game_exe?.toLowerCase() === query.exe.toLowerCase())) && (!query.mine || s.own));
+        (!query.steam && !query.exe ? true : s.steam_app_id === query.steam || (query.exe && s.game_exe?.toLowerCase() === query.exe.toLowerCase())) && (!query.mine || s.own) && (!query.official || s.official) && (!query.gkey || keyOf(s) === query.gkey));
       return { shares: rows, total: rows.length };
     },
     share: async ({ title, description, code }) => {
       const { decodeGradeCode } = await import('../electron/shared/gradecode');
       const { game } = decodeGradeCode(code);
-      shares.unshift({ id: 's' + (shares.length + 1), title, description, game_name: game.name, game_exe: game.exe ?? null, steam_app_id: game.steamAppId ?? null, code, imports: 0, created_at: new Date().toISOString(), author: '你', own: true });
+        shares.splice(shares.filter((x) => x.official).length, 0, { id: 's' + (shares.length + 1), title, description, game_name: game.name, game_exe: game.exe ?? null, steam_app_id: game.steamAppId ?? null, code, imports: 0, created_at: new Date().toISOString(), author: '你', own: true, official: false, author_id: 'me', author_avatar: null, author_plan: 'free', author_founder: false, author_contributor: false });
     },
     remove: async (id) => {
       const i = shares.findIndex((s) => s.id === id);
@@ -206,11 +234,11 @@ function previewCommunity(): PrismApi['community'] {
 function previewAccount(): PrismApi['account'] {
   const day = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
   const users: (AdminUser & { password: string })[] = [
-    { id: 'u0', username: 'admin', email: 'admin@prism-nr.local', phone: null, role: 'admin', confirmed: true, banned: false, created_at: day(3), last_sign_in_at: day(0), password: 'admin' },
-    { id: 'u1', username: '晨风', email: 'chenfeng@example.com', phone: '+8613800138000', role: 'user', confirmed: true, banned: false, created_at: day(2), last_sign_in_at: day(0), password: 'password1' },
-    { id: 'u2', username: 'pixel_hunter', email: 'pixel@example.com', phone: '+14155550123', role: 'user', confirmed: true, banned: false, created_at: day(1), last_sign_in_at: day(1), password: 'password1' },
-    { id: 'u3', username: 'user_3f9a21c0', email: 'newbie@example.com', phone: null, role: 'user', confirmed: false, banned: false, created_at: day(0), last_sign_in_at: null, password: 'password1' },
-    { id: 'u4', username: '刷号的', email: 'spam@example.com', phone: null, role: 'user', confirmed: true, banned: true, created_at: day(0), last_sign_in_at: day(0), password: 'password1' },
+    { id: 'u0', username: 'ChefZC', email: 'owner@example.com', phone: null, role: 'owner', confirmed: true, banned: false, created_at: day(3), last_sign_in_at: day(0), password: 'admin', plan: 'ultra', founder: true, contributor: false, avatar: null, bio: 'Prism NR 作者。喜欢把游戏调成电影的样子。' },
+    { id: 'u1', username: '晨风', email: 'chenfeng@example.com', phone: '+8613800138000', role: 'admin', confirmed: true, banned: false, created_at: day(2), last_sign_in_at: day(0), password: 'password1', plan: 'pro', founder: false, contributor: true, avatar: null, bio: '' },
+    { id: 'u2', username: 'pixel_hunter', email: 'pixel@example.com', phone: '+14155550123', role: 'user', confirmed: true, banned: false, created_at: day(1), last_sign_in_at: day(1), password: 'password1', plan: 'basic', founder: false, contributor: false, avatar: null, bio: '' },
+    { id: 'u3', username: 'user_3f9a21c0', email: 'newbie@example.com', phone: null, role: 'user', confirmed: false, banned: false, created_at: day(0), last_sign_in_at: null, password: 'password1', plan: 'free', founder: false, contributor: false, avatar: null, bio: '' },
+    { id: 'u4', username: '刷号的', email: 'spam@example.com', phone: null, role: 'user', confirmed: true, banned: true, created_at: day(0), last_sign_in_at: day(0), password: 'password1', plan: 'free', founder: false, contributor: false, avatar: null, bio: '' },
   ];
   let me: string | null = null;
   const packs: Omit<AdminPack, 'owners' | 'codes' | 'codes_left'>[] = [
@@ -229,7 +257,7 @@ function previewAccount(): PrismApi['account'] {
   ];
   const left = (c: AdminCode) => !c.disabled && c.uses < c.max_uses && (!c.expires_at || Date.parse(c.expires_at) > Date.now());
   const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
-  const profileOf = (u: AdminUser): AccountProfile => ({ id: u.id, username: u.username, email: u.email, phone: u.phone, role: u.role, createdAt: u.created_at });
+  const profileOf = (u: AdminUser): AccountProfile => ({ id: u.id, username: u.username, email: u.email, phone: u.phone, role: u.role, createdAt: u.created_at, bio: u.bio, avatar: u.avatar, plan: u.plan, founder: u.founder, contributor: u.contributor });
   const state = () => {
     const u = users.find((x) => x.id === me);
     return u ? { signedIn: true, profile: profileOf(u) } : { signedIn: false };
@@ -246,7 +274,7 @@ function previewAccount(): PrismApi['account'] {
       if (users.some((u) => u.email === email.toLowerCase())) throw new Error('这个邮箱已经注册过了，请直接登录');
       if (username && users.some((u) => u.username.toLowerCase() === username.toLowerCase())) throw new Error('这个用户名已经有人用了');
       if (password.length < 8) throw new Error('密码至少 8 位');
-      users.push({ id: 'u' + users.length, username: username || 'user_' + Math.random().toString(16).slice(2, 10), email: email.toLowerCase(), phone: phone ? normPhone(phone) : null, role: 'user', confirmed: false, banned: false, created_at: new Date().toISOString(), last_sign_in_at: null, password });
+      users.push({ id: 'u' + users.length, username: username || 'user_' + Math.random().toString(16).slice(2, 10), email: email.toLowerCase(), phone: phone ? normPhone(phone) : null, role: 'user', confirmed: false, banned: false, created_at: new Date().toISOString(), last_sign_in_at: null, password, plan: 'free', founder: false, contributor: false, avatar: null, bio: '' });
       return { needsCode: true, email: email.toLowerCase() };
     },
     verify: async (email, code) => {
@@ -279,6 +307,8 @@ function previewAccount(): PrismApi['account'] {
         u.username = patch.username.trim();
       }
       if (patch.phone !== undefined) u.phone = patch.phone ? normPhone(patch.phone) : null;
+      if (patch.bio !== undefined) u.bio = patch.bio.trim();
+      if (patch.avatar !== undefined) u.avatar = patch.avatar;
       return state();
     },
     packs: async () => {
@@ -355,15 +385,20 @@ function previewAccount(): PrismApi['account'] {
         const rows = users.filter((u) => !q || u.username.toLowerCase().includes(q) || u.email.includes(q) || (u.phone ?? '').includes(q)).map(({ password: _p, ...u }) => u);
         return { users: rows, total: rows.length, page: 0, size: 50 };
       }
+      if (a.action === 'setOfficial' || a.action === 'deleteShare') return { ok: true };
       const u = users.find((x) => x.id === a.id);
       if (!u) throw new Error('缺少账号');
       if (a.action === 'update') {
         if (a.username !== undefined) u.username = a.username;
         if (a.phone !== undefined) u.phone = a.phone ? normPhone(a.phone) : null;
+        if (u.role === 'owner' && u.id !== me) throw new Error('站长账号不能被修改、停用或删除');
         if (a.role !== undefined) {
-          if (u.id === me && a.role !== 'admin') throw new Error('不能取消自己的管理员身份');
+          if (u.id === me) throw new Error('不能改变自己的身份');
           u.role = a.role;
         }
+        if (a.plan !== undefined) u.plan = a.plan;
+        if (a.founder !== undefined) u.founder = a.founder;
+        if (a.contributor !== undefined) u.contributor = a.contributor;
       } else if (a.action === 'ban') {
         if (u.id === me) throw new Error('不能停用自己的账号');
         u.banned = a.banned;

@@ -2,6 +2,23 @@
 
 ## 1.5.0 (experimental) — 2026-10-24 · accounts, grade codes, the community, redeem codes
 
+- The community is organised by game, and for signed-in accounts only. It opens on a search and the
+  games that have looks (those in your library first); the search finds a game by its Chinese or
+  English name or a common nickname (地平线6, fh6, 大表哥, cp2077), punctuation and spaces ignored. A
+  game's page lists its looks, official first.
+- Official looks: fifteen, one for each of fifteen popular games (CONTROL Resonant, Control, Forza
+  Horizon 6, Black Myth: Wukong, Cyberpunk 2077, Red Dead Redemption 2, The Witcher 3, Kingdom Come:
+  Deliverance II, Monster Hunter Wilds, Clair Obscur: Expedition 33, Ghost of Tsushima, The Last of
+  Us Part II, Assassin's Creed Shadows, Alan Wake 2, Oblivion Remastered), designed for each game's
+  look and marked 官方. Staff can mark any share official or take the mark off.
+- Profiles: an avatar (any picture, cropped square and compressed in the app), a bio of up to 160
+  characters, and the account's marks: the founder's seal (the prism with the spectrum leaving
+  it), the community contributor's mark, and a nameplate after the name: Basic (a hairline frame),
+  Pro (a white plate edged with the spectrum) or Ultra (holographic foil with a drifting spectrum
+  and a sheen, and a spectrum ring round the avatar). The profile shows every mark, lit when the
+  account has it. Marks show beside the name on every share. Administrators give them.
+- The owner (站长): one account above every administrator. Only the owner appoints or removes
+  administrators; no administrator can change, disable or delete the owner's account.
 - Plugin packs and redeem codes, the groundwork for packs to come (what is in them, and paying for
   them, come later). The plugins page lists the packs on offer and which this account owns; a
   redeem code (16 letters and digits, XXXX-XXXX-XXXX-XXXX) ties its pack to the account, so it is

@@ -9,9 +9,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { safeStorage } from 'electron';
 import {
-  ACCOUNT_BASES, ACCOUNT_KEY, USERNAME_HELP, USERNAME_RULE, isRedeemCode, normPhone, normRedeemCode,
+  ACCOUNT_BASES, ACCOUNT_KEY, AVATAR_MAX, BIO_MAX, USERNAME_HELP, USERNAME_RULE, isRedeemCode, normPhone, normRedeemCode,
   type AccountPending, type AccountProfile, type AccountState, type AdminAction, type CommunityQuery, type CommunityShare,
-  type Pack, type RedeemResult,
+  type CommunityGame, type Pack, type RedeemResult,
 } from '../shared/account';
 import { decodeGradeCode } from '../shared/gradecode';
 import { log } from './util';
@@ -131,7 +131,10 @@ export class AccountService {
     const { status, data } = await this.request(`/rest/v1/profiles?id=eq.${this.session.user.id}&select=*`, { token });
     const row = Array.isArray(data) ? (data as Json[])[0] : null;
     if (status >= 400 || !row) return null;
-    this.profile = { id: row.id, username: row.username, phone: row.phone, role: row.role, createdAt: row.created_at, email: this.session.user.email };
+    this.profile = {
+      id: row.id, username: row.username, phone: row.phone, role: row.role, createdAt: row.created_at, email: this.session.user.email,
+      bio: row.bio ?? '', avatar: row.avatar ?? null, plan: row.plan ?? 'free', founder: Boolean(row.founder), contributor: Boolean(row.contributor),
+    };
     return this.profile;
   }
 
@@ -183,8 +186,17 @@ export class AccountService {
     this.save();
   }
 
-  async updateProfile(patch: { username?: string; phone?: string | null }): Promise<AccountState> {
+  async updateProfile(patch: { username?: string; phone?: string | null; bio?: string; avatar?: string | null }): Promise<AccountState> {
     const body: Json = {};
+    if (patch.bio !== undefined) {
+      const b = patch.bio.trim();
+      if ([...b].length > BIO_MAX) throw new Error(`简介最多 ${BIO_MAX} 个字。`);
+      body.bio = b;
+    }
+    if (patch.avatar !== undefined) {
+      if (patch.avatar && (!/^data:image\/(webp|png|jpeg);base64,/.test(patch.avatar) || patch.avatar.length > AVATAR_MAX)) throw new Error('头像图片太大或格式不对，请换一张。');
+      body.avatar = patch.avatar;
+    }
     if (patch.username !== undefined) {
       const u = patch.username.trim();
       if (!USERNAME_RULE.test(u)) throw new Error(`用户名要 ${USERNAME_HELP}。`);
@@ -206,19 +218,30 @@ export class AccountService {
     return this.state();
   }
 
-  // ------------------------------------------------------------ the community (anyone reads; sharing needs an account)
+  // ------------------------------------------------------------ the community (signed-in accounts only)
 
   async communityList(query: CommunityQuery): Promise<{ shares: CommunityShare[]; total: number }> {
     const size = 50;
-    const token = this.session ? await this.token().catch(() => undefined) : undefined;
+    if (!this.session) throw new Error('社区需要先登录。');
+    const token = await this.token();
     const { status, data } = await this.request('/rest/v1/rpc/community_list', {
       method: 'POST',
       token,
-      json: { q: query.q?.trim() || null, steam: query.steam || null, exe: query.exe || null, mine: Boolean(query.mine && token), lim: size, off: (query.page ?? 0) * size },
+      json: { q: query.q?.trim() || null, steam: query.steam || null, exe: query.exe || null, mine: Boolean(query.mine), official_only: Boolean(query.official), gkey: query.gkey || null, lim: size, off: (query.page ?? 0) * size },
     });
     if (status >= 400) throw new Error(String((data as Json).message ?? `社区加载失败（${status}）`));
     const rows = (Array.isArray(data) ? data : []) as (CommunityShare & { total: number })[];
     return { shares: rows.map(({ total: _t, ...r }) => r), total: rows.length ? Number(rows[0].total) : 0 };
+  }
+
+  /** The games that have looks; a search finds Chinese and English names and nicknames. */
+  async communityGames(q: string): Promise<{ games: CommunityGame[]; total: number }> {
+    if (!this.session) throw new Error('社区需要先登录。');
+    const token = await this.token();
+    const { status, data } = await this.request('/rest/v1/rpc/community_games', { method: 'POST', token, json: { q: q.trim() || null, lim: 200, off: 0 } });
+    if (status >= 400) throw new Error(String((data as Json).message ?? `社区加载失败（${status}）`));
+    const rows = (Array.isArray(data) ? data : []) as (CommunityGame & { total: number })[];
+    return { games: rows.map(({ total: _t, ...g }) => ({ ...g, shares: Number(g.shares), official: Number(g.official), imports: Number(g.imports) })), total: rows.length ? Number(rows[0].total) : 0 };
   }
 
   async communityShare(args: { title: string; description: string; code: string }): Promise<void> {
@@ -249,7 +272,8 @@ export class AccountService {
   }
 
   async communityImported(id: string): Promise<void> {
-    await this.request('/rest/v1/rpc/community_imported', { method: 'POST', json: { share: id } }).catch(() => undefined);
+    const token = await this.token().catch(() => undefined);
+    if (token) await this.request('/rest/v1/rpc/community_imported', { method: 'POST', token, json: { share: id } }).catch(() => undefined);
   }
 
   // ------------------------------------------------------------ plugin packs (redeem codes now; purchases later)

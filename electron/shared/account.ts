@@ -16,14 +16,34 @@ export const ACCOUNT_MIRROR = 'https://account.chefzc.dev';
 export const ACCOUNT_BASES = [ACCOUNT_URL, ACCOUNT_MIRROR];
 export const ACCOUNT_KEY = 'sb_publishable_VYoxuPnb8Y81Ee3Cus0GMg_c_Drcb3z';
 
-export interface AccountProfile {
+/** owner (站长) is above every administrator. */
+export type AccountRole = 'user' | 'admin' | 'owner';
+/** The nameplate an account shows: none, Basic, Pro, or Ultra. */
+export type AccountPlan = 'free' | 'basic' | 'pro' | 'ultra';
+
+/** What other people see of an account: its face, its nameplate and its marks. */
+export interface AccountBadges {
+  plan: AccountPlan;
+  founder: boolean;
+  contributor: boolean;
+  role: AccountRole;
+}
+
+export interface AccountProfile extends AccountBadges {
   id: string;
   username: string;
   email: string;
   phone: string | null;
-  role: 'user' | 'admin';
+  bio: string;
+  /** A small image as a data URL, or null for the monogram. */
+  avatar: string | null;
   createdAt: string;
 }
+
+export const isStaff = (role: AccountRole | undefined) => role === 'admin' || role === 'owner';
+export const BIO_MAX = 160;
+/** The largest avatar the server takes (its data URL's length). */
+export const AVATAR_MAX = 60000;
 
 export interface AccountState {
   signedIn: boolean;
@@ -43,11 +63,16 @@ export interface AdminUser {
   username: string;
   email: string;
   phone: string | null;
-  role: 'user' | 'admin';
+  role: AccountRole;
   confirmed: boolean;
   banned: boolean;
   created_at: string;
   last_sign_in_at: string | null;
+  plan: AccountPlan;
+  founder: boolean;
+  contributor: boolean;
+  avatar: string | null;
+  bio: string;
 }
 
 export interface AdminStats {
@@ -73,6 +98,13 @@ export interface CommunityShare {
   created_at: string;
   author: string;
   own: boolean;
+  /** One of Prism NR's own looks. */
+  official: boolean;
+  author_id: string;
+  author_avatar: string | null;
+  author_plan: AccountPlan;
+  author_founder: boolean;
+  author_contributor: boolean;
 }
 export interface CommunityQuery {
   q?: string;
@@ -80,7 +112,24 @@ export interface CommunityQuery {
   steam?: string | null;
   exe?: string | null;
   mine?: boolean;
+  official?: boolean;
+  /** Every look of one game (a CommunityGame's key). */
+  gkey?: string;
   page?: number;
+}
+
+/** A game that has looks in the community, with its Chinese and English names. */
+export interface CommunityGame {
+  /** Its Steam app id, or n: and its lower-cased name. */
+  key: string;
+  steam_app_id: string | null;
+  name_en: string;
+  name_zh: string;
+  game_exe: string | null;
+  shares: number;
+  official: number;
+  imports: number;
+  latest: string;
 }
 
 /** A plugin pack as a user sees it: the active ones, and any they own. */
@@ -134,11 +183,12 @@ export interface AdminUserPack {
 export type AdminAction =
   | { action: 'stats' }
   | { action: 'list'; q?: string; page?: number; size?: number }
-  | { action: 'update'; id: string; username?: string; phone?: string | null; role?: 'user' | 'admin' }
+  | { action: 'update'; id: string; username?: string; phone?: string | null; role?: 'user' | 'admin'; plan?: AccountPlan; founder?: boolean; contributor?: boolean }
   | { action: 'ban'; id: string; banned: boolean }
   | { action: 'delete'; id: string }
   | { action: 'password'; id: string; password: string }
   | { action: 'deleteShare'; id: string }
+  | { action: 'setOfficial'; id: string; official: boolean }
   | { action: 'packs' }
   | { action: 'savePack'; pack: string; name: string; description: string; active?: boolean; create?: boolean }
   | { action: 'codes'; pack: string }

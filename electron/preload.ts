@@ -48,6 +48,7 @@ const api: PrismApi = {
   },
   community: {
     list: (query) => call('community.list', query),
+    games: (q) => call('community.games', q),
     share: (args) => call('community.share', args),
     remove: (id, asAdmin) => call('community.remove', id, asAdmin),
     imported: (id) => call('community.imported', id),
