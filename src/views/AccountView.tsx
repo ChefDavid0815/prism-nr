@@ -148,12 +148,12 @@ function Verify({ pending, identifier, password, onChange, onBack }: { pending: 
               <input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
           )}
-          <Field label="验证码" hint="邮件里的 6 位数字">
-            <input className="acct-code mono" autoFocus inputMode="numeric" maxLength={6} autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
+          <Field label="验证码" hint="邮件里的一串数字">
+            <input className="acct-code mono" autoFocus inputMode="numeric" maxLength={10} autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
           </Field>
           {error && <p className="foot-error" role="alert">{error}</p>}
           {note && <p className="block-note" role="status">{note}</p>}
-          <button className="btn btn-primary acct-submit" type="submit" disabled={busy || code.length !== 6 || !email}>{busy ? '请稍候' : '验证并登录'}</button>
+          <button className="btn btn-primary acct-submit" type="submit" disabled={busy || code.length < 6 || !email}>{busy ? '请稍候' : '验证并登录'}</button>
           <div className="acct-row">
             <button type="button" className="btn btn-line btn-small" disabled={busy || cooldown > 0 || !email} onClick={() => void resend()}>
               {cooldown > 0 ? `${cooldown} 秒后可重新发送` : '重新发送验证码'}

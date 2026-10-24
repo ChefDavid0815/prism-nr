@@ -150,10 +150,10 @@ export class AccountService {
     return { needsCode: true, email: r.email };
   }
 
-  /** The 6-digit code from the email; signs in on success. */
+  /** The code from the email (6 to 10 digits, as the project's OTP length says); signs in on success. */
   async verify(email: string, code: string): Promise<AccountState> {
     const token = code.replace(/\s/g, '');
-    if (!/^\d{6}$/.test(token)) throw new Error('验证码是邮件里的 6 位数字。');
+    if (!/^\d{6,10}$/.test(token)) throw new Error('验证码是邮件里的一串数字（6 到 10 位）。');
     let r = await this.request(`/auth/v1/verify`, { method: 'POST', json: { type: 'email', email, token } });
     if (r.status >= 400) r = await this.request(`/auth/v1/verify`, { method: 'POST', json: { type: 'signup', email, token } });
     if (r.status >= 400) throw new Error('验证码不对或已过期，请重新发送。');

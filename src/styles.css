@@ -1845,7 +1845,7 @@ html[data-motion='standard'] .stage {
   color: var(--grey-2);
 }
 .acct-code {
-  width: 180px;
+  width: 240px;
   letter-spacing: 0.4em;
   font-size: 18px !important;
 }
