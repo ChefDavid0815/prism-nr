@@ -1988,6 +1988,246 @@ button.admin-row::before {
   display: block;
 }
 
+/* ---------------------------------------------------------------- plugin packs */
+.packs {
+  margin-bottom: 24px;
+}
+.redeem {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 16px;
+}
+.redeem-field {
+  width: 360px;
+}
+.acct-field .redeem-input {
+  height: 44px;
+  font-size: 17px;
+  letter-spacing: 0.14em;
+}
+.acct-field .redeem-input:disabled {
+  cursor: not-allowed;
+  border-color: var(--rule-2);
+}
+/* One tick per character, lit as it is typed: the field reads as a gauge, like the app's sliders. */
+.redeem-ticks {
+  display: grid;
+  grid-template-columns: repeat(16, 1fr);
+  gap: 3px;
+  height: 6px;
+}
+.redeem-ticks i {
+  background: var(--rule);
+  transition: background 160ms var(--ease);
+}
+.redeem-ticks i:nth-child(4n + 1):not(:first-child) {
+  margin-left: 5px;
+}
+.redeem-ticks i.is-on {
+  background: var(--white);
+}
+.redeem-go {
+  flex: none;
+  height: 44px;
+  margin-top: 24px;
+  padding: 0 28px;
+}
+.btn-primary.redeem-go {
+  font-size: 15px;
+}
+.redeem-note {
+  color: var(--ready);
+}
+.packs-table {
+  margin-top: 24px;
+  border-top: 1px solid var(--rule);
+}
+.packs-row {
+  display: grid;
+  grid-template-columns: 2px 200px minmax(0, 1fr) 190px;
+  gap: 16px;
+  align-items: center;
+  min-height: 52px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--rule-2);
+}
+.packs-head {
+  min-height: 32px;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--grey);
+  border-bottom-color: var(--rule);
+}
+.packs-mark {
+  width: 2px;
+  height: 22px;
+  background: var(--grey-2);
+  transform-origin: bottom;
+}
+.packs-row.is-owned .packs-mark {
+  background: var(--ready);
+}
+/* The pack just redeemed: its mark rises once. */
+.packs-row.is-fresh .packs-mark {
+  animation: pack-rise 640ms var(--ease) both;
+}
+@keyframes pack-rise {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+.packs-state {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.packs-state .mono {
+  font-size: 11px;
+}
+.admin-bar-title {
+  margin: 0;
+}
+.admin-row.packs-admin-row {
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 88px 64px 120px;
+}
+.admin-grid > .acct-field.packs-wide {
+  max-width: none;
+}
+.packs-new {
+  border-top: 1px solid var(--rule);
+  margin-bottom: 16px;
+}
+.packs-sub {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 24px 0 10px;
+}
+.packs-make {
+  display: grid;
+  grid-template-columns: 88px 120px 120px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+.packs-make .btn {
+  height: 38px;
+}
+.packs-made {
+  margin-top: 16px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--white);
+}
+.packs-made strong {
+  font-size: 13px;
+}
+.packs-codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px 20px;
+  margin-top: 12px;
+  list-style: none;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  user-select: all;
+}
+.packs-codes-bar .packs-sub {
+  margin: 0;
+}
+.packs-codes-bar {
+  margin-top: 24px;
+}
+.codes-table {
+  margin-top: 10px;
+  border-top: 1px solid var(--rule);
+}
+.codes-row {
+  display: grid;
+  grid-template-columns: 186px 76px 96px minmax(0, 1fr) 80px 56px;
+  gap: 12px;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 4px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--rule-2);
+}
+.codes-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.codes-row.admin-head {
+  min-height: 30px;
+}
+.codes-note {
+  color: var(--grey);
+}
+.codes-switch {
+  height: 24px;
+  font-size: 12px;
+}
+.codes-more {
+  margin-top: 10px;
+}
+.user-packs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule-2);
+}
+.user-packs-list {
+  list-style: none;
+  font-size: 13px;
+}
+.user-packs-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 180px) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 36px;
+  border-bottom: 1px solid var(--rule-2);
+}
+.user-packs-list .mono {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-packs-pick {
+  height: 28px;
+  min-width: 220px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--white);
+  background: var(--black);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+}
+.user-packs-pick:focus-visible {
+  border-color: var(--white);
+  outline: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .packs-row.is-fresh .packs-mark {
+    animation: none;
+  }
+}
+@media (max-width: 1100px) {
+  .packs-make {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .packs-make-note {
+    grid-column: span 2;
+  }
+}
+
 /* ---------------------------------------------------------------- community */
 .community-paste {
   display: flex;

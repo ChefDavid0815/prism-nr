@@ -1,7 +1,17 @@
 # Changelog
 
-## 1.5.0 (experimental) — 2026-10-24 · accounts, grade codes, the community
+## 1.5.0 (experimental) — 2026-10-24 · accounts, grade codes, the community, redeem codes
 
+- Plugin packs and redeem codes, the groundwork for packs to come (what is in them, and paying for
+  them, come later). The plugins page lists the packs on offer and which this account owns; a
+  redeem code (16 letters and digits, XXXX-XXXX-XXXX-XXXX) ties its pack to the account, so it is
+  there on any PC signed in. Codes are read leniently: any case, any separators, O for 0, I and L
+  for 1. A code can be single-use or shared by many accounts, can expire and can be disabled; an
+  account that owns the pack already does not use a code up; ten wrong codes in an hour pause
+  redeeming for that account. The admin page makes packs, puts them on offer or takes them off
+  (owners keep them), makes codes in batches of up to 500 with a note, shows every code with its
+  uses, and gives a pack to an account or takes it back. Codes are visible to the server and
+  administrators only.
 - Grade codes: the grading desk exports the slot's look as one line of text (PRISM1.…) that
   carries the game it was made for (its name, executable and Steam id) and a checksum, so a code
   cut short in copying is caught. Paste one anywhere in the app to import it.
@@ -13,7 +23,7 @@
   neutral. Anyone may browse and import; sharing needs an account; authors and administrators can
   delete.
 - Accounts, for the first time, and optional: Prism works the same without signing in. Sign up
-  with an email (a 6-digit code goes to it to prove it is real) and a password, optionally a
+  with an email (a code goes to it to prove it is real) and a password, optionally a
   username and a phone number (mainland numbers as typed, other countries with + and the country
   code). Sign in with the email, the phone or the username. Each account has a profile whose
   username and phone its owner can change. The session stays on this PC, encrypted with the

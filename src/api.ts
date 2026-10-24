@@ -1,6 +1,6 @@
 import { PLUGINS, PRESETS, resolveValues } from '../electron/shared/catalog';
 import { matchProfile } from '../electron/shared/profiles';
-import { normPhone, type AccountProfile, type AdminUser, type CommunityShare } from '../electron/shared/account';
+import { isRedeemCode, normPhone, normRedeemCode, REDEEM_ALPHABET, type AccountProfile, type AdminCode, type AdminPack, type AdminUser, type AdminUserPack, type CommunityShare } from '../electron/shared/account';
 import { encodeGradeCode } from '../electron/shared/gradecode';
 import { gradeFromPreset, gradeParse } from '../electron/shared/grade';
 import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PresetId, PrismApi, Route, SystemInfo } from '../electron/shared/types';
@@ -199,7 +199,10 @@ function previewCommunity(): PrismApi['community'] {
   };
 }
 
-/** Accounts in preview mode: in memory, the code is always 123456; sign in as admin / admin to see the admin page. */
+/**
+ * Accounts in preview mode: in memory, the code is always 123456; sign in as admin / admin to see the
+ * admin page. Redeem code TEST-PACK-C0DE-0001 gives the sample pack.
+ */
 function previewAccount(): PrismApi['account'] {
   const day = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
   const users: (AdminUser & { password: string })[] = [
@@ -210,6 +213,21 @@ function previewAccount(): PrismApi['account'] {
     { id: 'u4', username: '刷号的', email: 'spam@example.com', phone: null, role: 'user', confirmed: true, banned: true, created_at: day(0), last_sign_in_at: day(0), password: 'password1' },
   ];
   let me: string | null = null;
+  const packs: Omit<AdminPack, 'owners' | 'codes' | 'codes_left'>[] = [
+    { id: 'cinema', name: '电影感调色包', description: '预留的示例插件包：内容之后再定。', active: true, created_at: day(2) },
+    { id: 'early', name: '早期测试包', description: '给参与测试的群友。', active: false, created_at: day(5) },
+  ];
+  const codes: AdminCode[] = [
+    { code: 'TESTPACKC0DE0001', pack_id: 'cinema', max_uses: 1, uses: 0, expires_at: null, disabled: false, note: '预览用', created_at: day(1) },
+    { code: 'A7K2M9QXR4T8V1WZ', pack_id: 'cinema', max_uses: 1, uses: 1, expires_at: null, disabled: false, note: 'B站抽奖', created_at: day(1) },
+    { code: 'H3N6P0S5Y2B8C4DE', pack_id: 'cinema', max_uses: 50, uses: 12, expires_at: new Date(Date.now() + 20 * 86400000).toISOString(), disabled: false, note: '群内发放', created_at: day(1) },
+    { code: 'K9F1G7J3M5Q2R8ST', pack_id: 'early', max_uses: 1, uses: 0, expires_at: null, disabled: true, note: '', created_at: day(4) },
+  ];
+  const owners: (AdminUserPack & { user: string })[] = [
+    { user: 'u1', pack_id: 'cinema', source: 'code', code: 'A7K2M9QXR4T8V1WZ', created_at: day(1) },
+    { user: 'u2', pack_id: 'early', source: 'admin', code: null, created_at: day(4) },
+  ];
+  const left = (c: AdminCode) => !c.disabled && c.uses < c.max_uses && (!c.expires_at || Date.parse(c.expires_at) > Date.now());
   const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
   const profileOf = (u: AdminUser): AccountProfile => ({ id: u.id, username: u.username, email: u.email, phone: u.phone, role: u.role, createdAt: u.created_at });
   const state = () => {
@@ -263,8 +281,71 @@ function previewAccount(): PrismApi['account'] {
       if (patch.phone !== undefined) u.phone = patch.phone ? normPhone(patch.phone) : null;
       return state();
     },
+    packs: async () => {
+      await delay(200);
+      return packs
+        .map((p) => {
+          const o = owners.find((x) => x.user === me && x.pack_id === p.id);
+          return { id: p.id, name: p.name, description: p.description, owned: Boolean(o), owned_at: o?.created_at ?? null, source: o?.source ?? null };
+        })
+        .filter((p) => p.owned || packs.find((x) => x.id === p.id)!.active)
+        .sort((a, b) => Number(b.owned) - Number(a.owned));
+    },
+    redeem: async (raw) => {
+      await delay(500);
+      if (!me) throw new Error('请先登录。');
+      const code = normRedeemCode(raw);
+      if (!isRedeemCode(code)) throw new Error('兑换码是 16 位字母和数字，形如 ABCD-EFGH-JKMN-PQRS，请检查有没有输错或漏掉。');
+      const c = codes.find((x) => x.code === code);
+      if (!c) throw new Error('没有这个兑换码，请检查有没有输错。');
+      const pack = packs.find((p) => p.id === c.pack_id)!;
+      if (owners.some((o) => o.user === me && o.pack_id === c.pack_id)) return { pack: pack.id, name: pack.name, already: true };
+      if (c.disabled) throw new Error('这个兑换码已经停用了。');
+      if (c.expires_at && Date.parse(c.expires_at) < Date.now()) throw new Error('这个兑换码已经过期了。');
+      if (c.uses >= c.max_uses) throw new Error('这个兑换码已经被用完了。');
+      c.uses++;
+      owners.push({ user: me, pack_id: pack.id, source: 'code', code, created_at: new Date().toISOString() });
+      return { pack: pack.id, name: pack.name, already: false };
+    },
     admin: async (a) => {
       await delay(250);
+      if (a.action === 'packs') {
+        return { packs: packs.map((p) => ({ ...p, owners: owners.filter((o) => o.pack_id === p.id).length, codes: codes.filter((c) => c.pack_id === p.id).length, codes_left: codes.filter((c) => c.pack_id === p.id && left(c)).length })) };
+      }
+      if (a.action === 'savePack') {
+        if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(a.pack)) throw new Error('编号要 2–32 位，只能用小写字母、数字和连字符，以字母或数字开头');
+        const p = packs.find((x) => x.id === a.pack);
+        if (a.create) {
+          if (p) throw new Error('这个编号已经有插件包在用了');
+          packs.push({ id: a.pack, name: a.name, description: a.description, active: a.active ?? true, created_at: new Date().toISOString() });
+        } else if (p) Object.assign(p, { name: a.name, description: a.description, ...(a.active !== undefined ? { active: a.active } : {}) });
+        return { ok: true };
+      }
+      if (a.action === 'codes') return { codes: codes.filter((c) => c.pack_id === a.pack).sort((x, y) => y.created_at.localeCompare(x.created_at)) };
+      if (a.action === 'makeCodes') {
+        const made: string[] = [];
+        for (let i = 0; i < a.count; i++) {
+          const code = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => REDEEM_ALPHABET[b & 31]).join('');
+          made.push(code);
+          codes.push({ code, pack_id: a.pack, max_uses: a.maxUses, uses: 0, expires_at: a.days ? new Date(Date.now() + a.days * 86400000).toISOString() : null, disabled: false, note: a.note, created_at: new Date().toISOString() });
+        }
+        return { codes: made };
+      }
+      if (a.action === 'setCode') {
+        const c = codes.find((x) => x.code === a.code);
+        if (c) c.disabled = a.disabled;
+        return { ok: true };
+      }
+      if (a.action === 'userPacks') return { packs: owners.filter((o) => o.user === a.id).map(({ user: _u, ...o }) => o) };
+      if (a.action === 'grant') {
+        if (!owners.some((o) => o.user === a.id && o.pack_id === a.pack)) owners.push({ user: a.id, pack_id: a.pack, source: 'admin', code: null, created_at: new Date().toISOString() });
+        return { ok: true };
+      }
+      if (a.action === 'revoke') {
+        const i = owners.findIndex((o) => o.user === a.id && o.pack_id === a.pack);
+        if (i >= 0) owners.splice(i, 1);
+        return { ok: true };
+      }
       if (a.action === 'stats') {
         const recent = (d: string | null, n: number) => d && Date.now() - Date.parse(d) < n * 86400000;
         return { stats: { total: users.length, confirmed: users.filter((u) => u.confirmed).length, admins: users.filter((u) => u.role === 'admin').length, banned: users.filter((u) => u.banned).length, new_7d: users.filter((u) => recent(u.created_at, 7)).length, active_7d: users.filter((u) => recent(u.last_sign_in_at, 7)).length, new_today: users.filter((u) => recent(u.created_at, 1)).length } };

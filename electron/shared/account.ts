@@ -83,6 +83,54 @@ export interface CommunityQuery {
   page?: number;
 }
 
+/** A plugin pack as a user sees it: the active ones, and any they own. */
+export interface Pack {
+  id: string;
+  name: string;
+  description: string;
+  owned: boolean;
+  owned_at: string | null;
+  /** How it was got: a redeem code, an administrator, or (later) a purchase. */
+  source: 'code' | 'admin' | 'purchase' | null;
+}
+
+export interface RedeemResult {
+  pack: string;
+  name: string;
+  /** The account had this pack already; the code was not used up. */
+  already: boolean;
+}
+
+export interface AdminPack {
+  id: string;
+  name: string;
+  description: string;
+  active: boolean;
+  created_at: string;
+  owners: number;
+  codes: number;
+  /** Codes that can still be redeemed: not disabled, not used up, not expired. */
+  codes_left: number;
+}
+
+export interface AdminCode {
+  code: string;
+  pack_id: string;
+  max_uses: number;
+  uses: number;
+  expires_at: string | null;
+  disabled: boolean;
+  note: string;
+  created_at: string;
+}
+
+export interface AdminUserPack {
+  pack_id: string;
+  source: 'code' | 'admin' | 'purchase';
+  code: string | null;
+  created_at: string;
+}
+
 export type AdminAction =
   | { action: 'stats' }
   | { action: 'list'; q?: string; page?: number; size?: number }
@@ -90,7 +138,15 @@ export type AdminAction =
   | { action: 'ban'; id: string; banned: boolean }
   | { action: 'delete'; id: string }
   | { action: 'password'; id: string; password: string }
-  | { action: 'deleteShare'; id: string };
+  | { action: 'deleteShare'; id: string }
+  | { action: 'packs' }
+  | { action: 'savePack'; pack: string; name: string; description: string; active?: boolean; create?: boolean }
+  | { action: 'codes'; pack: string }
+  | { action: 'makeCodes'; pack: string; count: number; maxUses: number; days: number | null; note: string }
+  | { action: 'setCode'; code: string; disabled: boolean }
+  | { action: 'userPacks'; id: string }
+  | { action: 'grant'; id: string; pack: string }
+  | { action: 'revoke'; id: string; pack: string };
 
 export const USERNAME_RULE = /^[0-9A-Za-z_一-龥]{2,20}$/;
 export const USERNAME_HELP = '2–20 个字，可以用中文、字母、数字和下划线';
@@ -110,3 +166,24 @@ export function showPhone(e164: string | null | undefined): string {
   const m = e164.match(/^\+86(1\d{2})(\d{4})(\d{4})$/);
   return m ? `+86 ${m[1]} ${m[2]} ${m[3]}` : e164;
 }
+
+/**
+ * Redeem codes: 16 characters of Crockford's base 32 (no I, L, O or U), 80 random bits, shown in
+ * groups of four. What people type is read leniently: any case, any separators, O as 0, I and L as 1,
+ * and an optional PRISM- in front. The server reads them the same way.
+ */
+export const REDEEM_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+export function normRedeemCode(raw: string): string {
+  let c = raw.toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+  if (c.length === 21 && c.startsWith('PR1SM')) c = c.slice(5);
+  return c;
+}
+
+export const isRedeemCode = (c: string) => /^[0-9A-HJKMNP-TV-Z]{16}$/.test(c);
+
+export function showRedeemCode(c: string): string {
+  return c.replace(/(.{4})(?=.)/g, '$1-');
+}
+
+export const PACK_SOURCE: Record<string, string> = { code: '兑换码', admin: '管理员发放', purchase: '购买' };

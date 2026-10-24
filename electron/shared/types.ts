@@ -298,7 +298,7 @@ export interface PlanRequest {
   acceptRisk?: boolean;
 }
 
-import type { AccountPending, AccountState, AdminAction, CommunityQuery, CommunityShare } from './account';
+import type { AccountPending, AccountState, AdminAction, CommunityQuery, CommunityShare, Pack, RedeemResult } from './account';
 
 export interface PrismApi {
   getSystem(): Promise<SystemInfo>;
@@ -336,6 +336,8 @@ export interface PrismApi {
     signOut(): Promise<void>;
     updateProfile(patch: { username?: string; phone?: string | null }): Promise<AccountState>;
     admin(action: AdminAction): Promise<Record<string, any>>;
+    packs(): Promise<Pack[]>;
+    redeem(code: string): Promise<RedeemResult>;
   };
   community: {
     list(query: CommunityQuery): Promise<{ shares: CommunityShare[]; total: number }>;

@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import type { AccountState } from '../../electron/shared/account';
 import { PLUGINS, PRESETS } from '../../electron/shared/catalog';
 import { api } from '../api';
+import { PacksBlock } from './PacksBlock';
 
 const ORIGIN_LABEL = { prism: 'Prism 原生', community: '社区组件', nvidia: 'NVIDIA' };
 
-export function PluginsView() {
+export function PluginsView({ account, onSignIn }: { account: AccountState | null; onSignIn: () => void }) {
   const [open, setOpen] = useState<string | null>('nr-prism-core');
   // Prism Core is the only route since 1.2; the add-on plugins are gone from the app.
   const list = PLUGINS.filter((p) => p.routes.includes('prism-core'));
@@ -15,6 +17,8 @@ export function PluginsView() {
         <h1>插件</h1>
         <p>Prism NR 现在只用自己的 Prism Core：不需要 ReShade，也不用下载任何社区组件。档位、遍数和强度在游戏详情里调。</p>
       </header>
+
+      <PacksBlock account={account} onSignIn={onSignIn} />
 
       <div className="ptable ptable-tiers" role="table" aria-label="Prism Core 档位">
         <div className="ptable-head" role="row">

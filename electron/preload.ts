@@ -43,6 +43,8 @@ const api: PrismApi = {
     signOut: () => call('account.signOut'),
     updateProfile: (patch) => call('account.updateProfile', patch),
     admin: (action) => call('account.admin', action),
+    packs: () => call('account.packs'),
+    redeem: (code) => call('account.redeem', code),
   },
   community: {
     list: (query) => call('community.list', query),

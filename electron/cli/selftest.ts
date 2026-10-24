@@ -13,7 +13,7 @@ import { setIniValue } from '../core/installer';
 import { netScaleFor, netSizeFor, PRESETS, resolveValues, tierLocked, tierOf } from '../shared/catalog';
 import { nrCostFor, planNr } from '../shared/nrplan';
 import { GRADE, gradeFormat, gradeFromPreset, gradeParse, gradeToShader } from '../shared/grade';
-import { ACCOUNT_KEY, normPhone, showPhone, USERNAME_RULE } from '../shared/account';
+import { ACCOUNT_KEY, isRedeemCode, normPhone, normRedeemCode, REDEEM_ALPHABET, showPhone, showRedeemCode, USERNAME_RULE } from '../shared/account';
 import { decodeGradeCode, encodeGradeCode, matchGame } from '../shared/gradecode';
 
 function assert(cond: boolean, msg: string): void {
@@ -122,6 +122,9 @@ async function main(): Promise<void> {
     'Accounts: phone numbers from any country to E.164 (11-digit mainland numbers get +86), shown readably');
   assert(USERNAME_RULE.test('晨风') && USERNAME_RULE.test('pixel_hunter') && !USERNAME_RULE.test('a') && !USERNAME_RULE.test('has space') && !USERNAME_RULE.test('x'.repeat(21)),
     'Accounts: usernames of 2-20 Chinese characters, letters, digits and underscores');
+  assert(normRedeemCode('prism-abcd-efgh-jkmn-pqro') === 'ABCDEFGHJKMNPQR0' && normRedeemCode(' a1b2 c3d4 e5f6 g7hl ') === 'A1B2C3D4E5F6G7H1' && isRedeemCode('ABCDEFGHJKMNPQR0') &&
+    !isRedeemCode('ABCDEFGHJKMNPQRU') && !isRedeemCode('ABCD') && showRedeemCode('ABCDEFGHJKMNPQR0') === 'ABCD-EFGH-JKMN-PQR0' && REDEEM_ALPHABET.length === 32 && !/[ILOU]/.test(REDEEM_ALPHABET),
+    'Plugin packs: redeem codes read leniently (any case and separators, O as 0, I and L as 1, an optional PRISM-), shown in fours');
   assert(/^sb_publishable_/.test(ACCOUNT_KEY), 'Accounts: the app carries only the publishable key, never a service key');
   {
     const g = gradeParse('Contrast:24,Saturation:-34,ShadowHue:200,ShadowAmount:60,CurveB1:25,Grain:15');

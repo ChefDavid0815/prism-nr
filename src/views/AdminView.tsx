@@ -2,13 +2,15 @@ import { useCallback, useEffect, useState } from 'react';
 import { showPhone, type AdminStats, type AdminUser } from '../../electron/shared/account';
 import { api } from '../api';
 import { TONE_COLOR } from '../lib/fingerprint';
+import { AdminPacks, UserPacks } from './AdminPacks';
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
 
 /**
  * The administrator's page: how many accounts there are and how they are doing, every account with
  * a search, and per account a new username, phone or role, disabling, a new password, or deletion.
- * Everything goes through the admin edge function, which checks the role server-side.
+ * Plugin packs and their redeem codes below that. Everything goes through the admin edge function,
+ * which checks the role server-side.
  */
 export function AdminView({ selfId }: { selfId: string }) {
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -104,6 +106,7 @@ export function AdminView({ selfId }: { selfId: string }) {
           {!loading && users.length === 0 && <p className="block-note admin-empty">{q ? '没有匹配的账号。' : '还没有账号。'}</p>}
         </div>
       </section>
+      <AdminPacks />
     </div>
   );
 }
@@ -165,6 +168,7 @@ function Editor({ user, self, onDone }: { user: AdminUser; self: boolean; onDone
           </button>
         </div>
       </div>
+      <UserPacks userId={user.id} />
       {self && <p className="block-note">这是你自己的账号：不能停用、删除或取消管理员。</p>}
       {error && <p className="foot-error" role="alert">{error}</p>}
       {note && <p className="block-note" role="status">{note}</p>}

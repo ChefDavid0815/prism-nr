@@ -9,8 +9,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { safeStorage } from 'electron';
 import {
-  ACCOUNT_BASES, ACCOUNT_KEY, USERNAME_HELP, USERNAME_RULE, normPhone,
+  ACCOUNT_BASES, ACCOUNT_KEY, USERNAME_HELP, USERNAME_RULE, isRedeemCode, normPhone, normRedeemCode,
   type AccountPending, type AccountProfile, type AccountState, type AdminAction, type CommunityQuery, type CommunityShare,
+  type Pack, type RedeemResult,
 } from '../shared/account';
 import { decodeGradeCode } from '../shared/gradecode';
 import { log } from './util';
@@ -249,6 +250,35 @@ export class AccountService {
 
   async communityImported(id: string): Promise<void> {
     await this.request('/rest/v1/rpc/community_imported', { method: 'POST', json: { share: id } }).catch(() => undefined);
+  }
+
+  // ------------------------------------------------------------ plugin packs (redeem codes now; purchases later)
+
+  /** The active packs, and whether this account owns each (signed out: none owned). */
+  async packs(): Promise<Pack[]> {
+    const token = this.session ? await this.token().catch(() => undefined) : undefined;
+    const { status, data } = await this.request('/rest/v1/rpc/pack_list', { method: 'POST', token, json: {} });
+    if (status >= 400) throw new Error(String((data as Json).message ?? `插件包加载失败（${status}）`));
+    return (Array.isArray(data) ? data : []) as Pack[];
+  }
+
+  async redeem(raw: string): Promise<RedeemResult> {
+    const code = normRedeemCode(raw);
+    if (!isRedeemCode(code)) throw new Error('兑换码是 16 位字母和数字，形如 ABCD-EFGH-JKMN-PQRS，请检查有没有输错或漏掉。');
+    const token = await this.token();
+    const { status, data } = await this.request('/rest/v1/rpc/redeem_code', { method: 'POST', token, json: { code } });
+    if (status >= 400) throw new Error(String((data as Json).message ?? `兑换失败（${status}）`));
+    const r = data as Json;
+    const why: Record<string, string> = {
+      auth: '请先登录。',
+      limit: '输错的次数太多，请一小时后再试。',
+      invalid: '没有这个兑换码，请检查有没有输错。',
+      disabled: '这个兑换码已经停用了。',
+      expired: '这个兑换码已经过期了。',
+      used: '这个兑换码已经被用完了。',
+    };
+    if (r.error) throw new Error(why[r.error] ?? `兑换失败（${r.error}）`);
+    return { pack: String(r.pack), name: String(r.name ?? r.pack), already: Boolean(r.already) };
   }
 
   async admin(action: AdminAction): Promise<Json> {
