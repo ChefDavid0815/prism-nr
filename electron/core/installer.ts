@@ -144,7 +144,8 @@ export function coreIni(values: Values, keep: string[] = []): string {
     `Present=${values['prism-core.present'] === true || values['prism-core.present'] === '1' || values['prism-core.present'] === 1 ? 1 : 0}`,
     `Bridge=${values['prism-core.bridge'] === true || values['prism-core.bridge'] === '1' || values['prism-core.bridge'] === 1 ? 1 : 0}`,
     // Loaders load Core only into this executable (not a launcher or crash reporter beside it).
-    ...(values['prism-core.target'] ? [`Target=${String(values['prism-core.target']).replace(/[^\x20-\x7e]/g, '')}`] : []),
+    // An executable name outside ASCII is not written (Core reads the file as ANSI): no filter then.
+    ...(values['prism-core.target'] && /^[\x20-\x7e]+$/.test(String(values['prism-core.target'])) ? [`Target=${values['prism-core.target']}`] : []),
     `Look=${Math.max(0, Math.min(5, Math.round(Number(values['prism-core.look'] ?? 0)) || 0))}`,
     // The custom look's three slots (grade.ts), re-written in canonical form (ASCII).
     ...Array.from({ length: GRADE_SLOTS }, (_, i) => `${i === 0 ? 'Grade' : `Grade${i + 1}`}=${gradeFormat(gradeParse(String(values[gradeValueKey(i)] ?? '')))}`),
@@ -320,7 +321,7 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
     manualSteps.push(`在 Steam 库里右键这个游戏 → 属性 → 通用 → 启动选项，填入：${lateLoad.launchOption}`);
     manualSteps.push('正常启动游戏，进入游戏画面后按一次 Home：Prism Core 这时才加载，面板会自动打开。');
   }
-  manualSteps.push(presentMode ? '游戏没有 DLSS，不需要改游戏设置：Prism Core 在画面递交时处理。' : '在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。');
+  manualSteps.push(bridge ? '不需要改游戏设置：直接启动游戏，Prism 通过画面桥处理每一帧（第一帧要等辅助进程准备好网络，约 2 秒）。' : presentMode ? '游戏没有 DLSS，不需要改游戏设置：Prism Core 在画面递交时处理。' : '在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。');
   if (plugins.includes('framegen') && values['framegen.mode'] !== 'off') manualSteps.push(`在游戏设置或 NVIDIA App 里开启 ${values['framegen.mode']} 帧生成。`);
   manualSteps.push('游戏里按 F8 开关 Prism Core、F4 分屏对比原画。档位、遍数和强度在这里调，游戏运行中约 1 秒内生效。');
 

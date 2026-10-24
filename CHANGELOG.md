@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.4.1 — 2026-10-24 · any game: DX9 to DX12, 32 and 64-bit, any store
+
+- Any game, wherever it came from: Prism no longer depends on a store. Games added by folder
+  install like any other, and late-loading games (Denuvo) get a desktop shortcut that starts them
+  through PrismLaunch.exe, so Steam's launch option is no longer needed.
+- Games without DLSS, and no more DX12 check: 64-bit DX12 games without DLSS use present mode;
+  DX9, DX10, DX11, games whose API is not recognised, and every 32-bit game use the new frame
+  bridge. NVIDIA's network runtime is 64-bit and D3D12 only, so those games hand each presented
+  frame to prism_host.exe, a 64-bit helper that runs Prism's pipeline and hands it back: DX10 / DX11
+  through a staging texture, DX9 through a system-memory surface (Reset is hooked so Prism's own
+  video memory is released first). The copies wait for the GPU, so the frame-rate cost is higher
+  than in DX12, and the game's UI goes through the network with the picture. These games have no
+  in-game panel yet: their settings are changed in the app (live, as before). Verified end to end
+  with test programs (DX9 and DX11, 32 and 64-bit, through the real helper and network); not yet in
+  a game.
+- 32-bit games: a 32-bit Prism Core (the bridge only) and 32-bit loaders; the 64-bit Core sits
+  beside them as prism64_nvngx.dll for the helper.
+- ReShade and OptiScaler are kept: the loader takes a DLL name the game imports that no other mod
+  holds. Only when every such name is taken does the other mod's file move aside, to
+  <name>.prism-chain.dll, and Prism's loader loads it in the system DLL's place, so it keeps
+  working. Rollback puts it back. Prism hooks every module that exports NGX's upscaler API and
+  acts at the outermost call, so with OptiScaler it gets the frame after OptiScaler's upscale.
+- Fixed: in some games loaded through a loader other than version.dll the in-game panel would not
+  open. Core now hooks Present as soon as the game's graphics are up, instead of waiting for the
+  game to create DLSS through a module it watched; and loaders load Core only into the game's own
+  executable (Target=), not into a launcher or crash reporter beside it, each of which writes its
+  own log.
+- New loaders: d3d9.dll and d3d11.dll (both bitnesses).
+
 ## 1.4.0 — 2026-10-23 · a grading desk, games without DLSS, more loaders
 
 - 自定义 (Look=5): a custom look with 66 controls over six pages — tone (exposure, contrast and

@@ -57,6 +57,19 @@ Where the executable does not import `version.dll`, the app uses the first of `w
 loaders in `loaders/` pass every export through to the system's own DLL and load Core the same
 way. A file of another mod by that name is backed up and overwritten, and put back on rollback.
 
+### DX9, DX10, DX11 and 32-bit games: the frame bridge
+
+NVIDIA's network runtime is 64-bit and D3D12 only (and serves only modules named like an NGX one),
+so a game that cannot run it carries the frame bridge (`src/bridge.cpp`): before each Present it
+copies the back buffer into shared memory (DX11 / DX10 through a staging texture, DX9 through
+GetRenderTargetData into a system-memory surface), and `prism_host.exe`, started from the game's
+folder, loads the 64-bit Core and runs Prism's pipeline on it (`src/host/host_run.cpp`,
+`PipelineFrame`), then the result is copied back (DX9 through UpdateSurface and StretchRect; Reset is
+hooked so those default-pool surfaces go first). The copies wait for the GPU. `Bridge=1` turns it
+on in the 64-bit Core (the 32-bit one has nothing else). A 32-bit game gets the 32-bit Core
+(`src/core32.cpp`, the bridge only), a 32-bit loader, `prism_host.exe` and the 64-bit Core as
+`prism64_nvngx.dll`. `tests/bridge_demo.cpp` runs DX9 and DX11, 32 and 64-bit, end to end.
+
 ### Games without DLSS: present mode
 
 `Present=1` runs Core on the frame as the game presents it, for DX12 games with no DLSS of their
@@ -125,6 +138,8 @@ Grade2=          ; slot 2
 Grade3=          ; slot 3
 GradeSlot=0      ; the slot Look=5 uses, 0-2
 Present=0        ; 1: present mode, for games without DLSS (see above)
+Bridge=0         ; 1: the frame bridge (DX9 / DX10 / DX11 games); the 32-bit Core is always on
+Target=game.exe  ; loaders load Core only into this executable (none: any)
 PresentReset=1   ; present mode: the network starts fresh every frame (0 keeps its history)
 KeyOverlay=Home  ; the in-game panel
 SplitPos=0.500   ; where the split view divides the picture, 0.02-0.98 (the panel drags it)
@@ -227,7 +242,8 @@ bash native/prism-core/build.sh
 
 | Path | What |
 |---|---|
-| `src/proxy/` | the loaders: `version.dll`, and `dxgi` / `d3d12` / `winmm` / `dinput8` from `tools/proxy/gen.cjs` |
+| `src/proxy/` | the loaders: `version.dll`, and `dxgi` / `d3d12` / `winmm` / `dinput8` / `d3d9` / `d3d11` (32-bit too) from `tools/proxy/gen.cjs`; `<name>.prism-chain.dll` beside one is loaded in the system DLL's place |
+| `src/bridge.cpp`, `src/core32.cpp`, `src/host/` | the frame bridge, the 32-bit Core and prism_host.exe |
 | `src/core.cpp` | NGX hooks (create / evaluate), feature tracking, logging |
 | `src/pipeline.cpp` | exposure, encode, network (sync and async), carry, bake, fill, guard, compose, recorder |
 | `src/overlay.cpp` | the in-game panel: its D3D12 renderer, DirectWrite glyph atlas, input, layout |

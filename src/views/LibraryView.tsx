@@ -480,7 +480,7 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
         )}
         {error && <p className="foot-error" role="alert">{error}</p>}
         {leftover && !record && (
-          <p className="foot-error" role="status">已还原。请到 Steam 里把这个游戏的启动选项清空（原来填的是 {leftover}），否则 Steam 会找不到启动器、游戏打不开。</p>
+          <p className="foot-error" role="status">已还原，桌面快捷方式也已删除。如果在 Steam 里设置过启动选项，请清空它（原来填的是 {leftover}），否则 Steam 会找不到启动器、游戏打不开。</p>
         )}
         {(justDone || record) && !busy && (
           <div className="ready">
@@ -488,7 +488,13 @@ function Detail({ game, analysis, system, record, progress, onProgress, onPlan, 
               <i style={{ background: TONE_COLOR.ready }} />
               已就绪{record ? `：${recordName}` : ''}
             </p>
+            {record?.shortcut && (
+              <p className="block-text">桌面上的"{record.shortcut.replace(/^.*[\\/]/, '').replace(/\.lnk$/i, '')}"快捷方式会通过 Prism 启动游戏，不需要 Steam。</p>
+            )}
             {(plan?.lateLoad?.launchOption ?? record?.launchOption) && <LaunchOption value={(plan?.lateLoad?.launchOption ?? record?.launchOption)!} />}
+            {(plan?.bridge || record?.values?.['prism-core.bridge'] === true) && (
+              <p className="block-text">这个游戏走画面桥（{plan?.x86 ? '32 位' : '64 位'}），游戏里没有 Prism 面板：设置在这里调，游戏运行中约 1 秒生效。F8 开关、F4 分屏照常可用。</p>
+            )}
             {plan?.manualSteps.length ? (
               <ol className="ready-steps">
                 {plan.manualSteps.map((s) => (

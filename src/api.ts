@@ -32,6 +32,7 @@ function createPreviewApi(): PrismApi {
     { id: 'g9', name: 'Downloads', store: 'manual', installDir: 'C:\\Users\\me\\Downloads' },
     { id: 'g10', name: 'NBA 2K27', store: 'steam', installDir: 'E:\\Steam\\steamapps\\common\\NBA 2K27' },
     { id: 'g11', name: 'Crimson Desert', store: 'steam', installDir: 'E:\\Steam\\steamapps\\common\\Crimson Desert' },
+    { id: 'g12', name: 'Half-Life 2', store: 'manual', installDir: 'D:\\Games\\Half-Life 2' },
   ];
   const a = (id: string, partial: Partial<GameAnalysis>): GameAnalysis => ({
     gameId: id,
@@ -56,7 +57,8 @@ function createPreviewApi(): PrismApi {
     g2: a('g2', { exe: 'D:\\Games\\Cyberpunk 2077\\bin\\x64\\Cyberpunk2077.exe', nativeDlss: { present: true, version: '310.4.0.0' } }),
     g3: a('g3', { exe: 'D:\\GOG\\The Witcher 3\\bin\\x64_dx12\\witcher3.exe', warnings: ['这个游戏的原作风格容易被神经渲染改变，建议用流畅档或把强度调低。'] }),
     g4: a('g4', { exe: 'D:\\Games\\BlackMythWukong\\b1\\Binaries\\Win64\\b1-Win64-Shipping.exe' }),
-    g5: a('g5', { exe: 'D:\\Games\\Skyrim\\SkyrimSE.exe', apis: ['dx11'], nativeDlss: { present: false }, streamline: false, dlssFrameGen: false, routes: ['feeder'], recommendedRoute: 'feeder', routeReason: '游戏没有 DLSS，Prism Core 拿不到运动矢量和深度，暂时用不了。' }),
+    g5: a('g5', { exe: 'D:\\Games\\Skyrim\\SkyrimSE.exe', apis: ['dx11'], nativeDlss: { present: false }, streamline: false, dlssFrameGen: false, coreMode: 'bridge', existing: { reshade: true, optiscaler: false, prism: false, proxies: ['dxgi.dll'] }, routeReason: '游戏是 64 位 DX11，Prism Core 用画面桥：每帧把画面交给 64 位的辅助进程 prism_host.exe 跑网络再送回（包括界面文字）。画面经过内存来回，帧率损失比 DX12 大。', warnings: ['检测到 ReShade：保留不动，两者可以同时使用。'] }),
+    g12: a('g12', { exe: 'D:\\Games\\Half-Life 2\\hl2.exe', bitness: 'x86', apis: ['dx9'], nativeDlss: { present: false }, streamline: false, dlssFrameGen: false, coreMode: 'bridge', routeReason: '游戏是 32 位 DX9，Prism Core 用画面桥：每帧把画面交给 64 位的辅助进程 prism_host.exe 跑网络再送回（包括界面文字）。画面经过内存来回，帧率损失比 DX12 大。' }),
     g6: a('g6', { exe: 'D:\\Epic\\AlanWake2\\AlanWake2.exe' }),
     g7: a('g7', { exe: 'AceCombat8.exe', apis: ['dx12'], nativeDlss: { present: false }, antiCheat: [{ name: 'Easy Anti-Cheat', evidence: 'EasyAntiCheat' }], routes: [], recommendedRoute: 'blocked', routeReason: '检测到 Easy Anti-Cheat。注入 DLL 可能导致封号，Prism 不会在这个游戏里安装。' }),
     g9: a('g9', { exe: null, apis: [], nativeDlss: { present: false }, streamline: false, dlssFrameGen: false, routes: [], recommendedRoute: 'unknown', routeReason: '没有识别出图形 API。可能是启动器而不是游戏本体。' }),
@@ -106,7 +108,9 @@ function createPreviewApi(): PrismApi {
         needs: [],
         steps: ['备份游戏目录里会被覆盖的文件', '部署 Prism Core（version.dll 加载器和 prism_nvngx.dll），写入 prism-core.ini', '复制 Prism NR 自带的 NVIDIA 签名版 nvngx_dlssnr.dll（310.9.16.0）', '写入安装清单，之后可以一键还原'],
         manualSteps: ['在游戏设置里开启 DLSS（超分、DLAA 或光线重建都可以）。', '游戏里按 F8 开关 Prism Core、F4 分屏对比原画。档位、遍数和强度在这里调，游戏运行中约 1 秒内生效。'],
-        blockers: an.recommendedRoute === 'blocked' ? [an.routeReason] : core ? [] : ['这个游戏用不了 Prism Core：它需要 DX12、64 位并且自带 DLSS 的游戏。'],
+        blockers: an.recommendedRoute === 'blocked' ? [an.routeReason] : core ? [] : [an.routeReason || '没有找到游戏主程序。'],
+        bridge: an.coreMode === 'bridge' || undefined,
+        x86: an.bitness === 'x86' || undefined,
         warnings: [...an.warnings, ...(Number(values['prism-core.passes']) >= 3 ? ['3 遍以上是实验性质的游乐场：开销成倍增加，画面容易过度，不建议实际游玩。'] : []), 'Prism Core 是实验性预览，目前在 CONTROL Resonant 和地平线 6 上实测过。'],
         profileNotes: profile?.coreNotes ?? [],
         riskConsent: an.antiCheatOptIn ? { ...an.antiCheatOptIn, accepted: req.acceptRisk === true } : undefined,
