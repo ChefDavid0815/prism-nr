@@ -204,6 +204,8 @@ export interface PlanNeed {
 }
 
 export interface InstallPlan {
+  /** Two or more GPUs: the game is set to the high-performance one in Windows' graphics settings. */
+  multiGpu?: boolean;
   gameId: string;
   gameName: string;
   route: Route;
@@ -273,6 +275,8 @@ export interface InstallRecord {
   launchOption?: string;
   /** A desktop shortcut that starts the game through PrismLaunch.exe (late loading without Steam). */
   shortcut?: string;
+  /** The Windows graphics preference set to high performance for the game (two or more GPUs), and what was there before. */
+  gpuPreference?: { exe: string; previous: string | null };
 }
 
 export interface DiagnosticsReport {
@@ -316,7 +320,9 @@ export interface PrismApi {
   planInstall(req: PlanRequest): Promise<InstallPlan>;
   runInstall(plan: InstallPlan): Promise<InstallRecord>;
   onProgress(cb: (p: InstallProgress) => void): () => void;
-  getSettings(): Promise<{ motion: 'max' | 'standard' | 'off' }>;
+  getSettings(): Promise<{ motion: 'max' | 'standard' | 'off'; gpu: { nrGpu: string; offload: boolean } }>;
+  /** Which card runs the network and whether a second card does (Offload=); applied to every enabled game at once. */
+  setGpu(gpu: { nrGpu: string; offload: boolean }): Promise<number>;
   setMotion(m: 'max' | 'standard' | 'off'): Promise<void>;
   listInstalls(): Promise<InstallRecord[]>;
   rollback(recordId: string): Promise<InstallRecord>;

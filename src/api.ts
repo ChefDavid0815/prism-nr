@@ -17,7 +17,10 @@ declare global {
  */
 function createPreviewApi(): PrismApi {
   const system: SystemInfo = {
-    gpus: [{ name: 'NVIDIA GeForce RTX 5090 Laptop GPU', vendor: 'nvidia', arch: 'blackwell', laptop: true, vramMB: 24463, driver: '617.42', tier: 'flagship', nrSupport: 'official', expectation: '可以开满模型分辨率，追求最好画质。' }],
+    gpus: [
+      { name: 'NVIDIA GeForce RTX 5090 Laptop GPU', vendor: 'nvidia', arch: 'blackwell', laptop: true, vramMB: 24463, driver: '617.42', tier: 'flagship', nrSupport: 'official', expectation: '可以开满模型分辨率，追求最好画质。' },
+      { name: 'Intel(R) Graphics', vendor: 'intel', arch: 'other', laptop: true, vramMB: 128, driver: null, tier: 'unsupported', nrSupport: 'none', expectation: '不能运行神经渲染。' },
+    ],
     primary: null,
     os: { release: '10.0.26300', build: 26300, isWin11: true },
     notes: [],
@@ -72,6 +75,7 @@ function createPreviewApi(): PrismApi {
   let installs: InstallRecord[] = [];
   const listeners = new Set<(p: InstallProgress) => void>();
   let motion: 'max' | 'standard' | 'off' = 'max';
+  let gpu = { nrGpu: '', offload: false };
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   return {
@@ -152,7 +156,8 @@ function createPreviewApi(): PrismApi {
     },
     diagnostics: async () => ({ generatedAt: new Date().toISOString(), system, games: games.length, installs, components: [], nvidiaDlls: [], log: ['preview mode'] }),
     exportDiagnostics: async () => null,
-    getSettings: async () => ({ motion }),
+    getSettings: async () => ({ motion, gpu }),
+    setGpu: async (g) => { gpu = g; return installs.filter((r) => r.status === 'active').length; },
     setMotion: async (m) => {
       motion = m;
     },

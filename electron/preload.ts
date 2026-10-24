@@ -32,6 +32,7 @@ const api: PrismApi = {
   exportDiagnostics: () => call('exportDiagnostics'),
   getSettings: () => call('settings'),
   setMotion: (m) => call('setMotion', m),
+  setGpu: (gpu) => call('setGpu', gpu),
   openPath: (p) => call('openPath', p),
   openExternal: (url) => call('openExternal', url),
   runningExes: (names) => call('runningExes', names),

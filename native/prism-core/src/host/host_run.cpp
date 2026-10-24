@@ -10,6 +10,7 @@
 #include <dxgi1_6.h>
 
 #include <cstring>
+#include <cwctype>
 #include <string>
 
 #include "bridge_proto.h"
@@ -26,8 +27,59 @@ void Barrier(ID3D12GraphicsCommandList* l, ID3D12Resource* r, D3D12_RESOURCE_STA
 
 namespace prism {
 
+// The card that runs the network. NrGpu= in prism-core.ini names one (part of its name, or #n for the
+// n-th adapter); otherwise an NVIDIA card, the one with the most video memory, and with Offload= one
+// that is not the game's own when there are two. Integrated and software adapters only as a last
+// resort (the network needs an RTX card; NGX says so in the log if it gets another).
+IDXGIAdapter1* PickAdapter(IDXGIFactory4* factory, const std::wstring& dir, const BridgeHeader& h, LogFn Log) {
+  wchar_t want[128] = {};
+  GetPrivateProfileStringW(L"Prism Core", L"NrGpu", L"", want, 128, (dir + L"prism-core.ini").c_str());
+  std::wstring w = want;
+  for (auto& c : w) c = wchar_t(towlower(c));
+  if (w == L"auto") w.clear();
+  struct Card { IDXGIAdapter1* a; DXGI_ADAPTER_DESC1 d; UINT i; };
+  Card cards[16];
+  UINT n = 0;
+  for (UINT i = 0; n < 16; ++i) {
+    IDXGIAdapter1* ad = nullptr;
+    if (factory->EnumAdapters1(i, &ad) == DXGI_ERROR_NOT_FOUND) break;
+    cards[n].a = ad; cards[n].i = i;
+    ad->GetDesc1(&cards[n].d);
+    Log("adapter #%u: %ls (vendor %04x, %llu MB%s)", i, cards[n].d.Description, cards[n].d.VendorId,
+        (unsigned long long)(cards[n].d.DedicatedVideoMemory >> 20), (cards[n].d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) ? ", software" : "");
+    ++n;
+  }
+  const bool gameKnown = h.gameLuidLow || h.gameLuidHigh;
+  auto isGame = [&](const Card& c) { return gameKnown && c.d.AdapterLuid.LowPart == h.gameLuidLow && c.d.AdapterLuid.HighPart == h.gameLuidHigh; };
+  int pick = -1;
+  if (!w.empty()) {
+    for (UINT k = 0; k < n && pick < 0; ++k) {
+      std::wstring name = cards[k].d.Description;
+      for (auto& c : name) c = wchar_t(towlower(c));
+      if ((w[0] == L'#' && _wtoi(w.c_str() + 1) == int(cards[k].i)) || (w[0] != L'#' && name.find(w) != std::wstring::npos)) pick = int(k);
+    }
+    if (pick < 0) Log("NrGpu=%ls matches no adapter; choosing one", want);
+  }
+  // Score: NVIDIA first, then (offloading) not the game's card, then video memory.
+  auto score = [&](const Card& c) {
+    if (c.d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) return -1.0;
+    double s = double(c.d.DedicatedVideoMemory >> 20);
+    if (c.d.VendorId == 0x10DE) s += 1e9;
+    if (h.offload && !isGame(c)) s += 1e8;
+    return s;
+  };
+  if (pick < 0)
+    for (UINT k = 0; k < n; ++k) if (score(cards[k]) >= 0 && (pick < 0 || score(cards[k]) > score(cards[pick]))) pick = int(k);
+  for (UINT k = 0; k < n; ++k) if (int(k) != pick) cards[k].a->Release();
+  if (pick < 0) return nullptr;
+  const Card& c = cards[pick];
+  Log("network on adapter #%u: %ls%s%s", c.i, c.d.Description, isGame(c) ? " (the game's own card)" : gameKnown ? " (not the game's card)" : "",
+      h.offload && isGame(c) ? "; Offload= wants a second card, but there is no other NVIDIA card" : "");
+  return c.a;
+}
+
 int HostRun(unsigned long pid, const std::wstring& dir, LogFn Log) {
-  Log("prism_host 1.4.2 for process %lu", pid);
+  Log("prism_host 1.5.0 for process %lu", pid);
 
   HANDLE game = OpenProcess(SYNCHRONIZE, FALSE, pid);
   wchar_t mName[64], pName[64], dName[64];
@@ -39,20 +91,11 @@ int HostRun(unsigned long pid, const std::wstring& dir, LogFn Log) {
   if (!game || !h || !posted || !done || h->magic != kBridgeMagic || h->version != kBridgeVersion) { Log("no bridge from the game (%lu)", GetLastError()); return 1; }
   uint8_t* px = reinterpret_cast<uint8_t*>(h) + sizeof(BridgeHeader);
 
-  // The card with the most video memory (the NVIDIA card on a laptop, not the integrated GPU).
   IDXGIFactory4* factory = nullptr;
   if (FAILED(CreateDXGIFactory2(0, __uuidof(IDXGIFactory4), (void**)&factory))) { Log("no DXGI factory"); return 1; }
-  IDXGIAdapter1* best = nullptr;
-  SIZE_T bestMem = 0;
-  for (UINT a = 0;; ++a) {
-    IDXGIAdapter1* ad = nullptr;
-    if (factory->EnumAdapters1(a, &ad) == DXGI_ERROR_NOT_FOUND) break;
-    DXGI_ADAPTER_DESC1 ds;
-    ad->GetDesc1(&ds);
-    if (ds.DedicatedVideoMemory > bestMem) { bestMem = ds.DedicatedVideoMemory; if (best) best->Release(); best = ad; } else ad->Release();
-  }
+  IDXGIAdapter1* best = PickAdapter(factory, dir, *h, Log);
   ID3D12Device* dev = nullptr;
-  if (FAILED(D3D12CreateDevice(best, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), (void**)&dev))) { Log("no D3D12 device"); return 1; }
+  if (!best || FAILED(D3D12CreateDevice(best, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), (void**)&dev))) { Log("no D3D12 device"); return 1; }
   DXGI_ADAPTER_DESC1 ad;
   best->GetDesc1(&ad);
   Log("device: %ls", ad.Description);

@@ -76,6 +76,9 @@ async function main(): Promise<void> {
     assert(/Present=0/.test(ini0) && /Present=1/.test(coreIni({ 'prism-core.present': true })), 'Core INI: present mode (games without DLSS) is written');
     assert(/Bridge=0/.test(ini0) && /Bridge=1/.test(coreIni({ 'prism-core.bridge': true })) && /\r\nTarget=hl2\.exe\r\n/.test(coreIni({ 'prism-core.target': 'hl2.exe' })) && !/Target=/.test(ini0) && !/Target=/.test(coreIni({ 'prism-core.target': '游戏.exe' })),
       'Core INI: the frame bridge and the target executable are written; a non-ASCII name means no filter');
+    assert(/Offload=0/.test(ini0) && !/NrGpu=/.test(ini0) && /Offload=1/.test(coreIni({ 'prism-core.offload': true })) &&
+      /\r\nNrGpu=NVIDIA GeForce RTX 5090\r\n/.test(coreIni({ 'prism-core.nrGpu': 'NVIDIA GeForce RTX 5090' })) && !/NrGpu=/.test(coreIni({ 'prism-core.nrGpu': '显卡' })),
+      'Core INI: two cards: Offload= (a second card runs the network) and NrGpu= (which card; ASCII names only)');
     assert(/Look=5/.test(gi) && /\r\nGrade=Contrast:24\r\n/.test(gi) && /\r\nGrade2=\r\n/.test(gi) && /\r\nGrade3=Saturation:-10\r\n/.test(gi) && /GradeSlot=2/.test(gi) && /^[\x00-\x7f]*$/.test(gi), 'Core INI: the custom look\'s three slots and the slot in use');
   }
   assert(tierOf({ ...resolveValues('flagship'), 'prism-core.look': '2' })?.id === 'flagship', 'Tiers: the colour look does not change the tier');

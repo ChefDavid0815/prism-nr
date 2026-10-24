@@ -116,6 +116,7 @@ app.whenReady().then(() => {
   });
   handle('settings', () => service.getSettings());
   handle('setMotion', (m: 'max' | 'standard' | 'off') => service.setMotion(m));
+  handle('setGpu', (gpu: { nrGpu: string; offload: boolean }) => service.setGpu({ nrGpu: String(gpu?.nrGpu ?? ''), offload: Boolean(gpu?.offload) }));
   handle('openPath', (p: string) => shell.openPath(p).then(() => undefined));
   handle('runningExes', (names: string[]) => runningExes(Array.isArray(names) ? names.slice(0, 500).map(String) : []));
   handle('openExternal', (url: string) => (/^https:\/\//.test(url) ? shell.openExternal(url) : undefined));

@@ -49,9 +49,16 @@ export interface Settings {
   learnedAddonSections: Record<string, string>;
   /** User-chosen art style per game. */
   styles: Record<string, string>;
+  /** Two or more cards: which runs the network (NrGpu=, empty for automatic), and Offload= (a second card). */
+  gpu: GpuSettings;
 }
 
-const defaultSettings: Settings = { motion: 'max', learnedAddonSections: {}, styles: {} };
+export interface GpuSettings {
+  nrGpu: string;
+  offload: boolean;
+}
+
+const defaultSettings: Settings = { motion: 'max', learnedAddonSections: {}, styles: {}, gpu: { nrGpu: '', offload: false } };
 
 export const store = {
   manualGames: () => readJson<GameEntry[]>('manual-games.json', []),

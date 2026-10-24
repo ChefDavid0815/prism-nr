@@ -21,11 +21,14 @@ struct BridgeHeader {
   uint32_t format;        // DXGI_FORMAT of the pixels (8-bit formats as UNORM, BGRA for D3D9)
   uint32_t pitch;         // bytes per row in the pixel area
   uint32_t mode;          // the encoding: 0 SDR, 1 scRGB, 2 HDR10
-  uint32_t api;           // 9, 10 or 11 (the log's information)
+  uint32_t api;           // 9, 10, 11 or 12 (the log's information)
   volatile int32_t posted;  // the game's frame number
   volatile int32_t done;    // the host sets it to the frame it finished
   uint32_t status;        // 0 the result is in the pixel area, 1 passed through untouched
-  uint32_t reserved[19];
+  uint32_t gameLuidLow;   // the adapter the game renders on (0 and 0 when unknown)
+  int32_t gameLuidHigh;
+  uint32_t offload;       // 1: a D3D12 game hands its frames to a second card (Offload= in the ini)
+  uint32_t reserved[16];
 };
 static_assert(sizeof(BridgeHeader) == 128, "a fixed header for 32 and 64-bit processes");
 

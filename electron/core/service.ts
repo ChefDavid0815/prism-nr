@@ -7,7 +7,7 @@ import { locateNvidiaDlls } from './nvidia';
 import { leftoverDirs, manualEntry, scanAllGames } from './scanner';
 import { store } from './store';
 import { detectSystem } from './system';
-import { getLog } from './util';
+import { getLog, log } from './util';
 
 /** The application layer shared by the Electron IPC handlers and the self-test CLI. */
 export class PrismService {
@@ -90,7 +90,9 @@ export class PrismService {
   async plan(req: PlanRequest): Promise<InstallPlan> {
     const game = this.game(req.gameId);
     const [system, analysis, dlls] = await Promise.all([this.getSystem(), this.analyzeGame(req.gameId), this.nvidiaDlls()]);
-    return buildPlan(game, analysis, system.primary, dlls, req);
+    const plan = buildPlan(game, analysis, system.primary, dlls, req);
+    plan.multiGpu = system.gpus.length > 1;
+    return plan;
   }
 
   async install(plan: InstallPlan, progress: (p: InstallProgress) => void) {
@@ -114,7 +116,25 @@ export class PrismService {
   }
 
   getSettings() {
-    return { motion: store.settings().motion };
+    const s = store.settings();
+    return { motion: s.motion, gpu: s.gpu ?? { nrGpu: '', offload: false } };
+  }
+
+  /** Saves the GPU choice and writes it into every enabled Prism Core game (a running one picks it up within seconds). */
+  setGpu(gpu: { nrGpu: string; offload: boolean }): number {
+    const s = store.settings();
+    s.gpu = { nrGpu: /^[\x20-\x7e]{0,120}$/.test(gpu.nrGpu) ? gpu.nrGpu : '', offload: Boolean(gpu.offload) };
+    store.saveSettings(s);
+    let n = 0;
+    for (const r of store.installs().filter((x) => x.status === 'active' && x.route === 'prism-core')) {
+      try {
+        updateCoreConfig(r.id, { 'prism-core.offload': s.gpu.offload, 'prism-core.nrGpu': s.gpu.nrGpu });
+        n++;
+      } catch (e) {
+        log(`gpu settings for ${r.gameName}: ${(e as Error).message}`);
+      }
+    }
+    return n;
   }
 
   setMotion(m: 'max' | 'standard' | 'off') {

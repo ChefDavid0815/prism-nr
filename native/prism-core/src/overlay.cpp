@@ -30,6 +30,7 @@
 #include "MinHook.h"
 #include "font_mono_bold.h"
 #include "font_mono_regular.h"
+#include "bridge.h"
 #include "pipeline.h"
 
 namespace prism {
@@ -640,6 +641,7 @@ HRESULT STDMETHODCALLTYPE HkSetColourSpace(IDXGISwapChain3* sc, DXGI_COLOR_SPACE
   return hr;
 }
 std::wstring gpuName;
+UINT gpuVendor = 0;  // the game's adapter: 0x10DE is NVIDIA
 
 // The game's direct queues, as they execute (no references held: only compared with pointers).
 std::mutex queueMutex;
@@ -722,7 +724,7 @@ bool Bind(IDXGISwapChain* sc) {
     if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory4), (void**)&f))) {
       IDXGIAdapter1* a = nullptr;
       if (SUCCEEDED(f->EnumAdapterByLuid(d->GetAdapterLuid(), __uuidof(IDXGIAdapter1), (void**)&a))) {
-        DXGI_ADAPTER_DESC1 ad; a->GetDesc1(&ad); gpuName = ad.Description; a->Release();
+        DXGI_ADAPTER_DESC1 ad; a->GetDesc1(&ad); gpuName = ad.Description; gpuVendor = ad.VendorId; a->Release();
       }
       f->Release();
     }
@@ -2028,13 +2030,24 @@ void OverlayPresent(IDXGISwapChain* sc) {
     Toast(in.padConnected ? L"按 Home，或在手柄上按住 View 再按 Y，打开 Prism 面板" : std::wstring(L"按 ") + KeyName(cfg.key) + L" 打开 Prism 面板", kInfo, 6.0);
   }
 
-  // Present mode: Prism on this frame first, then the panel over it.
-  if (PresentWanted()) {
+  // A game on a card that cannot run the network (an integrated GPU, another vendor): say so once,
+  // unless a second card runs it (Offload=).
+  const bool offload = BridgeOffloadWanted();
+  static bool toldVendor = false;
+  if (!toldVendor && gpuVendor && gpuVendor != 0x10DE && !offload && now - panel.startedAt > 3.0) {
+    toldVendor = true;
+    LOG("the game renders on %ls (vendor %04x): the network needs an NVIDIA RTX card", gpuName.c_str(), gpuVendor);
+    Toast(L"游戏跑在 " + gpuName + L" 上，神经渲染需要 NVIDIA RTX 显卡：在 Windows 图形设置里把游戏设为高性能，或在 Prism NR 里打开副卡运行", kCaution, 9.0);
+  }
+  // Prism on this frame first, then the panel over it: on a second card (Offload=, through the
+  // bridge), or here (present mode).
+  if (offload || PresentWanted()) {
     IDXGISwapChain3* sc3 = nullptr;
     if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&sc3))) {
       ID3D12Resource* bb = nullptr;
       if (SUCCEEDED(sc3->GetBuffer(sc3->GetCurrentBackBufferIndex(), __uuidof(ID3D12Resource), (void**)&bb)) && bb) {
-        PipelinePresent(chain.queue, bb, ColourMode(sc, d.BufferDesc.Format));
+        if (offload) BridgeD3D12Frame(chain.queue, bb, ColourMode(sc, d.BufferDesc.Format));
+        else PipelinePresent(chain.queue, bb, ColourMode(sc, d.BufferDesc.Format));
         bb->Release();
       }
       sc3->Release();

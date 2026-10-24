@@ -339,7 +339,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
     Log("process %ls (pid %lu)", exe.c_str(), GetCurrentProcessId());
     // Late: the game had already created its renderer and loaded NGX before Core.
     lateLoad = GetModuleHandleW(L"d3d12.dll") && (GetModuleHandleA("_nvngx.dll") || GetModuleHandleA("nvngx_dlss.dll"));
-    Log("Prism Core 1.4.2 (Home panel, F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded%s",
+    Log("Prism Core 1.5.0 (Home panel, F8 on/off, F2 cadence, F3 async, F4 split, F11 capture; prism-core.ini overrides) loaded%s",
         lateLoad ? " late, into a running game" : "");
     if (MH_Initialize() != MH_OK) { Log("MinHook init failed"); return TRUE; }
     BridgeInit(ModuleDir(nullptr), &Log);

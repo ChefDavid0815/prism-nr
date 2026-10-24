@@ -770,6 +770,12 @@ html.negative {
   content: none;
 }
 
+.gpu-sub {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 20px 0 10px;
+}
+
 /* ------------------------------------------------------------------ Prism Core settings */
 .segmented-4 {
   grid-template-columns: repeat(4, 1fr);

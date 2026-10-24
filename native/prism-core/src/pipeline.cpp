@@ -661,6 +661,7 @@ bool netReset = false;  // NetReset=1: the network starts without its history on
 // come for a moment (see PipelinePresent). PresentReset=0 keeps the network's history from frame to
 // frame (there are no motion vectors to move it with).
 bool presentMode = false, presentReset = true;
+bool offload = false;              // Offload=1: a second card runs the network (prism_host.exe, the bridge)
 bool presenting = false;           // PipelineRecord is running for PipelinePresent
 double lastUpscaleMs = -1e9;       // the game's last upscale evaluation
 double lastPresentMs = -1e9;       // the last frame present mode processed
@@ -1566,6 +1567,7 @@ void LoadConfig() {
   }
   netReset = Num(L"NetReset", netReset ? 1 : 0, 0, 1) != 0;
   presentMode = Num(L"Present", presentMode ? 1 : 0, 0, 1) != 0;
+  offload = Num(L"Offload", offload ? 1 : 0, 0, 1) != 0;
   presentReset = Num(L"PresentReset", presentReset ? 1 : 0, 0, 1) != 0;
   netScaleUser = float(Num(L"NetScale", netScaleUser, 0.5, 1.0));
   netAuto = Num(L"NetScaleAuto", netAuto ? 1 : 0, 0, 1) != 0;
@@ -1845,6 +1847,8 @@ void MeasureFrameRate(int mode) {
 
 bool PipelineRecord(const UpscaleCall& c) {
   if (failed || !Log) return false;
+  // Offload: the game's card only renders; the network runs on the second card at Present.
+  if (offload && !presenting) return false;
   if (!presenting) lastUpscaleMs = NowMs();
   Pace();
   {

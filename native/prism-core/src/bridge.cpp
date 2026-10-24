@@ -4,14 +4,18 @@
 //                is written into the staging texture and copied back into the back buffer
 //   DX9          GetRenderTargetData into a system-memory surface, and back through a default-pool
 //                surface with UpdateSurface and StretchRect
+//   DX12         (Offload=, a second card) the back buffer is copied into a readback buffer on the
+//                game's queue, and the result back from an upload buffer
 // The copies wait for the GPU, so the game's frame and Prism's run one after the other: these
-// APIs cannot share video memory with D3D12 in a way every driver and game supports.
+// APIs cannot share video memory with D3D12 in a way every driver and game supports, and a second
+// card cannot see the first one's memory at all.
 #include "bridge.h"
 
 #include <windows.h>
 #include <d3d9.h>
 #include <d3d10.h>
 #include <d3d11.h>
+#include <d3d12.h>
 #include <dxgi1_6.h>
 
 #include <algorithm>
@@ -53,7 +57,8 @@ bool Open() {
 #else
   const int fallback = 1;
 #endif
-  if (!GetPrivateProfileIntW(L"Prism Core", L"Bridge", fallback, (gameDir + L"prism-core.ini").c_str())) return false;
+  const std::wstring ini = gameDir + L"prism-core.ini";
+  if (!GetPrivateProfileIntW(L"Prism Core", L"Bridge", fallback, ini.c_str()) && !GetPrivateProfileIntW(L"Prism Core", L"Offload", 0, ini.c_str())) return false;
   wchar_t m[64], p[64], d[64];
   BridgeNames(GetCurrentProcessId(), m, p, d, 64);
   sh.map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, DWORD(sizeof(BridgeHeader) + kBridgeMaxBytes), m);
@@ -375,7 +380,138 @@ HRESULT STDMETHODCALLTYPE HkDxgiPresent1(IDXGISwapChain1* sc, UINT sync, UINT fl
   return hr;
 }
 
+// ------------------------------------------------------------------ DX12 (Offload=: a second card)
+#ifdef _WIN64
+struct D12 {
+  ID3D12Device* dev = nullptr;
+  ID3D12CommandAllocator* alloc[2] = {};
+  ID3D12GraphicsCommandList* list = nullptr;
+  ID3D12Fence* fence = nullptr;
+  HANDLE event = nullptr;
+  uint64_t value = 0;
+  ID3D12Resource *down = nullptr, *up = nullptr;
+  uint8_t *downMap = nullptr, *upMap = nullptr;
+  UINT w = 0, h = 0, pitch = 0;
+  DXGI_FORMAT f = DXGI_FORMAT_UNKNOWN;
+  bool broken = false;
+  void ReleaseBuffers() {
+    if (down) down->Release();
+    if (up) up->Release();
+    down = up = nullptr; downMap = upMap = nullptr; w = h = 0;
+  }
+} d12;
+
+void Barrier12(ID3D12GraphicsCommandList* l, ID3D12Resource* r, D3D12_RESOURCE_STATES a, D3D12_RESOURCE_STATES b) {
+  D3D12_RESOURCE_BARRIER br = {};
+  br.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  br.Transition = {r, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, a, b};
+  l->ResourceBarrier(1, &br);
+}
+// Submit what the list recorded and wait for it.
+bool Run12(ID3D12CommandQueue* q) {
+  if (FAILED(d12.list->Close())) return false;
+  ID3D12CommandList* lists[] = {d12.list};
+  q->ExecuteCommandLists(1, lists);
+  q->Signal(d12.fence, ++d12.value);
+  if (d12.fence->GetCompletedValue() < d12.value) { d12.fence->SetEventOnCompletion(d12.value, d12.event); WaitForSingleObject(d12.event, 2000); }
+  return d12.fence->GetCompletedValue() >= d12.value;
+}
+
+bool Frame12(ID3D12CommandQueue* q, ID3D12Resource* bb, int mode) {
+  const D3D12_RESOURCE_DESC bd = bb->GetDesc();
+  const uint32_t bpp = BytesPer(bd.Format);
+  if (bd.SampleDesc.Count > 1 || !Fits(UINT(bd.Width), bd.Height, bpp)) return false;
+  ID3D12Device* dev = nullptr;
+  if (FAILED(bb->GetDevice(__uuidof(ID3D12Device), (void**)&dev)) || !dev) return false;
+  if (dev != d12.dev) {
+    // First frame (or a new device): the list, the fence, and where the game renders.
+    d12.ReleaseBuffers();
+    d12.dev = dev;
+    bool ok = d12.event || (d12.event = CreateEventW(nullptr, FALSE, FALSE, nullptr)) != nullptr;
+    for (auto& a : d12.alloc) ok = ok && SUCCEEDED(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void**)&a));
+    ok = ok && SUCCEEDED(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d12.alloc[0], nullptr, __uuidof(ID3D12GraphicsCommandList), (void**)&d12.list));
+    ok = ok && SUCCEEDED(d12.list->Close());
+    ok = ok && SUCCEEDED(dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)&d12.fence));
+    if (!ok) { BLOG("bridge: DX12 copies could not be set up; offload off"); d12.broken = true; dev->Release(); return false; }
+    const LUID luid = dev->GetAdapterLuid();
+    sh.h->gameLuidLow = luid.LowPart;
+    sh.h->gameLuidHigh = luid.HighPart;
+    BLOG("bridge: DX12 offload on the game's queue (game adapter %08lx-%08lx)", luid.HighPart, luid.LowPart);
+  }
+  dev->Release();
+  const UINT W = UINT(bd.Width), H = bd.Height, rowBytes = W * bpp, aligned = (rowBytes + 255u) & ~255u;
+  if (W != d12.w || H != d12.h || bd.Format != d12.f) {
+    d12.ReleaseBuffers();
+    D3D12_HEAP_PROPERTIES hp = {};
+    D3D12_RESOURCE_DESC rd = {};
+    rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; rd.Width = UINT64(aligned) * H; rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+    rd.SampleDesc.Count = 1; rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    hp.Type = D3D12_HEAP_TYPE_READBACK;
+    d12.dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource), (void**)&d12.down);
+    hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+    d12.dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, __uuidof(ID3D12Resource), (void**)&d12.up);
+    if (!d12.down || !d12.up || FAILED(d12.down->Map(0, nullptr, (void**)&d12.downMap)) || FAILED(d12.up->Map(0, nullptr, (void**)&d12.upMap))) {
+      BLOG("bridge: DX12 buffers could not be made (%ux%u format %d)", W, H, int(bd.Format));
+      d12.ReleaseBuffers();
+      return false;
+    }
+    d12.w = W; d12.h = H; d12.f = bd.Format; d12.pitch = aligned;
+  }
+  D3D12_TEXTURE_COPY_LOCATION tex = {}, buf = {};
+  tex.pResource = bb; tex.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  buf.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+  buf.PlacedFootprint.Footprint = {bd.Format, W, H, 1, aligned};
+  // Down: the game's frame into the readback buffer.
+  d12.alloc[0]->Reset();
+  d12.list->Reset(d12.alloc[0], nullptr);
+  Barrier12(d12.list, bb, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+  buf.pResource = d12.down;
+  d12.list->CopyTextureRegion(&buf, 0, 0, 0, &tex, nullptr);
+  Barrier12(d12.list, bb, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
+  if (!Run12(q)) return false;
+  Describe(W, H, bd.Format, uint32_t(std::clamp(mode, 0, 2)), 12);
+  sh.h->offload = 1;
+  CopyOut(d12.downMap, aligned, H, rowBytes);
+  if (!Exchange()) return false;
+  // Up: Prism's result back into the back buffer, before the real Present on the same queue.
+  CopyIn(d12.upMap, aligned, H, rowBytes);
+  d12.alloc[1]->Reset();
+  d12.list->Reset(d12.alloc[1], nullptr);
+  Barrier12(d12.list, bb, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
+  buf.pResource = d12.up;
+  d12.list->CopyTextureRegion(&tex, 0, 0, 0, &buf, nullptr);
+  Barrier12(d12.list, bb, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+  return Run12(q);
+}
+#endif
+
 }  // namespace
+
+bool BridgeOffloadWanted() {
+#ifdef _WIN64
+  static ULONGLONG checked = 0;
+  static bool wanted = false;
+  // The ini is read again every two seconds: Offload can be switched while the game runs.
+  if (GetTickCount64() - checked > 2000) {
+    checked = GetTickCount64();
+    wanted = !gameDir.empty() && GetPrivateProfileIntW(L"Prism Core", L"Offload", 0, (gameDir + L"prism-core.ini").c_str()) != 0;
+  }
+  return wanted && !sh.failed && !d12.broken;
+#else
+  return false;
+#endif
+}
+
+bool BridgeD3D12Frame(ID3D12CommandQueue* q, ID3D12Resource* bb, int mode) {
+#ifdef _WIN64
+  if (!q || !bb) return false;
+  std::lock_guard<std::mutex> lock(bridgeMutex);
+  return Open() && Frame12(q, bb, mode);
+#else
+  (void)q; (void)bb; (void)mode;
+  return false;
+#endif
+}
 
 void BridgeNoteD3D12() {
   if (!lastD3D12 && sh.h) BLOG("bridge: the game presents with D3D12; the bridge stands aside");

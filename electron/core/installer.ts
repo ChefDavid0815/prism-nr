@@ -143,6 +143,9 @@ export function coreIni(values: Values, keep: string[] = []): string {
     `NetScale=${cadence === 1 ? netScaleFor(values['prism-core.netSize']).toFixed(4) : '1.00'}`,
     `Present=${values['prism-core.present'] === true || values['prism-core.present'] === '1' || values['prism-core.present'] === 1 ? 1 : 0}`,
     `Bridge=${values['prism-core.bridge'] === true || values['prism-core.bridge'] === '1' || values['prism-core.bridge'] === 1 ? 1 : 0}`,
+    // Two or more cards: a second one runs the network (through the bridge), and which one does.
+    `Offload=${values['prism-core.offload'] === true || values['prism-core.offload'] === '1' || values['prism-core.offload'] === 1 ? 1 : 0}`,
+    ...(values['prism-core.nrGpu'] && /^[\x20-\x7e]+$/.test(String(values['prism-core.nrGpu'])) ? [`NrGpu=${values['prism-core.nrGpu']}`] : []),
     // Loaders load Core only into this executable (not a launcher or crash reporter beside it).
     // An executable name outside ASCII is not written (Core reads the file as ANSI): no filter then.
     ...(values['prism-core.target'] && /^[\x20-\x7e]+$/.test(String(values['prism-core.target'])) ? [`Target=${values['prism-core.target']}`] : []),
@@ -275,6 +278,11 @@ export function buildPlan(game: GameEntry, analysis: GameAnalysis, gpu: GpuInfo 
       values['prism-core.cadence'] = '1';
       values['prism-core.async'] = false;
     }
+  }
+  if (route === 'prism-core') {
+    const gpu = store.settings().gpu;
+    values['prism-core.offload'] = Boolean(gpu?.offload);
+    if (gpu?.nrGpu) values['prism-core.nrGpu'] = gpu.nrGpu;
   }
   if (dx12AndOlder)
     warnings.push(`这个游戏同时支持 DX12 和 ${apis.filter((a) => a !== 'dx12' && a !== 'vulkan' && a !== 'opengl').map((a) => a.toUpperCase()).join(' / ')}。Prism 两种都装好，游戏用 DX12 时自动走${mode === 'dlss' ? ' DLSS' : '画面递交模式'}（效果最好、损失最小），用老版本时才走画面桥。建议在游戏设置里选 DX12。`);
@@ -806,6 +814,17 @@ export async function runInstall(
     }
   }
 
+  // Two or more GPUs (a laptop's integrated one, or a second card): Windows is told to run the game
+  // on the high-performance GPU, so it renders on the RTX card. The previous setting comes back on rollback.
+  let gpuPreference: InstallRecord['gpuPreference'];
+  if (plan.multiGpu && analysis.exe) {
+    try {
+      gpuPreference = { exe: analysis.exe, previous: setGpuPreference(analysis.exe, 'GpuPreference=2;') };
+    } catch (e) {
+      log(`gpu preference: ${(e as Error).message}`);
+    }
+  }
+
   const record: InstallRecord = {
     id: recordId,
     gameId: game.id,
@@ -822,6 +841,7 @@ export async function runInstall(
     riskAcceptedAt: plan.riskConsent?.accepted ? new Date().toISOString() : undefined,
     launchOption: plan.lateLoad?.launchOption,
     shortcut,
+    gpuPreference,
   };
   store.saveInstalls([record, ...records]);
   const settings = store.settings();
@@ -852,6 +872,30 @@ function createShortcut(name: string, target: string, args: string, workDir: str
   return out && exists(out) ? out : undefined;
 }
 
+const GPU_PREFS = 'HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences';
+
+/**
+ * Windows' per-app graphics preference (Settings > System > Display > Graphics), as the settings page
+ * stores it: a REG_SZ named by the executable's path. Sets it (null removes it) and returns what was
+ * there before (null when nothing).
+ */
+export function setGpuPreference(exe: string, value: string | null): string | null {
+  const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
+  let previous: string | null = null;
+  try {
+    const out = execFileSync('reg.exe', ['query', GPU_PREFS, '/v', exe], { encoding: 'utf8', windowsHide: true });
+    previous = out.match(/REG_SZ\s+(.*)$/m)?.[1].trim() ?? null;
+  } catch {
+    previous = null;  // no such value
+  }
+  if (value === null) {
+    if (previous !== null) execFileSync('reg.exe', ['delete', GPU_PREFS, '/v', exe, '/f'], { windowsHide: true });
+  } else {
+    execFileSync('reg.exe', ['add', GPU_PREFS, '/v', exe, '/t', 'REG_SZ', '/d', value, '/f'], { windowsHide: true });
+  }
+  return previous;
+}
+
 export function rollback(recordId: string): InstallRecord {
   const records = store.installs();
   const r = records.find((x) => x.id === recordId);
@@ -859,6 +903,13 @@ export function rollback(recordId: string): InstallRecord {
   if (r.status !== 'active') throw new Error('这条记录已经还原过了。');
   r.rollbackNotes = restore(r.files);
   cleanupCore(r);
+  if (r.gpuPreference) {
+    try {
+      setGpuPreference(r.gpuPreference.exe, r.gpuPreference.previous);
+    } catch (e) {
+      log(`gpu preference: ${(e as Error).message}`);
+    }
+  }
   r.status = 'rolled-back';
   r.rolledBackAt = new Date().toISOString();
   store.saveInstalls(records);

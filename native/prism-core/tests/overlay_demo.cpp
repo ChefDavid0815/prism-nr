@@ -47,6 +47,8 @@ void GetLiveStats(LiveStats* o) {
 std::wstring TakeLiveNotice() { return L""; }
 bool PresentWanted() { return false; }
 bool PipelinePresent(ID3D12CommandQueue*, ID3D12Resource*, int) { return false; }
+bool BridgeOffloadWanted() { return false; }
+bool BridgeD3D12Frame(ID3D12CommandQueue*, ID3D12Resource*, int) { return false; }
 std::wstring GameDir() { return dir; }
 LogFn PipelineLogger() { return &LogStd; }
 }  // namespace prism

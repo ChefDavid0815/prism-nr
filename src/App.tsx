@@ -174,7 +174,7 @@ export function App() {
           {view === 'plugins' && <PluginsView account={account} onSignIn={() => setView('account')} />}
           {view === 'history' && <HistoryView installs={installs} onChange={refreshInstalls} />}
           {view === 'diagnostics' && <DiagnosticsView />}
-          {view === 'settings' && <SettingsView motion={motion} onMotion={setMotion} />}
+          {view === 'settings' && <SettingsView motion={motion} onMotion={setMotion} system={system} />}
           {view === 'account' && <AccountView account={account} onChange={setAccount} />}
           {view === 'community' && <CommunityView account={account} games={games} analyses={analyses} installs={installs} onImported={refreshInstalls} onSignIn={() => setView('account')} />}
           {view === 'admin' && isAdmin && <AdminView selfId={account!.profile!.id} selfRole={account!.profile!.role} />}

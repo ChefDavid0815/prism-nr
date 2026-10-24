@@ -6,11 +6,23 @@
   games that have looks (those in your library first); the search finds a game by its Chinese or
   English name or a common nickname (地平线6, fh6, 大表哥, cp2077), punctuation and spaces ignored. A
   game's page lists its looks, official first.
-- Official looks: fifteen, one for each of fifteen popular games (CONTROL Resonant, Control, Forza
-  Horizon 6, Black Myth: Wukong, Cyberpunk 2077, Red Dead Redemption 2, The Witcher 3, Kingdom Come:
-  Deliverance II, Monster Hunter Wilds, Clair Obscur: Expedition 33, Ghost of Tsushima, The Last of
-  Us Part II, Assassin's Creed Shadows, Alan Wake 2, Oblivion Remastered), designed for each game's
-  look and marked 官方. Staff can mark any share official or take the mark off.
+- Official looks: 623 for 206 games, new releases and classics (from Crimson Desert, Wuchang,
+  Silent Hill f and Metal Gear Solid Delta back to Half-Life 2, BioShock and L.A. Noire). Each game
+  has a look of its own, designed for its picture, and two more in styles that suit its genre (film
+  warmth, black-and-white film, faded tape for horror, ink for eastern settings, golden hour for
+  racing, and so on). Games that also play online carry a note to use them offline. Staff can mark
+  any share official or take the mark off.
+- The game being played comes first: the community finds it among the running processes every few
+  seconds and lists its looks at the top; importing one reaches the running game within a second
+  (Prism Core reads prism-core.ini again whenever it changes, and says so in the game).
+- Two cards. The helper process (prism_host.exe) now runs the network on an NVIDIA card, never an
+  integrated GPU by accident; Settings shows every card and lets you choose (NrGpu=). On PCs with
+  two or more GPUs, enabling a game sets Windows' per-app graphics preference to high performance so
+  the game renders on the RTX card; rollback restores what was there. A game that still renders on
+  another card gets an in-game note. Experimental: with two RTX cards, 副卡运行 (Offload=) has a DX12
+  game render on one while the other runs the network: at Present the frame goes through the bridge
+  to the helper on the second card and back. Tested end to end on one card (a single RTX card is
+  chosen then, as the log says); a second card is for testers.
 - Profiles: an avatar (any picture, cropped square and compressed in the app), a bio of up to 160
   characters, and the account's marks: the founder's seal (the prism with the spectrum leaving
   it), the community contributor's mark, and a nameplate after the name: Basic (a hairline frame),

@@ -70,6 +70,18 @@ on in the 64-bit Core (the 32-bit one has nothing else). A 32-bit game gets the 
 (`src/core32.cpp`, the bridge only), a 32-bit loader, `prism_host.exe` and the 64-bit Core as
 `prism64_nvngx.dll`. `tests/bridge_demo.cpp` runs DX9 and DX11, 32 and 64-bit, end to end.
 
+### Two cards
+
+`prism_host.exe` picks the card that runs the network: `NrGpu=` names one (part of its adapter
+name, or `#n`), otherwise an NVIDIA card with the most video memory (an integrated GPU or a software
+adapter only as a last resort; the log lists every adapter). `Offload=1` sends a D3D12 game's frames
+through the bridge too, so a second RTX card runs the network while the game renders on the first:
+at Present the back buffer is copied into a readback buffer on the game's queue, the host (on the
+other NVIDIA card, by the game adapter's LUID in the bridge header) runs it, and the result goes back
+through an upload buffer before the real Present; Core skips its own work at the game's DLSS call.
+A game that renders on a card other than NVIDIA's gets an in-game note (the app sets Windows'
+per-app GPU preference to high performance on PCs with two or more GPUs, and restores it on rollback).
+
 ### Games without DLSS: present mode
 
 `Present=1` runs Core on the frame as the game presents it, for DX12 games with no DLSS of their
@@ -139,6 +151,8 @@ Grade3=          ; slot 3
 GradeSlot=0      ; the slot Look=5 uses, 0-2
 Present=0        ; 1: present mode, for games without DLSS (see above)
 Bridge=0         ; 1: the frame bridge (DX9 / DX10 / DX11 games); the 32-bit Core is always on
+Offload=0        ; 1: a D3D12 game's network runs on a second card, through the bridge
+NrGpu=           ; the card that runs the network in prism_host.exe: part of its name, or #n (none: automatic)
 Target=game.exe  ; loaders load Core only into this executable (none: any)
 PresentReset=1   ; present mode: the network starts fresh every frame (0 keeps its history)
 KeyOverlay=Home  ; the in-game panel
