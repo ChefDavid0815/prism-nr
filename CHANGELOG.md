@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.5.1 — 2026-10-24 · the avatar, staying signed in, no stall at Home
+
+- Uploading an avatar works. The packaged app's Content-Security-Policy allows images from the app
+  and data: URLs only, and the picture was read through a blob: URL, so it never loaded (the dev
+  server has no such policy, which is why it worked there). Pictures are now read as data: URLs;
+  dropping a screenshot on the grading desk's preview had the same fault and is fixed too. A file
+  Windows reports without a type (often .webp) is recognised by its extension.
+- Staying signed in. The session already lived in the app's data folder (updates and reinstalls
+  leave it alone); now only a refresh token the server refuses signs out, never a network failure
+  or a server error, requests made at the same moment share one refresh, and the profile is kept
+  with the session so the app shows the account at once, even offline or while the server is slow.
+- No stall when Prism starts working. The first build (compiling Prism's shaders, starting NVIDIA's
+  runtime, creating the network: about 4.5 s) ran on the game's render thread, so a game froze for
+  that long the first time, which looked like a hang when Core is loaded late at the panel key
+  (Denuvo games such as Crimson Desert). It now runs on a thread and queue of its own while frames
+  pass through untouched, and Prism switches on when it is ready. Measured on a DX12 test app over
+  8 s: 587 frames presented before, 1608 now, with the same result once running.
+
 ## 1.5.0 (experimental) — 2026-10-24 · accounts, grade codes, the community, redeem codes
 
 - The community is organised by game, and for signed-in accounts only. It opens on a search and the

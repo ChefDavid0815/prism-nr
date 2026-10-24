@@ -661,6 +661,7 @@ bool netReset = false;  // NetReset=1: the network starts without its history on
 // come for a moment (see PipelinePresent). PresentReset=0 keeps the network's history from frame to
 // frame (there are no motion vectors to move it with).
 bool presentMode = false, presentReset = true;
+double NowMs();                    // the performance counter in ms (frame pacing, below)
 bool offload = false;              // Offload=1: a second card runs the network (prism_host.exe, the bridge)
 bool presenting = false;           // PipelineRecord is running for PipelinePresent
 double lastUpscaleMs = -1e9;       // the game's last upscale evaluation
@@ -882,12 +883,10 @@ void Exhume() {
   for (auto it = graveNgx.begin(); it != graveNgx.end();) { if (due(it->first)) { if (nrRelease) nrRelease(it->second); it = graveNgx.erase(it); } else ++it; }
 }
 
-// Builds the pipeline for the current output size. The parts that do not depend on the size
-// (shaders, the runtime, timestamps, the Present hook) are made once; a resize rebuilds the rest.
-bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
+// The parts of Setup that do not depend on the output size: the root signature, the look's
+// constants and the shaders (compiling them is most of the start-up time), on the global device.
+bool BuildOnce() {
   HRESULT hr = S_OK;
-  if (!root) {
-  if (FAILED(list->GetDevice(__uuidof(ID3D12Device), (void**)&device))) return Fail("GetDevice");
   // Shaders, compiled by the system's d3dcompiler_47.dll.
   using CompileFn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
   auto compile = (CompileFn)(void*)GetProcAddress(LoadLibraryW(L"d3dcompiler_47.dll"), "D3DCompile");
@@ -923,6 +922,106 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
     D3D12_COMPUTE_PIPELINE_STATE_DESC pd = {}; pd.pRootSignature = root; pd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
     if (FAILED(hr = device->CreateComputePipelineState(&pd, __uuidof(ID3D12PipelineState), (void**)pso))) return Fail("pipeline state", hr);
   }
+  return true;
+}
+
+// The network's runtime (the signed nvngx_dlssnr.dll from the game's folder), once per device.
+bool InitRuntime() {
+  if (nrCreate) return true;
+  ngx::Result r = ngx::kSuccess;
+  HMODULE nr = LoadLibraryW((gameDir + L"nvngx_dlssnr.dll").c_str());
+  if (!nr) return Fail("nvngx_dlssnr.dll not found beside the game");
+  nrInit = (InitFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_Init_Ext");
+  nrCreate = (CreateFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_CreateFeature");
+  nrEvaluate = (EvaluateFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_EvaluateFeature");
+  nrRelease = (ReleaseFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_ReleaseFeature");
+  if (!nrInit || !nrCreate || !nrEvaluate) return Fail("runtime exports");
+  const double initAt = NowMs();
+  r = nrInit(0x876232cULL, gameDir.c_str(), device, 0x15, nullptr);
+  if (r != ngx::kSuccess) { Log("NR init 0x%08x", r); nrCreate = nullptr; return Fail("NR init"); }
+  Log("NR runtime initialised in %.0f ms", NowMs() - initAt);
+  return true;
+}
+
+// The network itself at this size, recorded into list (the game's, or the warm-up's own).
+bool CreateNetwork(ID3D12GraphicsCommandList* list, UINT width, UINT height) {
+  nrParams.vtable = ownedVtable;
+  void* p = &nrParams;
+  ngx::SetUI(p, "Width", width); ngx::SetUI(p, "Height", height); ngx::SetUI(p, "OutWidth", width); ngx::SetUI(p, "OutHeight", height);
+  for (const char* k : {"DLSSNR.Width", "DLSSNR.InputWidth", "DLSSNR.OutputWidth", "DLSSNR.Output.Width"}) ngx::SetUI(p, k, width);
+  for (const char* k : {"DLSSNR.Height", "DLSSNR.InputHeight", "DLSSNR.OutputHeight", "DLSSNR.Output.Height"}) ngx::SetUI(p, k, height);
+  ngx::SetF(p, "DLSSNR.ScalingRatio", 1.f); ngx::SetF(p, "DLSSNR.Scale", 1.f);
+  ngx::SetPtr(p, "DLSSNRComputeScalingRatioCallback", (void*)&ScalingRatio);
+  ngx::SetI(p, "PerfQualityValue", 0);
+  // The game's flags (low-resolution motion, jitter, depth sense), minus HDR and auto exposure:
+  // the proxy is display-referred.
+  ngx::SetI(p, "DLSS.Feature.Create.Flags", gameCreateFlags & ~((1 << 0) | (1 << 6)));
+  ngx::SetUI(p, "CreationNodeMask", 1); ngx::SetUI(p, "VisibilityNodeMask", 1);
+  const double createAt = NowMs();
+  const ngx::Result r = nrCreate(list, ngx::kFeatureNeuralRendering, p, &nrHandle);
+  if (r != ngx::kSuccess || !nrHandle) { Log("NR create 0x%08x", r); return Fail("NR create"); }
+  Log("NR feature created in %.0f ms", NowMs() - createAt);
+  return true;
+}
+
+// The first build's slow part (shaders, the runtime, the network: seconds) runs on a thread of its
+// own with a queue of its own, and frames pass through untouched meanwhile: the game never stops,
+// neither at start-up nor when Core is loaded late at the panel key (a stall of several seconds on
+// the render thread looked like a hang there). The output size it builds for is the first frame's.
+std::atomic<int> warm{0};   // 0 not started, 1 running, 2 done, 3 could not start (Setup does it all)
+UINT warmW = 0, warmH = 0;  // the size the warm-up made the network for
+
+DWORD WINAPI WarmUp(void*) {
+  const double t0 = NowMs();
+  bool ok = BuildOnce() && InitRuntime();
+  if (ok) {
+    D3D12_COMMAND_QUEUE_DESC qd = {}; qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    ID3D12CommandQueue* q = nullptr;
+    ID3D12CommandAllocator* a = nullptr;
+    ID3D12GraphicsCommandList* l = nullptr;
+    ID3D12Fence* f = nullptr;
+    ok = SUCCEEDED(device->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), (void**)&q)) &&
+         SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void**)&a)) &&
+         SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, a, nullptr, __uuidof(ID3D12GraphicsCommandList), (void**)&l)) &&
+         SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)&f));
+    if (!ok) Fail("warm-up queue");
+    ok = ok && CreateNetwork(l, warmW, warmH);
+    if (ok && SUCCEEDED(l->Close())) {
+      ID3D12CommandList* lists[] = {l};
+      q->ExecuteCommandLists(1, lists);
+      q->Signal(f, 1);
+      HANDLE e = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+      if (f->GetCompletedValue() < 1 && e) { f->SetEventOnCompletion(1, e); WaitForSingleObject(e, 10000); }
+      if (e) CloseHandle(e);
+    }
+    if (f) f->Release();
+    if (l) l->Release();
+    if (a) a->Release();
+    if (q) q->Release();
+  }
+  Log("warm-up %s in %.0f ms, off the game's render thread (frames passed through meanwhile)", ok ? "done" : "failed", NowMs() - t0);
+  warm = 2;
+  return 0;
+}
+
+void StartWarmUp(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
+  if (!device && FAILED(list->GetDevice(__uuidof(ID3D12Device), (void**)&device))) { warm = 3; return; }
+  const D3D12_RESOURCE_DESC od = output->GetDesc();
+  warmW = UINT(od.Width); warmH = od.Height;
+  warm = 1;
+  HANDLE t = CreateThread(nullptr, 0, WarmUp, nullptr, 0, nullptr);
+  if (!t) { warm = 3; warmW = warmH = 0; return; }
+  CloseHandle(t);
+  Log("warm-up started for %ux%u: shaders, the runtime and the network on a thread of their own", warmW, warmH);
+}
+
+// Builds the pipeline for the current output size. The parts that do not depend on the size
+// (shaders, the runtime, timestamps, the Present hook) are made once; a resize rebuilds the rest.
+bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
+  HRESULT hr = S_OK;
+  if (!root) {
+  if (!device && FAILED(list->GetDevice(__uuidof(ID3D12Device), (void**)&device))) return Fail("GetDevice");
+  if (!BuildOnce()) return false;
   }  // once
   // Resources at the output size.
   const D3D12_RESOURCE_DESC od = output->GetDesc();
@@ -974,32 +1073,10 @@ bool Setup(ID3D12GraphicsCommandList* list, ID3D12Resource* output) {
   netProxy = proxy; netNeural = neural; netMids[0] = mids[0]; netMids[1] = mids[1];
 
   // The network: the signed runtime from the game folder, initialised on the game's device (once).
-  ngx::Result r = ngx::kSuccess;
-  if (!nrCreate) {
-  HMODULE nr = LoadLibraryW((gameDir + L"nvngx_dlssnr.dll").c_str());
-  if (!nr) return Fail("nvngx_dlssnr.dll not found beside the game");
-  nrInit = (InitFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_Init_Ext");
-  nrCreate = (CreateFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_CreateFeature");
-  nrEvaluate = (EvaluateFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_EvaluateFeature");
-  nrRelease = (ReleaseFn)(void*)GetProcAddress(nr, "NVSDK_NGX_D3D12_ReleaseFeature");
-  if (!nrInit || !nrCreate || !nrEvaluate) return Fail("runtime exports");
-  r = nrInit(0x876232cULL, gameDir.c_str(), device, 0x15, nullptr);
-  if (r != ngx::kSuccess) { Log("NR init 0x%08x", r); nrCreate = nullptr; return Fail("NR init"); }
-  }  // once
-  nrParams.vtable = ownedVtable;
-  void* p = &nrParams;
-  ngx::SetUI(p, "Width", nw); ngx::SetUI(p, "Height", nh); ngx::SetUI(p, "OutWidth", nw); ngx::SetUI(p, "OutHeight", nh);
-  for (const char* k : {"DLSSNR.Width", "DLSSNR.InputWidth", "DLSSNR.OutputWidth", "DLSSNR.Output.Width"}) ngx::SetUI(p, k, nw);
-  for (const char* k : {"DLSSNR.Height", "DLSSNR.InputHeight", "DLSSNR.OutputHeight", "DLSSNR.Output.Height"}) ngx::SetUI(p, k, nh);
-  ngx::SetF(p, "DLSSNR.ScalingRatio", 1.f); ngx::SetF(p, "DLSSNR.Scale", 1.f);
-  ngx::SetPtr(p, "DLSSNRComputeScalingRatioCallback", (void*)&ScalingRatio);
-  ngx::SetI(p, "PerfQualityValue", 0);
-  // The game's flags (low-resolution motion, jitter, depth sense), minus HDR and auto exposure:
-  // the proxy is display-referred.
-  ngx::SetI(p, "DLSS.Feature.Create.Flags", gameCreateFlags & ~((1 << 0) | (1 << 6)));
-  ngx::SetUI(p, "CreationNodeMask", 1); ngx::SetUI(p, "VisibilityNodeMask", 1);
-  r = nrCreate(list, ngx::kFeatureNeuralRendering, p, &nrHandle);
-  if (r != ngx::kSuccess || !nrHandle) { Log("NR create 0x%08x", r); return Fail("NR create"); }
+  if (!InitRuntime()) return false;
+  // The warm-up may have made the network already, for this size (on its own queue).
+  if (!(nrHandle && warmW == nw && warmH == nh) && !CreateNetwork(list, nw, nh)) return false;
+  warmW = warmH = 0;
   D3D12_QUERY_HEAP_DESC qd = {}; qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP; qd.Count = 2 * kRing;
   if (!queries && SUCCEEDED(device->CreateQueryHeap(&qd, __uuidof(ID3D12QueryHeap), (void**)&queries))) {
     D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_READBACK;
@@ -1915,7 +1992,9 @@ bool PipelineRecord(const UpscaleCall& c) {
       waited = 0;
     }
     if (!heap) {
-      if (!Setup(c.list, c.output)) return false;
+      if (!root && warm == 0) StartWarmUp(c.list, c.output);
+      if (warm == 1) return false;  // warming up: this frame as the game made it
+      if (failed || !Setup(c.list, c.output)) return false;
       builtRW = c.renderWidth; builtRH = c.renderHeight; builtFormat = nd.Format;
     }
   }
@@ -2524,7 +2603,7 @@ bool PipelineFrame(ID3D12CommandQueue* q, ID3D12Resource* bb, int mode) {
   q->Signal(pres.fence, ++pres.fenceValue);
   pres.done[s] = pres.fenceValue;
   static bool said = false;
-  if (!said) { said = true; Log("present mode: first frame processed at Present (mode %d)", mode); }
+  if (ok && !said) { said = true; Log("present mode: first frame processed at Present (mode %d)", mode); }
   return ok;
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { encodeGradeCode, type GradeCodeGame } from '../../electron/shared/gradecode';
 import { api } from '../api';
+import { isImageFile, readImageFile } from '../lib/image';
 import {
   byHue, curveAt, CURVE_CHANNELS, CURVE_STOPS, G, G_CURVE, G_HUE_LIGHT, G_HUE_SAT, G_HUE_SHIFT, GRADE, GRADE_PAGES, GRADE_SLOTS,
   gradeFormat, gradeFromPreset, gradeParse, gradeText, gradeTone, gradeToShader, gradeValueKey, HUE_CENTRES, hueCss, neutralGrade, type GradeValues,
@@ -484,10 +485,10 @@ function Preview({ grade }: { grade: GradeValues }) {
   }, [k, split]);
 
   const load = (f: File | undefined) => {
-    if (!f || !f.type.startsWith('image/')) return;
-    const img = new Image();
-    img.onload = () => { upload(img, img.naturalWidth, img.naturalHeight); setSource('image'); setSplit((v) => v + 1e-6); URL.revokeObjectURL(img.src); };
-    img.src = URL.createObjectURL(f);
+    if (!f || !isImageFile(f)) return;
+    readImageFile(f)
+      .then((img) => { upload(img, img.naturalWidth, img.naturalHeight); setSource('image'); setSplit((v) => v + 1e-6); })
+      .catch((e) => console.error(e));
   };
   const useChart = () => { const chart = document.createElement('canvas'); drawChart(chart); upload(chart, 1600, 1000); setSource('chart'); setSplit((v) => v + 1e-6); };
   const aspect = gl.current ? gl.current.w / gl.current.h : 1.6;

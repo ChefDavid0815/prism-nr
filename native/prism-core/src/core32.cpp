@@ -59,7 +59,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
     logFile = _wfopen((dir + L"prism-core.log").c_str(), L"w");
     wchar_t exe[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    Log("Prism Core 1.5.0 (32-bit: the frame bridge to prism_host.exe) loaded into %ls (pid %lu)", exe, GetCurrentProcessId());
+    Log("Prism Core 1.5.1 (32-bit: the frame bridge to prism_host.exe) loaded into %ls (pid %lu)", exe, GetCurrentProcessId());
     if (MH_Initialize() != MH_OK) { Log("MinHook init failed"); return TRUE; }
     prism::BridgeInit(dir, &Log);
     CloseHandle(CreateThread(nullptr, 0, Watch, nullptr, 0, nullptr));

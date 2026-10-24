@@ -79,7 +79,7 @@ IDXGIAdapter1* PickAdapter(IDXGIFactory4* factory, const std::wstring& dir, cons
 }
 
 int HostRun(unsigned long pid, const std::wstring& dir, LogFn Log) {
-  Log("prism_host 1.5.0 for process %lu", pid);
+  Log("prism_host 1.5.1 for process %lu", pid);
 
   HANDLE game = OpenProcess(SYNCHRONIZE, FALSE, pid);
   wchar_t mName[64], pName[64], dName[64];

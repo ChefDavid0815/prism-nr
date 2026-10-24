@@ -32,19 +32,32 @@ export class AccountService {
   private profile: AccountProfile | null = null;
   private readonly file: string;
 
+  /**
+   * The session (and the profile as last seen) live in userData/account.bin, encrypted with the
+   * Windows account: an update or a reinstall leaves that folder alone, so nobody signs in again.
+   * Only signing out, or the server refusing the refresh token, removes it.
+   */
   constructor(userData: string) {
     this.file = path.join(userData, 'account.bin');
     try {
-      if (fs.existsSync(this.file) && safeStorage.isEncryptionAvailable()) this.session = JSON.parse(safeStorage.decryptString(fs.readFileSync(this.file)));
-    } catch {
+      if (fs.existsSync(this.file) && safeStorage.isEncryptionAvailable()) {
+        const saved = JSON.parse(safeStorage.decryptString(fs.readFileSync(this.file)));
+        const { profile, ...session } = saved;
+        this.session = session.refresh_token ? session : null;
+        this.cached = profile ?? null;
+      }
+    } catch (e) {
+      log(`account: saved session unreadable: ${(e as Error).message}`);
       this.session = null;
     }
   }
+  /** The profile as last loaded, for starting offline or while the server is slow. */
+  private cached: AccountProfile | null = null;
 
   private save(): void {
     try {
       if (!this.session) fs.rmSync(this.file, { force: true });
-      else if (safeStorage.isEncryptionAvailable()) fs.writeFileSync(this.file, safeStorage.encryptString(JSON.stringify(this.session)));
+      else if (safeStorage.isEncryptionAvailable()) fs.writeFileSync(this.file, safeStorage.encryptString(JSON.stringify({ ...this.session, profile: this.profile ?? this.cached ?? undefined })));
     } catch (e) {
       log(`account: session not saved: ${(e as Error).message}`);
     }
@@ -109,18 +122,29 @@ export class AccountService {
     this.save();
   }
 
-  /** A valid access token, refreshed when it is within a minute of expiring. */
+  private refreshing: Promise<void> | null = null;
+
+  /**
+   * A valid access token, refreshed when it is within a minute of expiring. Requests made at the
+   * same moment share one refresh (the server rotates refresh tokens). Only a refresh token the
+   * server rejects signs the account out; a network failure or a server error keeps the session.
+   */
   private async token(): Promise<string> {
     if (!this.session) throw new Error('请先登录。');
     if (this.session.expires_at - 60 < Date.now() / 1000) {
-      const { status, data } = await this.request(`/auth/v1/token?grant_type=refresh_token`, { method: 'POST', json: { refresh_token: this.session.refresh_token } });
-      if (status >= 400) {
-        this.session = null;
-        this.profile = null;
-        this.save();
-        throw new Error('登录已过期，请重新登录。');
-      }
-      this.adopt(data);
+      this.refreshing ??= (async () => {
+        const { status, data } = await this.request(`/auth/v1/token?grant_type=refresh_token`, { method: 'POST', json: { refresh_token: this.session!.refresh_token } });
+        if (status === 400 || status === 401) {
+          log(`account: refresh token refused (${status} ${String(data.error_code ?? data.error ?? '')}); signed out`);
+          this.session = null;
+          this.profile = this.cached = null;
+          this.save();
+          throw new Error('登录已过期，请重新登录。');
+        }
+        if (status >= 400) throw new Error(`账号服务器暂时不可用（${status}），稍后再试。`);
+        this.adopt(data);
+      })().finally(() => { this.refreshing = null; });
+      await this.refreshing;
     }
     return this.session!.access_token;
   }
@@ -135,17 +159,20 @@ export class AccountService {
       id: row.id, username: row.username, phone: row.phone, role: row.role, createdAt: row.created_at, email: this.session.user.email,
       bio: row.bio ?? '', avatar: row.avatar ?? null, plan: row.plan ?? 'free', founder: Boolean(row.founder), contributor: Boolean(row.contributor),
     };
+    this.cached = this.profile;
+    this.save();
     return this.profile;
   }
 
   async state(): Promise<AccountState> {
     if (!this.session) return { signedIn: false };
     try {
-      const profile = this.profile ?? (await this.loadProfile());
+      const profile = this.profile ?? (await this.loadProfile()) ?? this.cached;
       return profile ? { signedIn: true, profile } : { signedIn: false };
-    } catch (e) {
-      // Offline: still signed in on this PC, the profile as last seen.
-      return this.profile ? { signedIn: true, profile: this.profile } : { signedIn: false };
+    } catch {
+      // Offline or the server is slow: still signed in on this PC, with the profile as last seen.
+      if (!this.session) return { signedIn: false };  // the server refused the refresh token
+      return this.cached ? { signedIn: true, profile: this.cached } : { signedIn: false };
     }
   }
 
@@ -182,7 +209,7 @@ export class AccountService {
   async signOut(): Promise<void> {
     if (this.session) await this.request(`/auth/v1/logout`, { method: 'POST', token: this.session.access_token }).catch(() => undefined);
     this.session = null;
-    this.profile = null;
+    this.profile = this.cached = null;
     this.save();
   }
 

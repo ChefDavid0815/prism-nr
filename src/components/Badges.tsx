@@ -1,4 +1,5 @@
 import type { AccountPlan, AccountRole } from '../../electron/shared/account';
+import { isImageFile, readImageFile } from '../lib/image';
 
 /**
  * An account's marks, drawn from the brand: white light through a prism, out as the four colours.
@@ -114,29 +115,20 @@ export function Avatar({ name, src, size = 32, plan }: { name: string; src?: str
 
 /** A picture file as a square avatar: centre-cropped, 160 px, WebP, small enough for the server. */
 export async function avatarFromFile(file: File, max: number): Promise<string> {
-  if (!/^image\//.test(file.type)) throw new Error('请选择一张图片。');
-  const url = URL.createObjectURL(file);
-  try {
-    const img = await new Promise<HTMLImageElement>((ok, fail) => {
-      const i = new Image();
-      i.onload = () => ok(i);
-      i.onerror = () => fail(new Error('这张图片打不开，请换一张。'));
-      i.src = url;
-    });
-    const side = Math.min(img.naturalWidth, img.naturalHeight);
-    const canvas = document.createElement('canvas');
-    for (const px of [160, 128, 96]) {
-      canvas.width = canvas.height = px;
-      const ctx = canvas.getContext('2d')!;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, px, px);
-      for (const q of [0.9, 0.8, 0.65]) {
-        const data = canvas.toDataURL('image/webp', q);
-        if (data.startsWith('data:image/webp') && data.length <= max) return data;
-      }
+  if (!isImageFile(file)) throw new Error('请选择一张图片（PNG、JPG 或 WebP）。');
+  const img = await readImageFile(file);
+  const side = Math.min(img.naturalWidth, img.naturalHeight);
+  if (!side) throw new Error('这张图片是空的，请换一张。');
+  const canvas = document.createElement('canvas');
+  for (const px of [160, 128, 96]) {
+    canvas.width = canvas.height = px;
+    const ctx = canvas.getContext('2d')!;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, px, px);
+    for (const q of [0.9, 0.8, 0.65]) {
+      const data = canvas.toDataURL('image/webp', q);
+      if (data.startsWith('data:image/webp') && data.length <= max) return data;
     }
-    throw new Error('这张图片压缩后还是太大，请换一张。');
-  } finally {
-    URL.revokeObjectURL(url);
   }
+  throw new Error('这张图片压缩后还是太大，请换一张。');
 }
