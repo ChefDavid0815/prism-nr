@@ -1,5 +1,6 @@
 import { PLUGINS, PRESETS, resolveValues } from '../electron/shared/catalog';
 import { matchProfile } from '../electron/shared/profiles';
+import { normPhone, type AccountProfile, type AdminUser } from '../electron/shared/account';
 import type { GameAnalysis, GameEntry, InstallPlan, InstallProgress, InstallRecord, PresetId, PrismApi, Route, SystemInfo } from '../electron/shared/types';
 
 declare global {
@@ -156,6 +157,103 @@ function createPreviewApi(): PrismApi {
     openPath: async () => {},
     openExternal: async (url) => {
       window.open(url, '_blank');
+    },
+    account: previewAccount(),
+  };
+}
+
+/** Accounts in preview mode: in memory, the code is always 123456; sign in as admin / admin to see the admin page. */
+function previewAccount(): PrismApi['account'] {
+  const day = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
+  const users: (AdminUser & { password: string })[] = [
+    { id: 'u0', username: 'admin', email: 'admin@prism-nr.local', phone: null, role: 'admin', confirmed: true, banned: false, created_at: day(3), last_sign_in_at: day(0), password: 'admin' },
+    { id: 'u1', username: '晨风', email: 'chenfeng@example.com', phone: '+8613800138000', role: 'user', confirmed: true, banned: false, created_at: day(2), last_sign_in_at: day(0), password: 'password1' },
+    { id: 'u2', username: 'pixel_hunter', email: 'pixel@example.com', phone: '+14155550123', role: 'user', confirmed: true, banned: false, created_at: day(1), last_sign_in_at: day(1), password: 'password1' },
+    { id: 'u3', username: 'user_3f9a21c0', email: 'newbie@example.com', phone: null, role: 'user', confirmed: false, banned: false, created_at: day(0), last_sign_in_at: null, password: 'password1' },
+    { id: 'u4', username: '刷号的', email: 'spam@example.com', phone: null, role: 'user', confirmed: true, banned: true, created_at: day(0), last_sign_in_at: day(0), password: 'password1' },
+  ];
+  let me: string | null = null;
+  const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
+  const profileOf = (u: AdminUser): AccountProfile => ({ id: u.id, username: u.username, email: u.email, phone: u.phone, role: u.role, createdAt: u.created_at });
+  const state = () => {
+    const u = users.find((x) => x.id === me);
+    return u ? { signedIn: true, profile: profileOf(u) } : { signedIn: false };
+  };
+  const find = (id: string) => {
+    const t = id.trim().toLowerCase();
+    const phone = normPhone(t);
+    return users.find((u) => u.email === t || u.username.toLowerCase() === t || (phone && u.phone === phone));
+  };
+  return {
+    state: async () => state(),
+    signUp: async ({ email, password, username, phone }) => {
+      await delay(500);
+      if (users.some((u) => u.email === email.toLowerCase())) throw new Error('这个邮箱已经注册过了，请直接登录');
+      if (username && users.some((u) => u.username.toLowerCase() === username.toLowerCase())) throw new Error('这个用户名已经有人用了');
+      if (password.length < 8) throw new Error('密码至少 8 位');
+      users.push({ id: 'u' + users.length, username: username || 'user_' + Math.random().toString(16).slice(2, 10), email: email.toLowerCase(), phone: phone ? normPhone(phone) : null, role: 'user', confirmed: false, banned: false, created_at: new Date().toISOString(), last_sign_in_at: null, password });
+      return { needsCode: true, email: email.toLowerCase() };
+    },
+    verify: async (email, code) => {
+      await delay(400);
+      const u = users.find((x) => x.email === email);
+      if (!u || code.trim() !== '123456') throw new Error('验证码不对或已过期，请重新发送。');
+      u.confirmed = true;
+      me = u.id;
+      return state();
+    },
+    resend: async () => { await delay(300); },
+    signIn: async (identifier, password) => {
+      await delay(500);
+      const u = find(identifier);
+      if (!u || u.password !== password) throw new Error('账号或密码不对');
+      if (u.banned) throw new Error('这个账号已被管理员停用');
+      if (!u.confirmed) return { needsCode: true, email: identifier.includes('@') ? u.email : null, hint: u.email.replace(/^(.{1,2})[^@]*(@.*)$/, '$1***$2') };
+      me = u.id;
+      u.last_sign_in_at = new Date().toISOString();
+      return state();
+    },
+    signOut: async () => {
+      me = null;
+    },
+    updateProfile: async (patch) => {
+      await delay(300);
+      const u = users.find((x) => x.id === me)!;
+      if (patch.username !== undefined) {
+        if (users.some((x) => x.id !== u.id && x.username.toLowerCase() === patch.username!.toLowerCase())) throw new Error('这个用户名已经有人用了。');
+        u.username = patch.username.trim();
+      }
+      if (patch.phone !== undefined) u.phone = patch.phone ? normPhone(patch.phone) : null;
+      return state();
+    },
+    admin: async (a) => {
+      await delay(250);
+      if (a.action === 'stats') {
+        const recent = (d: string | null, n: number) => d && Date.now() - Date.parse(d) < n * 86400000;
+        return { stats: { total: users.length, confirmed: users.filter((u) => u.confirmed).length, admins: users.filter((u) => u.role === 'admin').length, banned: users.filter((u) => u.banned).length, new_7d: users.filter((u) => recent(u.created_at, 7)).length, active_7d: users.filter((u) => recent(u.last_sign_in_at, 7)).length, new_today: users.filter((u) => recent(u.created_at, 1)).length } };
+      }
+      if (a.action === 'list') {
+        const q = (a.q ?? '').toLowerCase();
+        const rows = users.filter((u) => !q || u.username.toLowerCase().includes(q) || u.email.includes(q) || (u.phone ?? '').includes(q)).map(({ password: _p, ...u }) => u);
+        return { users: rows, total: rows.length, page: 0, size: 50 };
+      }
+      const u = users.find((x) => x.id === a.id);
+      if (!u) throw new Error('缺少账号');
+      if (a.action === 'update') {
+        if (a.username !== undefined) u.username = a.username;
+        if (a.phone !== undefined) u.phone = a.phone ? normPhone(a.phone) : null;
+        if (a.role !== undefined) {
+          if (u.id === me && a.role !== 'admin') throw new Error('不能取消自己的管理员身份');
+          u.role = a.role;
+        }
+      } else if (a.action === 'ban') {
+        if (u.id === me) throw new Error('不能停用自己的账号');
+        u.banned = a.banned;
+      } else if (a.action === 'delete') {
+        if (u.id === me) throw new Error('不能删除自己的账号');
+        users.splice(users.indexOf(u), 1);
+      } else if (a.action === 'password') u.password = a.password;
+      return { ok: true };
     },
   };
 }

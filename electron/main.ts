@@ -5,6 +5,8 @@ import { setCoreDir, setShaderDir } from './core/installer';
 import { setBundledNvidiaDir } from './core/nvidia';
 import { setBundledComponentsDir } from './core/components';
 import { PrismService } from './core/service';
+import { AccountService } from './core/account';
+import type { AdminAction } from './shared/account';
 import { initStore } from './core/store';
 import { log } from './core/util';
 import type { InstallPlan, PlanRequest } from './shared/types';
@@ -62,6 +64,15 @@ app.whenReady().then(() => {
   setBundledNvidiaDir(app.isPackaged ? path.join(process.resourcesPath, 'nvidia') : path.join(__dirname, '..', 'vendor-nvidia'));
   setCoreDir(app.isPackaged ? path.join(process.resourcesPath, 'prism-core') : path.join(__dirname, '..', 'native', 'prism-core', 'build'));
   service = new PrismService();
+  const account = new AccountService(app.getPath('userData'));
+  handle('account.state', () => account.state());
+  handle('account.signUp', (args: { email: string; password: string; username?: string; phone?: string }) => account.signUp(args));
+  handle('account.verify', (email: string, code: string) => account.verify(email, code));
+  handle('account.resend', (email: string) => account.resend(email));
+  handle('account.signIn', (identifier: string, password: string) => account.signIn(identifier, password));
+  handle('account.signOut', () => account.signOut());
+  handle('account.updateProfile', (patch: { username?: string; phone?: string | null }) => account.updateProfile(patch));
+  handle('account.admin', (action: AdminAction) => account.admin(action));
 
   handle('system', () => service.getSystem());
   handle('scan', () => service.scanGames());

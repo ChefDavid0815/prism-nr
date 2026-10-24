@@ -34,6 +34,16 @@ const api: PrismApi = {
   setMotion: (m) => call('setMotion', m),
   openPath: (p) => call('openPath', p),
   openExternal: (url) => call('openExternal', url),
+  account: {
+    state: () => call('account.state'),
+    signUp: (args) => call('account.signUp', args),
+    verify: (email, code) => call('account.verify', email, code),
+    resend: (email) => call('account.resend', email),
+    signIn: (identifier, password) => call('account.signIn', identifier, password),
+    signOut: () => call('account.signOut'),
+    updateProfile: (patch) => call('account.updateProfile', patch),
+    admin: (action) => call('account.admin', action),
+  },
 };
 
 contextBridge.exposeInMainWorld('prism', api);

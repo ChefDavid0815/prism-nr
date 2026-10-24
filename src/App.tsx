@@ -11,8 +11,11 @@ import { HistoryView } from './views/HistoryView';
 import { coreRoute, LibraryView } from './views/LibraryView';
 import { PluginsView } from './views/PluginsView';
 import { SettingsView } from './views/SettingsView';
+import { AccountView } from './views/AccountView';
+import { AdminView } from './views/AdminView';
+import type { AccountState } from '../electron/shared/account';
 
-type View = 'library' | 'plugins' | 'history' | 'diagnostics' | 'settings';
+type View = 'library' | 'plugins' | 'history' | 'diagnostics' | 'settings' | 'account' | 'admin';
 
 const TIER_LABEL: Record<string, string> = { flagship: '旗舰', high: '高端', mainstream: '主流', entry: '入门', legacy: '上代', unsupported: '不支持' };
 
@@ -27,6 +30,7 @@ export function App() {
   const [sweep, setSweep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [upgrades, setUpgrades] = useState<string[]>([]);
+  const [account, setAccount] = useState<AccountState | null>(null);
 
   const refreshInstalls = useCallback(() => api.listInstalls().then(setInstalls).catch(() => {}), []);
 
@@ -54,7 +58,12 @@ export function App() {
     api.getSettings().then((s) => setMotionState(s.motion)).catch(() => {});
     refreshInstalls();
     void scan();
+    api.account.state().then(setAccount).catch(() => setAccount({ signedIn: false }));
   }, [scan, refreshInstalls]);
+  const isAdmin = account?.signedIn && account.profile?.role === 'admin';
+  useEffect(() => {
+    if (view === 'admin' && !isAdmin) setView('account');
+  }, [view, isAdmin]);
 
   useEffect(() => {
     document.documentElement.dataset.motion = motion;
@@ -75,6 +84,8 @@ export function App() {
     { id: 'history', label: '还原记录', count: String(activeCount).padStart(2, '0') },
     { id: 'diagnostics', label: '诊断' },
     { id: 'settings', label: '设置' },
+    { id: 'account', label: account?.signedIn && account.profile ? account.profile.username : '登录' },
+    ...(isAdmin ? [{ id: 'admin' as View, label: '管理' }] : []),
   ];
 
   const onApplied = useCallback(() => {
@@ -153,6 +164,8 @@ export function App() {
           {view === 'history' && <HistoryView installs={installs} onChange={refreshInstalls} />}
           {view === 'diagnostics' && <DiagnosticsView />}
           {view === 'settings' && <SettingsView motion={motion} onMotion={setMotion} />}
+          {view === 'account' && <AccountView account={account} onChange={setAccount} />}
+          {view === 'admin' && isAdmin && <AdminView selfId={account!.profile!.id} />}
         </main>
         <Sweep run={sweep} onDone={() => setSweep(0)} />
       </div>

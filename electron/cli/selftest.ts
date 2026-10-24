@@ -13,6 +13,7 @@ import { setIniValue } from '../core/installer';
 import { netScaleFor, netSizeFor, PRESETS, resolveValues, tierLocked, tierOf } from '../shared/catalog';
 import { nrCostFor, planNr } from '../shared/nrplan';
 import { GRADE, gradeFormat, gradeFromPreset, gradeParse, gradeToShader } from '../shared/grade';
+import { ACCOUNT_KEY, normPhone, showPhone, USERNAME_RULE } from '../shared/account';
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) {
@@ -115,6 +116,12 @@ async function main(): Promise<void> {
     assert(fileMentions(f, ['d3d12.dll', 'D3D12CreateDevice']) && !fileMentions(g, ['d3d12.dll', 'D3D12CreateDevice']),
       'DX12 first: a renderer loaded at run time is found by name in the binary (UTF-16, any case, across a chunk boundary)');
   }
+  assert(normPhone('138 0013 8000') === '+8613800138000' && normPhone('+1 (415) 555-0123') === '+14155550123' && normPhone('0044 20 7946 0958') === '+442079460958' &&
+    normPhone('12345') === null && normPhone('23800138000') === null && showPhone('+8613800138000') === '+86 138 0013 8000' && showPhone('+14155550123') === '+14155550123',
+    'Accounts: phone numbers from any country to E.164 (11-digit mainland numbers get +86), shown readably');
+  assert(USERNAME_RULE.test('晨风') && USERNAME_RULE.test('pixel_hunter') && !USERNAME_RULE.test('a') && !USERNAME_RULE.test('has space') && !USERNAME_RULE.test('x'.repeat(21)),
+    'Accounts: usernames of 2-20 Chinese characters, letters, digits and underscores');
+  assert(/^sb_publishable_/.test(ACCOUNT_KEY), 'Accounts: the app carries only the publishable key, never a service key');
   const pl = (i: string[] | undefined, o = {}) => pickLoader(i, o).name;
   assert(pl(['dxgi', 'version', 'd3d12']) === 'version.dll' && pl(['d3d12', 'winmm']) === 'winmm.dll' && pl(['d3d12']) === 'd3d12.dll' && pl([]) === 'dxgi.dll' && pl(undefined) === 'dxgi.dll',
     'Loaders: version.dll first, then what the EXE imports, dxgi.dll when it imports none of them');

@@ -298,6 +298,8 @@ export interface PlanRequest {
   acceptRisk?: boolean;
 }
 
+import type { AccountPending, AccountState, AdminAction } from './account';
+
 export interface PrismApi {
   getSystem(): Promise<SystemInfo>;
   scanGames(): Promise<GameEntry[]>;
@@ -324,4 +326,15 @@ export interface PrismApi {
   exportDiagnostics(): Promise<string | null>;
   openPath(p: string): Promise<void>;
   openExternal(url: string): Promise<void>;
+  // Accounts (1.5, experimental; see shared/account.ts).
+  account: {
+    state(): Promise<AccountState>;
+    signUp(args: { email: string; password: string; username?: string; phone?: string }): Promise<AccountPending>;
+    verify(email: string, code: string): Promise<AccountState>;
+    resend(email: string): Promise<void>;
+    signIn(identifier: string, password: string): Promise<AccountState | AccountPending>;
+    signOut(): Promise<void>;
+    updateProfile(patch: { username?: string; phone?: string | null }): Promise<AccountState>;
+    admin(action: AdminAction): Promise<Record<string, any>>;
+  };
 }

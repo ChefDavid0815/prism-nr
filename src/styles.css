@@ -1786,3 +1786,204 @@ html[data-motion='standard'] .stage {
   .grade-body { grid-template-columns: minmax(0, 1fr) 380px; }
   .grade-slots { width: 240px; }
 }
+
+/* ---------------------------------------------------------------- accounts (1.5, experimental) */
+.acct {
+  max-width: 560px;
+}
+.acct-mode {
+  width: 240px;
+  margin-bottom: 20px;
+}
+.acct-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.acct-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.acct-label {
+  font-size: 12px;
+  color: #d0d0d0;
+}
+.acct-hint {
+  font-size: 11px;
+  color: var(--grey);
+  line-height: 1.5;
+}
+.acct-field input,
+.admin-search {
+  height: 38px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--white);
+  background: var(--black);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  outline: none;
+  transition: border-color 160ms var(--ease);
+}
+.acct-field input:hover,
+.admin-search:hover {
+  border-color: var(--grey-2);
+}
+.acct-field input:focus-visible,
+.admin-search:focus-visible {
+  border-color: var(--white);
+  outline: none;
+}
+.acct-field input[readonly] {
+  color: var(--grey);
+  border-color: var(--rule-2);
+}
+.acct-field input::placeholder,
+.admin-search::placeholder {
+  color: var(--grey-2);
+}
+.acct-code {
+  width: 180px;
+  letter-spacing: 0.4em;
+  font-size: 18px !important;
+}
+.acct-submit {
+  flex: none;
+  align-self: stretch;
+}
+.acct-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.admin-figures {
+  flex-wrap: wrap;
+  gap: 16px 36px;
+  padding: 16px 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+.admin-figures dd {
+  font-size: 22px;
+  font-weight: 700;
+}
+.admin-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.admin-search {
+  flex: 1;
+  max-width: 360px;
+}
+.admin-table {
+  border-top: 1px solid var(--rule);
+}
+.admin-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.6fr) minmax(0, 1.2fr) 108px 108px 88px;
+  gap: 16px;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 4px;
+  text-align: left;
+  font-size: 13px;
+  border-bottom: 1px solid var(--rule-2);
+  position: relative;
+  isolation: isolate;
+}
+.admin-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-head {
+  min-height: 32px;
+  font-size: 11px;
+  color: var(--grey);
+  border-bottom-color: var(--rule);
+}
+button.admin-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--white);
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 320ms var(--ease);
+}
+button.admin-row:hover {
+  background: #0d0d0d;
+}
+.admin-item.is-open button.admin-row {
+  color: var(--black);
+}
+.admin-item.is-open button.admin-row::before {
+  clip-path: inset(0 0 0 0);
+}
+.admin-name em {
+  margin-left: 8px;
+  padding: 0 6px;
+  font-style: normal;
+  font-size: 11px;
+  border: 1px solid currentColor;
+}
+.admin-cut {
+  color: var(--grey);
+}
+.admin-item.is-open .admin-cut {
+  color: var(--black);
+}
+.admin-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.admin-state i {
+  width: 2px;
+  height: 14px;
+  flex: none;
+}
+.admin-editor {
+  padding: 16px 4px 20px;
+  border-bottom: 1px solid var(--rule);
+}
+.admin-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px 20px;
+  align-items: end;
+}
+.admin-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  grid-column: span 2;
+}
+.admin-grid > .acct-field:nth-of-type(3) {
+  grid-column: span 2;
+  max-width: 360px;
+}
+.admin-danger {
+  border-color: var(--blocked) !important;
+  color: var(--blocked);
+}
+.admin-empty {
+  padding: 16px 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  button.admin-row::before {
+    transition: none;
+  }
+}
+/* The admin figures are page content, not the top bar: all of them show at every width. */
+.admin-figures div,
+.admin-figures div:nth-child(n + 5) {
+  display: block;
+}

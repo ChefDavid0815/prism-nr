@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.5.0 (experimental) — 2026-10-24 · accounts
+
+- Accounts, for the first time, and optional: Prism works the same without signing in. Sign up
+  with an email (a 6-digit code goes to it to prove it is real) and a password, optionally a
+  username and a phone number (mainland numbers as typed, other countries with + and the country
+  code). Sign in with the email, the phone or the username. Each account has a profile whose
+  username and phone its owner can change. The session stays on this PC, encrypted with the
+  Windows account (Electron safeStorage), and renews itself.
+- An administrator's page, for accounts with the admin role only: the number of accounts, verified
+  ones, new today and in 7 days, active in 7 days, administrators and disabled ones; every account
+  with a search; and per account a new username or phone, the admin role, disabling, a new
+  password, or deletion. Each action is checked again on the server; an administrator cannot
+  disable, delete or demote their own account.
+- The server is the prism-nr Supabase project: row-level security keeps each profile to its owner
+  (the role column cannot be changed by its owner), sign-in by phone or username resolves the
+  email server-side (no way to look one up), and failures always read 账号或密码不对.
+
 ## 1.4.2 — 2026-10-24 · the best path first
 
 - A game that has DX12 now goes the DX12 way: the best path first, the others only behind it
