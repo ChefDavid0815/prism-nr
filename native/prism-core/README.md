@@ -79,6 +79,11 @@ through the bridge too, so a second RTX card runs the network while the game ren
 at Present the back buffer is copied into a readback buffer on the game's queue, the host (on the
 other NVIDIA card, by the game adapter's LUID in the bridge header) runs it, and the result goes back
 through an upload buffer before the real Present; Core skips its own work at the game's DLSS call.
+Measured with `tests/present_demo.cpp` on an RTX 5090 Laptop at 5120×768, every frame: the picture
+through the bridge matches Core's in place exactly, but the copies through system memory and the
+waits add about 18 ms per frame (108 → 37 FPS with both ends on the one card; with the game on the
+integrated GPU and the network on the RTX card, 22 FPS). On that machine offloading is slower than
+one card; it stays experimental.
 A game that renders on a card other than NVIDIA's gets an in-game note (the app sets Windows'
 per-app GPU preference to high performance on PCs with two or more GPUs, and restores it on rollback).
 

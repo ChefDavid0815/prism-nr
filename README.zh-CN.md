@@ -5,120 +5,84 @@
 # Prism NR
 
 **一束光进去，一道光谱出来。**
-DLSS 5 神经渲染管理器。一键安装，有守护，可还原。
+自带运行时的 DLSS 5 神经渲染管理器。一键启用，有守护，可还原。
 
-![Version](https://img.shields.io/badge/version-1.1.2-000000)
-![Platform](https://img.shields.io/badge/platform-Windows%2011-000000)
+![Version](https://img.shields.io/badge/version-1.5.1-000000)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-000000)
 ![GPU](https://img.shields.io/badge/GPU-RTX%2050-000000)
 ![License](https://img.shields.io/badge/license-MIT-000000)
 
 [English](README.md) ·
-[安全模型](SECURITY.md) ·
+[官网](https://prism.chefzc.dev) ·
+[Prism Core](native/prism-core/README.md) ·
 [更新日志](CHANGELOG.md) ·
+[安全模型](SECURITY.md) ·
 [设计系统](DESIGN.md)
 
 </div>
 
 ![Prism NR 海报：黑底上的发丝条码场、正弦格栅和 Prism NR 字标](docs/brand/poster.svg)
 
-社区的 DLSS 5 插件能用，但要跑起来，得自己在 ReShade 插件、OptiScaler 分支、Feeder 之间做选择，复制对的 DLL，对上驱动版本，改预处理宏；跑起来之后，还要忍受被"重新生成"的人脸、被提亮的暗部，以及一起被神经渲染处理的 UI。**Prism NR 替你做完这些事。** 它找到你的游戏，读每个游戏的主程序，选合适的路线，从开源组件的官方发布页下载并校验，在一次事务里装好全部文件，也能把游戏目录原样还原。它自带的着色器插件让神经渲染只做增强，不做替换。
+Prism NR 找到你的游戏，读每个游戏的主程序，把自研的 DLSS 5 神经渲染运行时 **Prism Core** 装进去：不需要 ReShade、OptiScaler、RenoDX，也不用下载任何东西。Core 自己运行 NVIDIA 签名版网络，不让人脸、暗部和高光被"重新生成"，所有设置都能在游戏内面板里实时调。每次启用都是一次完整的事务，还原能把游戏目录原样放回。
 
-## Prism Core（1.1 新增）
+![地平线 6 中打开 Prism Core 游戏内面板：帧时间条码、档位、色彩风格、强度、遍数和节奏](docs/screenshots/overlay-fh6.jpg)
 
-Prism NR 1.1 带来了 **Prism Core**——我们自己的神经渲染运行时，不需要 ReShade、OptiScaler，也不需要 RenoDX。它通过一个 `version.dll` 加载器进入游戏，拦截游戏自己的 DLSS 调用，直接运行 NVIDIA 签名版神经网络，再把结果合成回画面。
+## 1.5 新增
 
-它省成本的方式来自真实网络的实验结论：**在时间上复用网络的全分辨率答案**，而不是降低网络分辨率；再把网络挪到**独立的计算队列**上，和游戏的下一帧并行。
+- **账号（可选）**：邮箱验证码注册；邮箱、手机号、用户名都能登录。个人名片有头像、简介、创始人印章、贡献者标记和铭牌。不登录也完全照常使用。
+- **社区按游戏分类**：206 款游戏共 623 套官方调色，新作和经典老游戏都有，每款游戏一套专属调色，再配两套适合它类型的风格。中文、英文、简称都能搜（地平线6、fh6、大表哥、cp2077），你库里有的游戏排最前。
+- **正在玩的游戏排最前**，一键导入，运行中的游戏约 1 秒生效，不用重启。
+- **调色码**：调色台导出一行文字（`PRISM1.…`），带着它是给哪个游戏调的，还有校验。
+- **双显卡**：核显 + 独显的笔记本、双卡台式机，游戏自动设为 Windows 的"高性能"显卡，网络固定跑在 NVIDIA 卡上（可以在设置里选）。*副卡运行*（Offload=）是实验性功能，见[验证情况](#验证情况)。
+- **国内镜像**（account.chefzc.dev）：启动时两个地址同时试，用先回应的那个（国内节点平均 52 毫秒，直连 72 毫秒）。
+- **兑换码和插件包**：为之后的插件包打好底子。
+- **1.5.1**：安装版能上传头像了；更新后不会被登出；Prism 第一次开始工作时不再卡住几秒（准备工作挪到了游戏渲染线程之外：测试程序前 8 秒出帧从 587 帧变成 1608 帧）。
 
-| CONTROL Resonant，2560×1600，RTX 5090 Laptop | 渲染帧率 | 神经渲染每帧成本 |
-|---|---:|---:|
-| 关闭神经渲染 | 52.2 | — |
-| 每帧跑网络（RenoDX，单遍） | 32.0 | +12.1 ms |
-| Prism Core，隔一帧 | 37.5 | +7.4 ms |
-| **Prism Core，隔三帧 + 异步** | **43.0** | **+4.0 ms** |
-
-**神经渲染成本降低 67%，帧率提升 34%**；与网络每帧全分辨率的答案相比，平均误差 0.06–0.09 档（把网络降到一半分辨率时是 0.16）。角色守护让网络不再改肤色和发色（肤色偏移降低 82%）。
-
-Prism Core 目前是实验性预览版，暂时只在一个游戏上验证过。从 1.1.1 起，DX12 并自带 DLSS 的游戏可以在应用里一键启用 Core，网络节奏、改动强度和角色守护在游戏运行中也能实时调；1.1.2 大幅减少了运动中的鬼影，并内置 NVIDIA 新模型（开销降低 44%）：[native/prism-core](native/prism-core/README.md)。研究过程，包括被真实网络否定的想法：[研究报告](docs/research/dlss5-neural-rendering.md) · [架构文档](docs/architecture/prism-1.1.md)。
-
-## 它能做什么
+## Prism Core
 
 | | |
 |---|---|
-| **扫描游戏库** | 读取 Steam（`libraryfolders.vdf` 和应用清单）、Epic 清单、GOG 注册表、Xbox 的 `MicrosoftGame.config`。商店工具、运行库和无关文件夹会被过滤掉。 |
-| **分析主程序** | 解析 PE 文件头，包括延迟加载导入表和旁边的渲染器 DLL，识别 DX9 到 DX12、Vulkan、OpenGL；读取位数、原生 DLSS 及版本、Streamline、帧生成和其他超分。 |
-| **自动选路线** | 游戏自带 DLSS 时走**原生挂钩**；需要性能时走 **OptiScaler 前置**（神经渲染在超分之前、在更小的画面上执行）；没有 DLSS 的游戏走 **Feeder**。Prism 替你选，并说明原因。 |
-| **拦截反作弊** | 从磁盘文件识别 Easy Anti-Cheat、BattlEye、EA Javelin、HoYoProtect、腾讯 ACE、GameGuard、XIGNCODE3、PunkBuster、Vanguard、网易保护。这些游戏直接拒绝安装，而不只是提醒。 |
-| **一键安装** | 从各自的发布渠道获取 ReShade、OptiScaler DLSS-NR、DLSS5-Feeder 和 RenoDX 插件，按 GitHub 公布的 SHA-256 校验，写好 `ReShade.ini`、方案文件、效果顺序和全部参数，再记下安装清单。中途失败会撤回已经写入的文件。 |
-| **NVIDIA 文件只用你自己的** | Prism 不下载也不分发 NVIDIA 的文件。它在你电脑上找 `nvngx_dlssnr.dll` 和 `nvngx_dlss.dll`，校验数字签名，优先使用 NVIDIA 签名版，只有未签名版时会明确告诉你。 |
-| **方案和画风** | 按显卡档位的四套方案（旗舰画质、均衡、流畅优先、原片优先）和五种画风（写实、风格化、动漫、暗黑、复古），另有 17 个游戏的推荐配置和社区注意事项。 |
-| **还原** | 每个被覆盖的文件都有备份。还原会恢复游戏目录，标出你在安装后改过的文件，记录保留并盖上"已还原"。 |
-| **诊断** | 显卡档位和效果预期、NGX 文件和签名状态、日志，以及可以分享的 JSON 报告。 |
+| **任意游戏** | 有 DLSS 的 DX12 游戏：Core 接手游戏自己的 DLSS 调用（画质最好、开销最小）。没有 DLSS 的 DX12 游戏：画面递交模式。DX9、DX10、DX11 和所有 32 位游戏：经 64 位辅助进程的画面桥。自动择优，DX12 优先。 |
+| **档位** | 极致、旗舰、高画质、标准、流畅：决定网络多久跑一次、跑几遍、多大分辨率。每项设置都能手动调。 |
+| **游戏内面板** | Home（手柄 View + Y）：帧时间条码、渲染帧率和显示帧率、1% 低帧、Prism 的 GPU 开销；所有设置实时改；分屏对比；目标帧率（帧率不够时自动降低网络分辨率）。帧生成画面、SDR、scRGB、HDR10 下都能用。 |
+| **色彩风格** | 默认、高还原、高饱和、低饱和、浓烈，在游戏色调映射之前按场景光调色；另有"自定义"：66 项参数的调色台，游戏里和软件里都有。 |
+| **守护** | 角色守护不让网络改肤色和发色；头发和细节保留对比度；每帧运行的档位不沿用旧结果，高速运动不拖影。 |
+| **和其他 Mod 共存** | ReShade、OptiScaler 照常保留。D 加密游戏延迟加载，进游戏后第一次按 Home 才载入 Core，不改游戏文件、不碰加密。 |
 
-<table>
-<tr>
-<td width="50%"><img src="docs/screenshots/plugins.png" alt="插件中心：13 个插件的编号、用途、开销和来源" /></td>
-<td width="50%"><img src="docs/screenshots/history.png" alt="还原记录：一条生效中的安装和还原按钮" /></td>
-</tr>
-</table>
+地平线 6 性能测试，RTX 5090 Laptop，2560×1600，DLSS 画质 + 2 倍帧生成，同一时段连测：**Prism 旗舰 87 帧，极致 77 帧，RenoDX DLSS 5 8.5 是 67 帧**。同样每帧跑 2 遍网络，旗舰快约 30%。Core 的原理和全部设置见 [native/prism-core](native/prism-core/README.md)。
 
-![游戏库：顶部是数据场，游戏按路线分组并带条码指纹，右侧是所选游戏的渲染管线](docs/screenshots/library.png)
-
-<sub>截图使用软件的预览数据，不是真实扫描结果。</sub>
-
-## Prism 原生插件
-
-为这个项目编写的五个着色器（ReShade FX，自包含，MIT 协议）：
-
-| 编号 | 插件 | 用途 |
-|---|---|---|
-| PR-10 | **参考帧** | 在神经渲染之前保存原始画面，让其他插件有对照。 |
-| PR-11 | **保真守护** | 柔性限制每个像素的亮度和颜色能被改多少，用频率分离把原片丢失的细节加回来，阻止暗部被提亮，框选的 UI 区域保持原样。目前需要 Feeder 路线。 |
-| PR-12 | **时域稳定** | 用按邻域裁剪的历史帧消除帧间闪烁，运动时不拖影。 |
-| PR-13 | **质感还原** | 对比度自适应的微细节和按亮度分配的颗粒，去掉"打了蜡"的感觉。 |
-| PR-14 | **色调锚定** | 黑位曲线、高光压缩和饱和度护栏，工作空间同时支持 scRGB HDR。 |
-| PR-15 | **A/B 对比** | 参考帧和最终画面分屏对比。 |
-
-社区和 NVIDIA 组件也在同一个插件中心里，写明编号、开销、适用显卡和来源：RenoDX DLSS 5 插件、Deep Fried Chicken、DLSS5-Feeder、LumeniteFX、OptiScaler DLSS-NR Pre-SR、DLSS 多帧生成、MGPU Bridge。
-
-## 方案
-
-| 方案 | 适用 | 改动 | 预期 |
-|---|---|---|---|
-| **旗舰画质** | RTX 5080 / 5090 / 5090 Laptop | 超分后完整执行神经渲染，配齐 Prism 插件 | 画质最好。4K 下神经渲染本身可能吃掉接近一半帧率。 |
-| **均衡** | RTX 5070 Ti / 5080 Laptop | Pre-SR，模型分辨率 67%，2× 帧生成 | 接近旗舰；社区测试中损失降到约四分之一到三分之一。 |
-| **流畅优先** | RTX 5060 / 5070 | Pre-SR 50%，3× 帧生成，加强质感还原 | 靠帧生成，显示帧率常常高于不开时。基础帧率和延迟仍有代价，不是零损失。 |
-| **原片优先** | 任意 RTX 50 | 低强度，严格守护 | 光照质感提升，人脸和美术风格不变。 |
+![CONTROL Resonant 同一帧经过 Prism 各种色彩风格](docs/screenshots/looks-control.png)
 
 ## 下载
 
-[**PrismNR-1.1.2-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Windows 10/11 x64 · 安装到当前用户，不需要管理员权限。
+[**PrismNR-1.5.1-x64-setup.exe**](https://github.com/ChefDavid0815/prism-nr/releases/tag/v1.5.1) · Windows 10 / 11 64 位 · 按用户安装，不需要管理员权限。旧版本直接覆盖安装，登录、设置和已启用的游戏都会保留。
 
-[**PrismCore-1.1.2-win64.zip**](https://github.com/ChefDavid0815/prism-nr/releases/latest) · Prism Core 运行时（实验性）：`version.dll` 和 `prism_nvngx.dll`，想手动安装时按 [native/prism-core](native/prism-core/README.md) 的说明操作（应用会自动完成）。
+[**PrismCore-1.5.1-win64.zip**](https://github.com/ChefDavid0815/prism-nr/releases/tag/v1.5.1) · 单独的 Prism Core 运行时，手动安装方法见 [native/prism-core](native/prism-core/README.md)。
 
-安装包暂未做代码签名，首次运行时 Windows SmartScreen 可能会拦截：点“更多信息 → 仍要运行”。安装包的 SHA-256 写在发布页上。
+更新的版本在官网：[prism.chefzc.dev](https://prism.chefzc.dev)。
+
+安装包暂未做代码签名，第一次运行时 Windows 可能提示"已保护你的电脑"：点"更多信息"，再点"仍要运行"。
+
+**需要**：NVIDIA RTX 50 系显卡，Windows 10 / 11 64 位。带反作弊的游戏会被拒绝安装：不要在在线游戏里使用注入类 Mod。
 
 ## 从源码构建
 
-需要 Windows 11、Node.js 20 以上；神经渲染需要 RTX 50 显卡。
+需要 Windows 10 / 11、Node.js 20+，神经渲染需要 RTX 50 显卡。Prism Core 用 MinGW-w64 g++ 构建（`native/prism-core/build.sh`）。
 
 ```bash
 npm install
 npm run dev        # Vite + Electron，实时刷新
 npm run build      # 类型检查和生产构建
-npm run test:core  # 只读自测：显卡、扫描、分析、安装方案
+npm run test:core  # 对这台电脑做只读自检：显卡、扫描、分析、方案
 ```
 
-## 已验证的内容
+## 验证情况
 
-- 类型检查和生产构建通过。
-- 自测在 RTX 5090 Laptop（驱动 617.42，Windows build 26300）上运行：显卡分档、Steam 和 Epic 扫描、PE 分析（包括延迟加载的 DX12）、反作弊识别、NGX 文件查找和签名校验。
-- Electron 桌面版连接真实后端运行；界面在 1440 × 900 和 1120 × 720 下检查过。
+- 账号、社区、调色码、兑换码都在真实服务器上走通：验证码注册、三种登录方式、分享和导入、兑换以及兑换失败的各种情况。
+- Prism Core 在 RTX 5090 Laptop 上实机运行：CONTROL Resonant、地平线 6（开 2 倍帧生成）；红色沙漠的 D 加密延迟加载。
+- 画面桥（DX9、DX11，32 位和 64 位）用测试程序经真实辅助进程和网络走完全程；还没在实际游戏里测过。
+- *副卡运行*（Offload=）：整条链路能跑通，画面和单卡逐像素一致；但每帧画面都要经内存在两块卡之间搬运并等待完成。在一台机器上实测，每帧多出约 18 毫秒（390 万像素），比单卡还慢，所以仍是实验性功能、默认关闭。还没在两块 RTX 卡上测过。
 
-- 在 CONTROL Resonant（DX12，原生挂钩路线）上完整安装：ReShade 6.8.0 和 RenoDX DLSS5 插件 6.5.3 从线上下载并校验，本机 NVIDIA 签名版 DLSSNR 310.8 运行库初始化成功，6 个 Prism 着色器在 ReShade 中全部编译通过、没有警告。还原后游戏目录恢复原样。
-- 同一台机器实测（2560 × 1600、极致画质、光追极致、帧生成 2×）：同样的游戏设置下，Prism 方案比 RenoDX 默认在 DLSS 质量档快 8%、性能档快 13%；旗舰方案多跑三个画质插件，在 DLAA 下比 RenoDX 慢 2.5%。
+## 致谢与许可
 
-尚未验证：OptiScaler 和 DLSS5-Feeder 路线在真实游戏中的表现，以及 RTX 5090 Laptop 以外的显卡。
-
-## 致谢与许可证
-
-Prism NR 是 MIT 协议的开源软件。它不是 NVIDIA 产品，与 NVIDIA 没有关联；DLSS 是 NVIDIA 的商标。它依赖 [ReShade](https://reshade.me)（BSD-3-Clause）、[OptiScaler DLSS-NR](https://github.com/Dagherbou/OptiScaler_DLSSNR) 和 [Pre-SR Multipass](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass)（GPL-3.0）、[DLSS5-Feeder](https://github.com/jlrouzies-fr/DLSS5-Feeder)、[RenoDX](https://github.com/RankFTW/rhi-repo)，各自遵循自己的许可证。[LumeniteFX](https://github.com/umar-afzaal/LumeniteFX)（作者 Afzaal / Kaidō）经作者授权随安装包分发，许可证（AGNYA License）随组件附带。安装包还附带未经修改的 NVIDIA 签名版 DLSS 神经渲染运行库（`nvngx_dlssnr.dll`），它仍是 NVIDIA 的软件，遵循 NVIDIA 的条款。不要在网络游戏中使用注入类 Mod。
+Prism NR 以 MIT 许可开源。它不是 NVIDIA 官方产品，与 NVIDIA 无关联；DLSS 是 NVIDIA 的商标。安装包内置未经修改的 NVIDIA 签名版 DLSS 神经渲染运行库（`nvngx_dlssnr.dll`），它仍属于 NVIDIA，按 NVIDIA 的条款使用。Prism Core 不含 NVIDIA 代码，接口细节参考了 RenoDX DLSS5（MIT）和 neural-upstream（MIT）。[MinHook](https://github.com/TsudaKageyu/minhook) 为 BSD-2-Clause，JetBrains Mono 为 SIL OFL 1.1。1.2 之前的版本会从各自的发布页安装 ReShade、OptiScaler、DLSS5-Feeder、RenoDX 和 LumeniteFX；现在这些都不再随附，也不再下载。
